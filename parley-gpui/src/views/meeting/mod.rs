@@ -56,6 +56,11 @@ use crate::shell::{self, Route};
 /// `WINDOW_DAYS`.
 const CALENDAR_WINDOW_DAYS: i64 = 7;
 
+/// Extra space above/below the transcript panel's visible area that
+/// `transcript_list_state` measures eagerly, so scrolling doesn't pop in
+/// unmeasured rows. Mirrors `message_scroller.rs`'s `LIST_OVERDRAW`.
+const TRANSCRIPT_LIST_OVERDRAW: Pixels = px(400.);
+
 /// One open speaker-edit panel: rename a named voice profile, or promote /
 /// merge an unnamed "Speaker N" cluster. Mirrors
 /// `EditableSpeakerChip.tsx`'s per-chip popover state, scoped to a single
@@ -121,6 +126,12 @@ pub struct MeetingView {
     /// when auto_save was off, or the meeting predates folder tracking).
     meeting_folder_path: Option<String>,
     transcripts: Vec<MeetingTranscript>,
+    /// Backs the transcript panel's variable-height `list()` (see
+    /// `render_transcript`) — rows wrap to a different number of lines
+    /// depending on segment text length and pane width, so this can't be a
+    /// `uniform_list` (which assumes every row shares one measured height).
+    /// Reset alongside `transcripts` every time that vector is replaced.
+    transcript_list_state: ListState,
     transcripts_loading: bool,
     load_error: Option<String>,
     summary_state: Entity<TextViewState>,
@@ -256,6 +267,7 @@ impl MeetingView {
             created_at: None,
             meeting_folder_path: None,
             transcripts: Vec::new(),
+            transcript_list_state: ListState::new(0, ListAlignment::Top, TRANSCRIPT_LIST_OVERDRAW),
             transcripts_loading: false,
             load_error: None,
             summary_state,
@@ -356,6 +368,7 @@ impl MeetingView {
         self.created_at = None;
         self.meeting_folder_path = None;
         self.transcripts = Vec::new();
+        self.transcript_list_state.reset(0);
         self.transcripts_loading = true;
         self.load_error = None;
         self.summary_phase = SummaryPhase::Loading;
@@ -449,6 +462,7 @@ impl MeetingView {
         self.created_at = chrono::DateTime::parse_from_rfc3339(&details.created_at)
             .ok()
             .map(|dt| dt.with_timezone(&chrono::Utc));
+        self.transcript_list_state.reset(details.transcripts.len());
         self.transcripts = details.transcripts;
     }
 
@@ -1100,6 +1114,7 @@ impl MeetingView {
                     return;
                 }
                 if let Ok(Ok(Some(details))) = result {
+                    this.transcript_list_state.reset(details.transcripts.len());
                     this.transcripts = details.transcripts;
                 }
                 cx.notify();
@@ -1961,10 +1976,11 @@ fn notify(cx: &mut App, notification: Notification) {
 }
 
 /// The floating speaker-edit popover, rendered from the page root (outside
-/// the virtualized `uniform_list`) as a `deferred(anchored()...)` positioned
-/// at the chip's click point — mirrors `EditableSpeakerChip.tsx`'s popover.
-/// gpui-kit's `Popover` doesn't anchor cleanly to a trigger living inside a
-/// recycled `uniform_list` row, so this tracks the click position in
+/// the virtualized transcript `list()`) as a `deferred(anchored()...)`
+/// positioned at the chip's click point — mirrors
+/// `EditableSpeakerChip.tsx`'s popover. gpui-kit's `Popover` doesn't anchor
+/// cleanly to a trigger living inside a recycled `list()` row, so this
+/// tracks the click position in
 /// [`SpeakerEditState::click_position`] instead and positions the card
 /// directly. Free function (not a method) because [`MeetingView::render`]
 /// only has an `Entity<MeetingView>` for the closures it hands out, not a
@@ -2656,7 +2672,7 @@ impl MeetingView {
         }
 
         let transcripts = self.transcripts.clone();
-        let count = transcripts.len();
+        let list_state = self.transcript_list_state.clone();
         let entity = cx.entity();
         let meeting_id = self.meeting_id.clone();
         let speaker_edit = self.speaker_edit.clone();
@@ -2668,110 +2684,106 @@ impl MeetingView {
             .size_full()
             .child(header)
             .child(
-                uniform_list("meeting-transcript", count, move |range, _window, cx| {
-                    range
-                        .map(|ix| {
-                            let t = &transcripts[ix];
-                            let time = format::segment_timestamp(t.audio_start_time, &t.timestamp);
-                            let speaker = t.speaker.clone().unwrap_or_else(|| "Speaker".to_string());
-                            let editable = speaker_chip::can_edit_speaker(&speaker, t.voice_profile_id.as_deref());
-                            let row_key = format!("{}:{speaker}", t.id);
-                            let is_editing_this_row = speaker_edit.as_ref().is_some_and(|s| s.key == row_key);
+                list(list_state, move |ix, _window, cx| {
+                    let t = &transcripts[ix];
+                    let time = format::segment_timestamp(t.audio_start_time, &t.timestamp);
+                    let speaker = t.speaker.clone().unwrap_or_else(|| "Speaker".to_string());
+                    let editable = speaker_chip::can_edit_speaker(&speaker, t.voice_profile_id.as_deref());
+                    let row_key = format!("{}:{speaker}", t.id);
+                    let is_editing_this_row = speaker_edit.as_ref().is_some_and(|s| s.key == row_key);
 
-                            let can_play = meeting_id.is_some()
-                                && t.audio_end_time.is_some_and(|end| end > t.audio_start_time.unwrap_or(0.0));
-                            let is_playing = playing_segment.as_deref() == Some(t.id.as_str());
-                            let is_loading_clip = loading_segment.as_deref() == Some(t.id.as_str());
+                    let can_play = meeting_id.is_some()
+                        && t.audio_end_time.is_some_and(|end| end > t.audio_start_time.unwrap_or(0.0));
+                    let is_playing = playing_segment.as_deref() == Some(t.id.as_str());
+                    let is_loading_clip = loading_segment.as_deref() == Some(t.id.as_str());
 
-                            let mut header_row = h_flex().gap_2().items_center().text_xs().text_color(cx.theme().muted_foreground);
+                    let mut header_row = h_flex().gap_2().items_center().text_xs().text_color(cx.theme().muted_foreground);
 
-                            if can_play {
-                                let segment_id = t.id.clone();
-                                let start = t.audio_start_time.unwrap_or(0.0);
-                                let end = t.audio_end_time.unwrap_or(start);
-                                let source = t.source.clone();
-                                let entity = entity.clone();
-                                header_row = header_row.child(
-                                    Button::new(SharedString::from(format!("play-segment-{}", t.id)))
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(if is_playing { Lucide::Square } else { Lucide::Play })
-                                        .loading(is_loading_clip)
-                                        .tooltip(if is_playing { "Stop" } else { "Play this segment" })
-                                        .on_click(move |_, _, cx| {
-                                            entity.update(cx, |this, cx| {
-                                                this.toggle_segment_playback(
-                                                    segment_id.clone(),
-                                                    start,
-                                                    end,
-                                                    source.clone(),
-                                                    cx,
-                                                )
-                                            });
-                                        }),
-                                );
-                            }
+                    if can_play {
+                        let segment_id = t.id.clone();
+                        let start = t.audio_start_time.unwrap_or(0.0);
+                        let end = t.audio_end_time.unwrap_or(start);
+                        let source = t.source.clone();
+                        let entity = entity.clone();
+                        header_row = header_row.child(
+                            Button::new(SharedString::from(format!("play-segment-{}", t.id)))
+                                .ghost()
+                                .xsmall()
+                                .icon(if is_playing { Lucide::Square } else { Lucide::Play })
+                                .loading(is_loading_clip)
+                                .tooltip(if is_playing { "Stop" } else { "Play this segment" })
+                                .on_click(move |_, _, cx| {
+                                    entity.update(cx, |this, cx| {
+                                        this.toggle_segment_playback(
+                                            segment_id.clone(),
+                                            start,
+                                            end,
+                                            source.clone(),
+                                            cx,
+                                        )
+                                    });
+                                }),
+                        );
+                    }
 
-                            if editable {
-                                let segment_id = t.id.clone();
-                                let speaker_for_click = speaker.clone();
-                                let voice_profile_id = t.voice_profile_id.clone();
-                                let entity = entity.clone();
-                                header_row = header_row.child(
-                                    Button::new(SharedString::from(format!("edit-speaker-{row_key}")))
-                                        .ghost()
-                                        .xsmall()
-                                        .label(speaker.clone())
-                                        .on_click(move |ev, window, cx| {
-                                            let click_position = ev.position();
-                                            entity.update(cx, |this, cx| {
-                                                this.toggle_speaker_edit(
-                                                    segment_id.clone(),
-                                                    speaker_for_click.clone(),
-                                                    voice_profile_id.clone(),
-                                                    click_position,
-                                                    window,
-                                                    cx,
-                                                )
-                                            });
-                                        }),
-                                );
-                            } else {
-                                header_row = header_row.child(speaker.clone());
-                            }
-                            header_row = header_row.child(time);
+                    if editable {
+                        let segment_id = t.id.clone();
+                        let speaker_for_click = speaker.clone();
+                        let voice_profile_id = t.voice_profile_id.clone();
+                        let entity = entity.clone();
+                        header_row = header_row.child(
+                            Button::new(SharedString::from(format!("edit-speaker-{row_key}")))
+                                .ghost()
+                                .xsmall()
+                                .label(speaker.clone())
+                                .on_click(move |ev, window, cx| {
+                                    let click_position = ev.position();
+                                    entity.update(cx, |this, cx| {
+                                        this.toggle_speaker_edit(
+                                            segment_id.clone(),
+                                            speaker_for_click.clone(),
+                                            voice_profile_id.clone(),
+                                            click_position,
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                }),
+                        );
+                    } else {
+                        header_row = header_row.child(speaker.clone());
+                    }
+                    header_row = header_row.child(time);
 
-                            if show_confidence {
-                                if let Some(conf) = t.confidence {
-                                    let color = match format::ConfidenceLevel::for_confidence(conf) {
-                                        format::ConfidenceLevel::High => cx.theme().success,
-                                        format::ConfidenceLevel::Good | format::ConfidenceLevel::Medium => {
-                                            cx.theme().warning
-                                        }
-                                        format::ConfidenceLevel::Low => cx.theme().danger,
-                                    };
-                                    header_row = header_row.child(
-                                        Button::new(SharedString::from(format!("confidence-{}", t.id)))
-                                            .ghost()
-                                            .xsmall()
-                                            .tooltip(format::confidence_tooltip(conf))
-                                            .child(div().size(px(8.)).rounded_full().bg(color)),
-                                    );
+                    if show_confidence {
+                        if let Some(conf) = t.confidence {
+                            let color = match format::ConfidenceLevel::for_confidence(conf) {
+                                format::ConfidenceLevel::High => cx.theme().success,
+                                format::ConfidenceLevel::Good | format::ConfidenceLevel::Medium => {
+                                    cx.theme().warning
                                 }
-                            }
+                                format::ConfidenceLevel::Low => cx.theme().danger,
+                            };
+                            header_row = header_row.child(
+                                Button::new(SharedString::from(format!("confidence-{}", t.id)))
+                                    .ghost()
+                                    .xsmall()
+                                    .tooltip(format::confidence_tooltip(conf))
+                                    .child(div().size(px(8.)).rounded_full().bg(color)),
+                            );
+                        }
+                    }
 
-                            let row = v_flex()
-                                .w_full()
-                                .gap_1()
-                                .px_4()
-                                .py_2()
-                                .when(is_editing_this_row, |this| this.bg(cx.theme().muted.opacity(0.3)))
-                                .child(header_row)
-                                .child(div().text_sm().child(t.text.clone()));
+                    let row = v_flex()
+                        .w_full()
+                        .gap_1()
+                        .px_4()
+                        .py_2()
+                        .when(is_editing_this_row, |this| this.bg(cx.theme().muted.opacity(0.3)))
+                        .child(header_row)
+                        .child(div().text_sm().child(t.text.clone()));
 
-                            row.into_any_element()
-                        })
-                        .collect::<Vec<_>>()
+                    row.into_any_element()
                 })
                 .flex_1()
                 .size_full(),
