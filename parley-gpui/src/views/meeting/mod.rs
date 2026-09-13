@@ -2815,8 +2815,13 @@ impl MeetingView {
         v_flex()
             .size_full()
             .child(
+                // Wraps rather than overflowing: next to the transcript, the
+                // summary pane is often too narrow for the title and all
+                // five actions on one line, and the primary button was the
+                // one pushed out of view.
                 h_flex()
                     .w_full()
+                    .flex_wrap()
                     .items_center()
                     .justify_between()
                     .gap_2()
@@ -2838,6 +2843,7 @@ impl MeetingView {
                     )
                     .child(
                         h_flex()
+                            .flex_wrap()
                             .gap_2()
                             .items_center()
                             .when(!self.editing_summary, |this| {

@@ -6,8 +6,8 @@
 //! `SettingField` getters/setters are synchronous — see `state.rs`'s doc
 //! comment for why.
 
+mod about;
 mod appearance;
-mod beta;
 mod calendar;
 mod integrations;
 mod model_utils;
@@ -166,8 +166,8 @@ impl Render for SettingsView {
             notifications::page(&view, cx),
             calendar::page(&view, cx),
             integrations::page(&view, cx),
-            beta::page(&view, cx),
             appearance::page(&view, cx),
+            about::page(cx),
         ];
 
         div()

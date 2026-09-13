@@ -114,22 +114,20 @@ impl Default for NotificationPreferences {
     }
 }
 
-/// Beta feature toggles, stored under `KEY_BETA_FEATURES` (new — see that
-/// key's doc comment in `parley-core`). Mirrors
-/// `frontend/src/types/betaFeatures.ts`'s `BetaFeatures` shape/defaults;
-/// React itself keeps this in `localStorage` only, so this DB row is a
-/// GPUI-only addition, not (yet) shared with the React app.
+/// Feature toggles that don't belong to another settings struct — today just
+/// "Live action items" (Settings → Recording). Stored under the historical
+/// `KEY_BETA_FEATURES` key so existing choices carry over; the old
+/// `import_and_retranscribe` field is ignored on read and dropped on the
+/// next save (import was never actually gated on it).
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct BetaFeatures {
-    pub import_and_retranscribe: bool,
+pub struct FeatureToggles {
     pub live_action_items: bool,
 }
 
-impl Default for BetaFeatures {
+impl Default for FeatureToggles {
     fn default() -> Self {
         Self {
-            import_and_retranscribe: true,
             live_action_items: false,
         }
     }
@@ -168,7 +166,7 @@ pub struct SettingsCache {
     /// are read/written; everything else round-trips untouched.
     pub ui_config: serde_json::Value,
 
-    pub beta: BetaFeatures,
+    pub features: FeatureToggles,
     pub notifications: NotificationSettings,
 
     pub calendar_sources: Vec<CalendarSourceRow>,
@@ -316,7 +314,7 @@ pub fn load(view: Entity<SettingsView>, cx: &mut App) {
                 let mut custom_openai = None;
                 let mut default_template_id = String::new();
                 let mut ui_config = serde_json::Value::Object(Default::default());
-                let mut beta = BetaFeatures::default();
+                let mut features = FeatureToggles::default();
                 let mut notifications = NotificationSettings::default();
                 let mut calendar_sources = Vec::new();
                 let mut theme_pref = "system".to_string();
@@ -362,7 +360,7 @@ pub fn load(view: Entity<SettingsView>, cx: &mut App) {
                         }
                     }
 
-                    beta = SettingsRepository::get_setting::<BetaFeatures>(pool, KEY_BETA_FEATURES)
+                    features = SettingsRepository::get_setting::<FeatureToggles>(pool, KEY_BETA_FEATURES)
                         .await
                         .ok()
                         .flatten()
@@ -410,7 +408,7 @@ pub fn load(view: Entity<SettingsView>, cx: &mut App) {
                     templates,
                     default_template_id,
                     ui_config,
-                    beta,
+                    features,
                     notifications,
                     calendar_sources,
                     mcp_info,
@@ -431,7 +429,7 @@ pub fn load(view: Entity<SettingsView>, cx: &mut App) {
             templates,
             default_template_id,
             ui_config,
-            beta,
+            features,
             notifications,
             calendar_sources,
             mcp_info,
@@ -456,7 +454,7 @@ pub fn load(view: Entity<SettingsView>, cx: &mut App) {
                 cache.templates = templates;
                 cache.default_template_id = default_template_id;
                 cache.ui_config = ui_config;
-                cache.beta = beta;
+                cache.features = features;
                 cache.notifications = notifications;
                 cache.calendar_sources = calendar_sources;
                 cache.mcp_info = mcp_info;
@@ -628,19 +626,19 @@ pub fn save_ui_field(
     });
 }
 
-/// Save beta feature toggles (`KEY_BETA_FEATURES`).
-pub fn save_beta(cx: &mut App, view: &Entity<SettingsView>, features: BetaFeatures) {
-    cx.global_mut::<SettingsCache>().beta = features.clone();
+/// Save feature toggles (`KEY_BETA_FEATURES`).
+pub fn save_features(cx: &mut App, view: &Entity<SettingsView>, features: FeatureToggles) {
+    cx.global_mut::<SettingsCache>().features = features.clone();
     let _ = view.update(cx, |_, cx| cx.notify());
 
     let Some(pool) = AppServices::global(cx).pool() else {
-        log::warn!("settings: no DB pool yet, beta features not saved");
+        log::warn!("settings: no DB pool yet, feature toggles not saved");
         return;
     };
     Io::global(cx).spawn(async move {
         if let Err(e) = SettingsRepository::set_setting(&pool, KEY_BETA_FEATURES, &features).await
         {
-            log::warn!("settings: failed to save beta features: {}", e);
+            log::warn!("settings: failed to save feature toggles: {}", e);
         }
     });
 }
@@ -1139,10 +1137,8 @@ mod tests {
     }
 
     #[test]
-    fn beta_features_default_matches_the_react_defaults() {
-        // Mirrors `frontend/src/types/betaFeatures.ts`'s defaults.
-        let defaults = BetaFeatures::default();
-        assert!(defaults.import_and_retranscribe);
+    fn feature_toggles_default_to_off() {
+        let defaults = FeatureToggles::default();
         assert!(!defaults.live_action_items);
     }
 

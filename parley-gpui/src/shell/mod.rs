@@ -83,6 +83,12 @@ pub struct AppShell {
     speakers: Entity<SpeakersView>,
     meetings: Vec<MeetingRow>,
     meetings_loading: bool,
+    /// (groups, meeting rows) the sidebar was last rendered with. gpui-kit's
+    /// `Sidebar` lays its groups out in a `list()` and resets that list's
+    /// measurements *during* render, so the frame that first shows a changed
+    /// list paints stale heights — the meetings stayed invisible until the
+    /// next input event. When the shape changes we ask for one more frame.
+    rendered_sidebar_shape: (usize, usize),
     search: Entity<InputState>,
     /// Transcript-content search hits for the current query (debounced —
     /// see [`Self::search_transcript_content`]), shown below the
@@ -125,6 +131,7 @@ impl AppShell {
             speakers: cx.new(|cx| SpeakersView::new(window, cx)),
             meetings: Vec::new(),
             meetings_loading: false,
+            rendered_sidebar_shape: (0, 0),
             search,
             content_matches: Vec::new(),
             content_search_loading: false,
@@ -442,7 +449,19 @@ impl Render for AppShell {
             sidebar = sidebar.child(SidebarGroup::new(*label).child(SidebarMenu::new().children(items)));
         }
 
-        if !self.meetings_loading && grouped.is_empty() && !query.trim().is_empty() {
+        let shown_no_matches = !self.meetings_loading && grouped.is_empty() && !query.trim().is_empty();
+        let shown_content_matches =
+            !query.trim().is_empty() && (self.content_search_loading || !self.content_matches.is_empty());
+        let shape = (
+            2 + grouped.len() + shown_no_matches as usize + shown_content_matches as usize,
+            grouped.iter().map(|(_, rows)| rows.len()).sum::<usize>() + self.content_matches.len(),
+        );
+        if shape != self.rendered_sidebar_shape {
+            self.rendered_sidebar_shape = shape;
+            window.request_animation_frame();
+        }
+
+        if shown_no_matches {
             sidebar = sidebar.child(
                 SidebarGroup::new("").child(SidebarMenu::new().children([SidebarMenuItem::new(
                     "No matching meetings",
@@ -451,7 +470,7 @@ impl Render for AppShell {
             );
         }
 
-        if !query.trim().is_empty() && (self.content_search_loading || !self.content_matches.is_empty()) {
+        if shown_content_matches {
             let items: Vec<SidebarMenuItem> = self.content_matches.iter().map(|m| self.content_match_item(m, cx)).collect();
             let mut group = SidebarGroup::new("In transcripts");
             group = if items.is_empty() {

@@ -96,7 +96,7 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
                 .description("System audio source used when starting a recording with default devices."),
             ]),
         )
-        .group(SettingGroup::new().title("General").item(
+        .group(SettingGroup::new().title("General").items(vec![
             SettingItem::new(
                 "Auto-save recordings",
                 SettingField::switch(
@@ -111,7 +111,23 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
                 .default_value(true),
             )
             .description("Automatically save the audio recording alongside its transcript."),
-        ))
+            SettingItem::new(
+                "Live action items",
+                SettingField::switch(
+                    |cx: &App| SettingsCache::global(cx).features.live_action_items,
+                    {
+                        let view = view.clone();
+                        move |val: bool, cx: &mut App| {
+                            let mut features = SettingsCache::global(cx).features.clone();
+                            features.live_action_items = val;
+                            super::state::save_features(cx, &view, features);
+                        }
+                    },
+                ),
+            )
+            .description("Pick out action items from the transcript while the meeting is still being recorded.")
+            .keywords(["action items", "live"]),
+        ]))
 }
 
 fn device_options(cx: &App, mic: bool) -> Vec<(SharedString, SharedString)> {

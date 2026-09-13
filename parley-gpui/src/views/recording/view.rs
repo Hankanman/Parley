@@ -101,15 +101,14 @@ struct LiveActionItemsEvent {
     items: Vec<LiveActionItemPayload>,
 }
 
-/// Only the one beta flag this view needs, read straight from
-/// `KEY_BETA_FEATURES` — mirrors `frontend/src/types/betaFeatures.ts`'s
-/// `BetaFeatures.liveActionItems` default (`false`). Deliberately not
-/// reusing `views::settings::state::BetaFeatures`: that module is private
-/// to the settings page (see its own doc comment on why a local mirror
-/// beats a shared type), the same pattern `notifications.rs`'s
-/// `SettingsMini` uses for the notification-settings row.
+/// Only the one toggle this view needs ("Live action items", in Settings →
+/// Recording), read straight from its row — stored under the historical
+/// `KEY_BETA_FEATURES` key, default off. Deliberately not reusing
+/// `views::settings::state::FeatureToggles`: that module is private to the
+/// settings page, the same pattern `notifications.rs`'s `SettingsMini` uses
+/// for the notification-settings row.
 #[derive(Debug, Deserialize, Default)]
-struct BetaFeaturesMini {
+struct FeatureTogglesMini {
     #[serde(default)]
     live_action_items: bool,
 }
@@ -576,21 +575,21 @@ impl RecordingView {
         cx.notify();
     }
 
-    /// Start the beta live action-item extractor, mirroring
-    /// `useLiveActionItems.ts`: only when the Beta flag is on, and
-    /// best-effort (a missing model config just means no live items).
+    /// Start the live action-item extractor: only when "Live action items"
+    /// is on in Settings → Recording, and best-effort (a missing model
+    /// config just means no live items).
     fn restart_live_action_items(&mut self, cx: &mut Context<Self>) {
         let services = AppServices::global(cx);
         let io = services.io.clone();
         let sink = services.sink.clone();
         let Some(pool) = services.pool() else { return };
         io.spawn(async move {
-            let beta = SettingsRepository::get_setting::<BetaFeaturesMini>(&pool, KEY_BETA_FEATURES)
+            let toggles = SettingsRepository::get_setting::<FeatureTogglesMini>(&pool, KEY_BETA_FEATURES)
                 .await
                 .ok()
                 .flatten()
                 .unwrap_or_default();
-            if !beta.live_action_items {
+            if !toggles.live_action_items {
                 return;
             }
             let Ok(Some(config)) = SettingsRepository::get_model_config(&pool).await else {
