@@ -23,12 +23,12 @@ jobs:
         with:
           fetch-depth: 0  # Fetch all tags
 
-      - name: Get version from meetily-gpui/Cargo.toml and check for existing tags
+      - name: Get version from parley-gpui/Cargo.toml and check for existing tags
         id: get-version
         shell: bash
         run: |
-          BASE_VERSION=$(awk -F'"' '/^version/ {print $2; exit}' meetily-gpui/Cargo.toml)
-          echo "Base version from meetily-gpui/Cargo.toml: $BASE_VERSION"
+          BASE_VERSION=$(awk -F'"' '/^version/ {print $2; exit}' parley-gpui/Cargo.toml)
+          echo "Base version from parley-gpui/Cargo.toml: $BASE_VERSION"
 
           # Fetch all tags
           git fetch --tags
@@ -52,7 +52,7 @@ jobs:
 
             if [ $NEXT_MINOR -gt 100 ]; then
               echo "ERROR: Maximum minor version (100) reached for ${BASE_VERSION}"
-              echo "Please update the version in meetily-gpui/Cargo.toml"
+              echo "Please update the version in parley-gpui/Cargo.toml"
               exit 1
             fi
 
@@ -75,7 +75,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               tag_name: `v${{ steps.get-version.outputs.version }}`,
-              name: `Meetily v${{ steps.get-version.outputs.version }}`,
+              name: `Parley v${{ steps.get-version.outputs.version }}`,
               draft: true,
               prerelease: false,
               generate_release_notes: true

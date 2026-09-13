@@ -1,0 +1,58 @@
+[package]
+name = "parley-gpui"
+version = "0.1.0"
+description = "Parley desktop app built on GPUI, linking parley-core directly"
+license = "MIT"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[[bin]]
+name = "parley"
+path = "src/main.rs"
+
+[features]
+default = []
+# GPU backends for whisper.cpp, forwarded to parley-core (same names as the
+# Tauri shell so build scripts can pass `--features cuda` to either app).
+cuda = ["parley-core/cuda"]
+vulkan = ["parley-core/vulkan"]
+hipblas = ["parley-core/hipblas"]
+openblas = ["parley-core/openblas"]
+openmp = ["parley-core/openmp"]
+
+[dependencies]
+parley-core = { path = "../parley-core" }
+
+# Component kit: re-exports gpui (as `gpui-pre`) + gpui-component + assets.
+# Depend on gpui ONLY through this — a second gpui-pre (or zed's git gpui)
+# yields incompatible types (longbridge/gpui-kit#2532).
+gpui-kit = "0.6"
+
+# Tray: StatusNotifierItem menu. Uses the gpui-kit backend feature so it
+# shares gpui-kit's own gpui-pre instead of pulling a second, incompatible
+# one (see longbridge/gpui-kit#2532) — same pin as spikes/gpui-shell, which
+# researched this against 2026-09-07's main branch.
+gpui-tray = { git = "https://github.com/domenkozar/gpui-tray", rev = "dfcd45b4bd82963abcee9e6cc35f83f7a4fa6c03", default-features = false, features = ["gpui-kit", "menu-state"] }
+
+# Desktop notifications (recording started/stopped) via D-Bus.
+notify-rust = "4"
+
+# Rich-text summary editor (WYSIWYG markdown) for the Meeting page's summary
+# edit toggle, on the same gpui-pre line as gpui-kit.
+zorite-editor = "0.10"
+
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.32.0", features = ["full"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono"] }
+chrono = { version = "0.4.31", features = ["serde"] }
+# `_exit` on shutdown, same as the Tauri shell.
+libc = "0.2"
+# GitHub releases update check (same major line as parley-core's own
+# reqwest dep, so Cargo unifies the two into one build).
+reqwest = { version = "0.11", features = ["json"] }
+semver = "1"

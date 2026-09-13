@@ -3,8 +3,8 @@
 This document explains the hardware acceleration configuration for the CI/CD
 workflows in this repository.
 
-Meetily-Local (Parley) is Linux-only (see [CLAUDE.md](../../CLAUDE.md)) and
-builds a single GPUI desktop app (`meetily-gpui`) via `./build.sh`. GitHub
+Parley is Linux-only (see [CLAUDE.md](../../CLAUDE.md)) and
+builds a single GPUI desktop app (`parley-gpui`) via `./build.sh`. GitHub
 Actions runners have no GPU, so every CI build (`build.yml`, `build-linux.yml`,
 `build-test.yml`, `release.yml`) runs `./build.sh cpu` — plain CPU whisper.cpp,
 no `--features` flag. This keeps CI simple and matches what a user without a
@@ -12,7 +12,7 @@ GPU gets locally with `./dev.sh cpu` / `./build.sh cpu`.
 
 ## Local acceleration
 
-`meetily-core` exposes these Cargo features (forwarded by `meetily-gpui` and
+`parley-core` exposes these Cargo features (forwarded by `parley-gpui` and
 `llama-helper`):
 
 ```toml

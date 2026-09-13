@@ -1,16 +1,16 @@
-# Building Meetily-Local from Source
+# Building Parley from Source
 
-Meetily-Local (Parley) is a Linux-only GPUI desktop app. macOS and Windows are
+Parley is a Linux-only GPUI desktop app. macOS and Windows are
 dropped platforms — see [README.md](../README.md) and [CLAUDE.md](../CLAUDE.md)
 for background.
 
 ## Quick start
 
 ```bash
-git clone https://github.com/Hankanman/Meetily-Local.git
-cd Meetily-Local
+git clone https://github.com/Hankanman/Parley.git
+cd Parley
 ./build.sh           # production build → Parley-<version>-x86_64.AppImage (auto: CUDA on NVIDIA, CPU otherwise)
-./dev.sh              # development mode, cargo run -p meetily-gpui
+./dev.sh              # development mode, cargo run -p parley-gpui
 ./clean.sh             # nuke target/
 ```
 

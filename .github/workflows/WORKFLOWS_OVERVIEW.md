@@ -4,8 +4,8 @@ This document provides a quick overview of all available CI/CD workflows in this
 
 **Note:** All workflows in this repository use **manual triggers only** (`workflow_dispatch`). There are no automatic triggers from push or pull request events.
 
-Meetily-Local (Parley) is Linux-only (see [CLAUDE.md](../CLAUDE.md)) and ships
-a single GPUI desktop app (`meetily-gpui`) packaged as an AppImage via
+Parley is Linux-only (see [CLAUDE.md](../CLAUDE.md)) and ships
+a single GPUI desktop app (`parley-gpui`) packaged as an AppImage via
 `./build.sh` — there is no Tauri shell, no Next.js frontend, and no
 auto-updater.
 
@@ -62,7 +62,7 @@ auto-updater.
 
 **Key Features:**
 - Creates GitHub Release (draft)
-- Version comes from `meetily-gpui/Cargo.toml`
+- Version comes from `parley-gpui/Cargo.toml`
 - Builds the Linux AppImage (`ubuntu-22.04`) via `build.yml` and uploads it
   directly to the release
 - **Auto-increment versioning**: If tag exists, auto-increments (e.g., `0.1.1` -> `0.1.1.1` -> `0.1.1.2`, up to `.100`)
@@ -83,7 +83,7 @@ auto-updater.
 - If `v0.1.1` tag doesn't exist: creates `v0.1.1`
 - If `v0.1.1` exists: creates `v0.1.1.1`
 - If `v0.1.1.1` exists: creates `v0.1.1.2`
-- Maximum: `v0.1.1.100` (then bump the version in `meetily-gpui/Cargo.toml`)
+- Maximum: `v0.1.1.100` (then bump the version in `parley-gpui/Cargo.toml`)
 
 ---
 
@@ -161,8 +161,8 @@ Standalone (don't use build.yml):
 
 None of the current workflows depend on repository secrets beyond the
 default `GITHUB_TOKEN` (for release creation/upload). The old Tauri updater
-signing keys (`TAURI_SIGNING_PRIVATE_KEY*`), license-validation key
-(`MEETILY_RSA_PUBLIC_KEY`), and Supabase secrets were removed along with the
+signing keys (`TAURI_SIGNING_PRIVATE_KEY*`), license-validation key,
+and Supabase secrets were removed along with the
 Tauri shell.
 
 ---

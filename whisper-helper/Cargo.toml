@@ -24,7 +24,7 @@ cuda = ["whisper-rs/cuda", "whisper-core/cuda"]
 vulkan = ["whisper-rs/vulkan", "whisper-core/vulkan"]
 
 # Release profile lives at the workspace root (see top-level Cargo.toml) —
-# sized like llama-helper/meetily-mcp since this is also a short-lived,
+# sized like llama-helper/parley-mcp since this is also a short-lived,
 # lazily-spawned sidecar where startup time and disk footprint matter more
 # than raw decode throughput (whisper.cpp itself is unaffected by this
 # crate's own codegen settings).

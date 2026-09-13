@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Meetily-Local** (branded **Parley** in the UI) is a privacy-first AI meeting assistant that captures, transcribes, and summarizes meetings entirely on local infrastructure. It's a single self-contained GPUI desktop application — no separate backend server, no webview, no JavaScript.
+**Parley** (formerly Meetily-Local, a fork of Zackriya-Solutions/meetily; GitHub repo `Hankanman/Parley`) is a privacy-first AI meeting assistant that captures, transcribes, and summarizes meetings entirely on local infrastructure. It's a single self-contained GPUI desktop application — no separate backend server, no webview, no JavaScript.
 
 ### Key Technology Stack
 - **Desktop shell**: [GPUI](https://www.gpui.rs/) (Rust, the UI framework behind Zed) via `gpui-kit`/`gpui-component`
@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Root-level scripts (recommended — handle CUDA/Vulkan env setup and the `llama-helper` sidecar build for you):
 
 ```bash
-./dev.sh                    # auto: CUDA on NVIDIA, CPU otherwise — cargo run -p meetily-gpui
+./dev.sh                    # auto: CUDA on NVIDIA, CPU otherwise — cargo run -p parley-gpui
 ./dev.sh cuda                # NVIDIA CUDA
 ./dev.sh vulkan               # AMD/Intel Vulkan
 ./dev.sh cpu                  # CPU-only
@@ -34,20 +34,20 @@ Root-level scripts (recommended — handle CUDA/Vulkan env setup and the `llama-
 Manual `cargo` commands, if you don't want the root scripts:
 
 ```bash
-cargo run -p meetily-gpui                       # debug run, CPU
-cargo run -p meetily-gpui --features cuda        # debug run, CUDA
-cargo build --release -p meetily-gpui --features vulkan   # release build
+cargo run -p parley-gpui                       # debug run, CPU
+cargo run -p parley-gpui --features cuda        # debug run, CUDA
+cargo build --release -p parley-gpui --features vulkan   # release build
 ```
 
-The app has no HTTP listener and no IPC boundary — the UI (`meetily-gpui`) calls into the core (`meetily-core`) as plain Rust function calls, in-process.
+The app has no HTTP listener and no IPC boundary — the UI (`parley-gpui`) calls into the core (`parley-core`) as plain Rust function calls, in-process.
 
 ## High-Level Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                 meetily-gpui (single process)                   │
+│                 parley-gpui (single process)                   │
 │  ┌──────────────────┐    ┌──────────────────────────────────┐  │
-│  │ GPUI views       │    │ meetily-core                     │  │
+│  │ GPUI views       │    │ parley-core                     │  │
 │  │ (Rust)           │←──→│   • Audio capture + mixing + VAD │  │
 │  │ recording,       │    │   • whisper-rs / parakeet        │  │
 │  │ meeting, settings│    │   • SQLite via sqlx              │  │
@@ -61,15 +61,15 @@ The app has no HTTP listener and no IPC boundary — the UI (`meetily-gpui`) cal
 
 ### Crate Layout: Tauri-free core + GPUI shell
 
-- **`meetily-core/`** (lib `meetily_core`) — everything that isn't UI glue:
+- **`parley-core/`** (lib `parley_core`) — everything that isn't UI glue:
   audio pipeline + PipeWire capture, transcription, recording orchestration
   (`audio/recording_service.rs`), SQLite repositories + `migrations/`,
   summaries/LLM providers + embedded `templates/`, model management, speaker
   diarization. **It must never depend on `tauri`** (there is no Tauri
   dependency anywhere in the workspace anymore) — check with
-  `cargo tree -p meetily-core | grep -i tauri` (must be empty).
-- **`meetily-gpui/`** (bin `meetily-gpui`) — the GPUI desktop shell: links
-  `meetily-core` directly (no webview, no IPC). See `meetily-gpui/src/`:
+  `cargo tree -p parley-core | grep -i tauri` (must be empty).
+- **`parley-gpui/`** (bin `parley`) — the GPUI desktop shell: links
+  `parley-core` directly (no webview, no IPC). See `parley-gpui/src/`:
   - `main.rs` — entry point, window setup, shutdown coordination
   - `app_state.rs` — `AppServices`, the process-wide global (`cx.global::<AppServices>()`)
     holding the DB slot, the event sink, and the summary model-manager state
@@ -90,8 +90,8 @@ Core → UI communication goes through the `events::EventSink` trait
 `core_events::GpuiSink`, whose background task re-emits each event onto the
 `CoreEvents` entity so views subscribe with `cx.subscribe(&core_events, ...)`
 and decode payloads with `CoreEvent::decode::<T>()`. Tests use `NullSink` /
-`RecordingSink` (defined in `meetily-core::events`). Core resolves
-directories with `paths::app_data_dir()` (`~/.local/share/com.meetily.ai`)
+`RecordingSink` (defined in `parley-core::events`). Core resolves
+directories with `paths::app_data_dir()` (`~/.local/share/io.github.hankanman.Parley`)
 and takes the DB as a `SqlitePool` / `Option<SqlitePool>` argument instead of
 reading framework-managed state. Recording persistence subscribes to
 finished segments on the in-process `audio::transcript_bus`, not to UI
@@ -101,7 +101,7 @@ when refactoring, since existing recovery/IndexedDB-shaped logic on the Rust
 side still keys off them.
 
 GPU features (`cuda`, `vulkan`, `hipblas`, `openblas`, `openmp`) live on
-`meetily-core`; `meetily-gpui` and `llama-helper` forward the same feature
+`parley-core`; `parley-gpui` and `llama-helper` forward the same feature
 names, so `./dev.sh cuda` etc. are unchanged.
 
 ### Audio Processing Pipeline (Critical Understanding)
@@ -112,7 +112,7 @@ The pipeline runs as one tokio task fed by two PipeWire capture streams:
 Mic stream (48 kHz)          System stream (48 kHz, sink monitor)
       ↓ raw mono chunks             ↓ raw mono chunks
 ┌────────────────────────────────────────────────────────────────┐
-│  AudioPipeline::run  (meetily-core/src/audio/pipeline.rs) │
+│  AudioPipeline::run  (parley-core/src/audio/pipeline.rs) │
 │   1. AudioMixerRingBuffer aligns both sources by absolute      │
 │      sample position into 50 ms windows                        │
 │   2. AEC3 (aec.rs) subtracts the system window from the mic    │
@@ -140,7 +140,7 @@ least 1 s before decoding.
 **Context**: Linux audio input was rewritten to talk to PipeWire directly, replacing the previous cpal-ALSA + `pactl` + `PIPEWIRE_NODE`-env-var stack. See the module doc comment at the top of `audio/pw/mod.rs` for the rationale.
 
 ```
-meetily-core/src/audio/
+parley-core/src/audio/
 ├── devices/                    # Device model + PipeWire-backed discovery
 │   ├── discovery.rs           # list_audio_devices, trigger_audio_permission
 │   └── configuration.rs       # AudioDevice, DeviceType
@@ -149,7 +149,7 @@ meetily-core/src/audio/
 ├── device_detection.rs         # Bluetooth vs wired classification for adaptive buffering
 ├── hardware_detector.rs        # GPU/perf tier detection
 ├── recording_manager.rs        # High-level recording coordination
-├── recording_service.rs        # start/stop/pause orchestration, called directly from meetily-gpui
+├── recording_service.rs        # start/stop/pause orchestration, called directly from parley-gpui
 ├── recording_saver.rs          # Audio file writing
 ├── import.rs                   # Import external audio files as new meetings
 ├── retranscription.rs          # Re-process stored audio with different settings
@@ -169,11 +169,11 @@ usually from a GPUI view's event handler, spawned onto the app's async
 executor via `cx.spawn(...)`:
 
 ```rust
-// meetily-gpui/src/views/recording/logic.rs (illustrative)
+// parley-gpui/src/views/recording/logic.rs (illustrative)
 let pool = AppServices::global(cx).pool();
 let sink = AppServices::global(cx).sink.clone();
 cx.spawn(async move |_, _| {
-    meetily_core::audio::recording_service::start_recording(pool, sink, mic, system, name).await
+    parley_core::audio::recording_service::start_recording(pool, sink, mic, system, name).await
 }).detach();
 ```
 
@@ -181,12 +181,12 @@ cx.spawn(async move |_, _| {
 `SharedEventSink`, which the shell wired to `core_events::GpuiSink`:
 
 ```rust
-// meetily-core: emit a transcript update
+// parley-core: emit a transcript update
 sink.emit_event("transcript-update", &TranscriptUpdate { text, timestamp, .. })?;
 ```
 
 ```rust
-// meetily-gpui: a view subscribes to CoreEvents and decodes the payload it cares about
+// parley-gpui: a view subscribes to CoreEvents and decodes the payload it cares about
 cx.subscribe(&core_events, |this, _, event: &CoreEvent, cx| {
     if event.name == "transcript-update" {
         if let Some(update) = event.decode::<TranscriptUpdate>() { /* ... */ }
@@ -196,9 +196,9 @@ cx.subscribe(&core_events, |this, _, event: &CoreEvent, cx| {
 
 ### Whisper Model Management
 
-**Model Storage Location**: `~/.local/share/com.meetily.ai/models/` (both dev and production — resolved via `paths::app_data_dir()`).
+**Model Storage Location**: `~/.local/share/io.github.hankanman.Parley/models/` (both dev and production — resolved via `paths::app_data_dir()`).
 
-**Model Loading** (meetily-core/src/whisper_engine/whisper_engine.rs):
+**Model Loading** (parley-core/src/whisper_engine/whisper_engine.rs):
 ```rust
 pub async fn load_model(&self, model_name: &str) -> Result<()> {
     // Automatically detects GPU capabilities (CUDA/Vulkan)
@@ -256,7 +256,7 @@ macro_rules! perf_debug {
 
 ### 4. GPUI State Management
 
-**`AppServices`** (`meetily-gpui/src/app_state.rs`) is the process-wide global
+**`AppServices`** (`parley-gpui/src/app_state.rs`) is the process-wide global
 (`cx.global::<AppServices>()`), holding:
 - `io: Io` — the Tauri-free async runtime glue (`runtime.rs`)
 - `sink: SharedEventSink` — where core code emits events
@@ -276,24 +276,24 @@ upserts each segment to SQLite as it arrives via a batched writer
 sweep marks any row still `"recording"` after a crash `"interrupted"`.
 Recovery of an interrupted meeting is a database query
 (`list_interrupted_meetings` / `recover_meeting`), surfaced by
-`meetily-gpui/src/recovery.rs`.
+`parley-gpui/src/recovery.rs`.
 
 ## Common Development Tasks
 
 ### Adding a New Feature
 
-1. Put the logic in `meetily-core` as a plain function (taking a
+1. Put the logic in `parley-core` as a plain function (taking a
    `SharedEventSink` / `SqlitePool` if it emits or touches the DB):
    ```rust
    pub async fn do_thing(pool: SqlitePool, arg: String) -> Result<String> {
        // ...
    }
    ```
-2. Call it from a `meetily-gpui` view, usually via `cx.spawn(...)`:
+2. Call it from a `parley-gpui` view, usually via `cx.spawn(...)`:
    ```rust
    let pool = AppServices::global(cx).pool();
    cx.spawn(async move |this, cx| {
-       let result = meetily_core::my_module::do_thing(pool, arg).await;
+       let result = parley_core::my_module::do_thing(pool, arg).await;
        this.update(cx, |this, cx| { /* apply result to view state */ cx.notify(); })
    }).detach();
    ```
@@ -303,7 +303,7 @@ Recovery of an interrupted meeting is a database query
 
 ### Modifying Audio Pipeline Behavior
 
-**Location**: `meetily-core/src/audio/pipeline.rs`
+**Location**: `parley-core/src/audio/pipeline.rs`
 
 Key components:
 - `AudioCapture`: minimal real-time capture callback (downmix + forward only)
@@ -316,7 +316,7 @@ Key components:
 **Testing Audio Changes**:
 ```bash
 # Enable verbose audio logging
-RUST_LOG=meetily_core::audio=debug ./dev.sh
+RUST_LOG=parley_core::audio=debug ./dev.sh
 
 # Monitor audio metrics in real-time
 # Check Developer Console in the app (Ctrl+Shift+I)
@@ -386,12 +386,12 @@ Linux is the only supported platform (see [Repository-Specific Conventions](#rep
 3. **Whisper Model Loading**: Models are loaded once and cached. Changing models requires app restart or manual unload/reload.
 
 4. **No external server**: meeting persistence, transcription, summary
-   generation all happen inside the `meetily-gpui` process. The old
+   generation all happen inside the `parley-gpui` process. The old
    `backend/` FastAPI dir and the Tauri/Next.js shell were both deleted; if
    you see references to `:5167`, `frontend/src-tauri`, or `tauri::command`
    in code, they're stale (or, in doc comments, deliberately historical).
 
-5. **File Paths**: Resolve directories with `meetily_core::paths::app_data_dir()` — never hardcode paths.
+5. **File Paths**: Resolve directories with `parley_core::paths::app_data_dir()` — never hardcode paths.
 
 6. **Audio Permissions**: Request microphone permission early; PipeWire handles system-audio routing without a separate OS-level screen-recording grant.
 
@@ -408,20 +408,20 @@ Linux is the only supported platform (see [Repository-Specific Conventions](#rep
 ## Key Files Reference
 
 **Core Coordination**:
-- [meetily-gpui/src/main.rs](meetily-gpui/src/main.rs) - Entry point, window setup, `AppServices` wiring, shutdown coordination
-- [meetily-gpui/src/app_state.rs](meetily-gpui/src/app_state.rs) - `AppServices` global
-- [meetily-gpui/src/core_events.rs](meetily-gpui/src/core_events.rs) - `GpuiSink` / `CoreEvents`, the core→UI event bridge
-- [meetily-core/src/audio/mod.rs](meetily-core/src/audio/mod.rs) - Audio module exports
+- [parley-gpui/src/main.rs](parley-gpui/src/main.rs) - Entry point, window setup, `AppServices` wiring, shutdown coordination
+- [parley-gpui/src/app_state.rs](parley-gpui/src/app_state.rs) - `AppServices` global
+- [parley-gpui/src/core_events.rs](parley-gpui/src/core_events.rs) - `GpuiSink` / `CoreEvents`, the core→UI event bridge
+- [parley-core/src/audio/mod.rs](parley-core/src/audio/mod.rs) - Audio module exports
 
 **Audio System**:
-- [meetily-core/src/audio/recording_manager.rs](meetily-core/src/audio/recording_manager.rs) - Recording orchestration
-- [meetily-core/src/audio/pipeline.rs](meetily-core/src/audio/pipeline.rs) - Audio mixing and VAD
-- [meetily-core/src/audio/recording_saver.rs](meetily-core/src/audio/recording_saver.rs) - Audio file writing
+- [parley-core/src/audio/recording_manager.rs](parley-core/src/audio/recording_manager.rs) - Recording orchestration
+- [parley-core/src/audio/pipeline.rs](parley-core/src/audio/pipeline.rs) - Audio mixing and VAD
+- [parley-core/src/audio/recording_saver.rs](parley-core/src/audio/recording_saver.rs) - Audio file writing
 
 **UI Components**:
-- [meetily-gpui/src/shell/mod.rs](meetily-gpui/src/shell/mod.rs) - Main app chrome (sidebar, meeting list, recording bar)
-- [meetily-gpui/src/views/recording/mod.rs](meetily-gpui/src/views/recording/mod.rs) - Recording home view
-- [meetily-gpui/src/views/meeting/](meetily-gpui/src/views/meeting/) - Meeting detail (transcript, summary)
+- [parley-gpui/src/shell/mod.rs](parley-gpui/src/shell/mod.rs) - Main app chrome (sidebar, meeting list, recording bar)
+- [parley-gpui/src/views/recording/mod.rs](parley-gpui/src/views/recording/mod.rs) - Recording home view
+- [parley-gpui/src/views/meeting/](parley-gpui/src/views/meeting/) - Meeting detail (transcript, summary)
 
 **Whisper Integration**:
-- [meetily-core/src/whisper_engine/whisper_engine.rs](meetily-core/src/whisper_engine/whisper_engine.rs) - Whisper model management and transcription
+- [parley-core/src/whisper_engine/whisper_engine.rs](parley-core/src/whisper_engine/whisper_engine.rs) - Whisper model management and transcription
