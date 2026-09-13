@@ -674,8 +674,15 @@ impl RecordingView {
             // summary becomes the meeting title, and its id is stashed so
             // the `recording-stopped` handler can link the two once a
             // `meeting_id` exists.
-            let matched_event = match &pool {
-                Some(pool) => CalendarRepository::find_event_for_now(pool).await.ok().flatten(),
+            // On `Io`, like every other DB call: sqlx needs a tokio context,
+            // and this closure runs on GPUI's executor.
+            let matched_event = match pool {
+                Some(pool) => io
+                    .spawn(async move { CalendarRepository::find_event_for_now(&pool).await })
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok())
+                    .flatten(),
                 None => None,
             };
 
