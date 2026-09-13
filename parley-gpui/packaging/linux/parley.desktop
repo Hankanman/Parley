@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Parley
+Comment=Privacy-first AI meeting assistant
+Exec=parley
+Icon=io.github.hankanman.Parley
+Terminal=false
+Categories=AudioVideo;Audio;Office;
+StartupWMClass=io.github.hankanman.Parley

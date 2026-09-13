@@ -1,5 +1,5 @@
 //! `parley-gpui-spike` — a time-boxed spike evaluating a GPUI rewrite of
-//! Parley/Meetily-Local's UI. See `spikes/gpui-shell/README.md` for what
+//! Parley UI. See `spikes/gpui-shell/README.md` for what
 //! each check covers and the findings.
 //!
 //! Standalone crate: NOT a member of the root Cargo workspace (see this

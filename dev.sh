@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Parley (meetily-gpui) — dev launcher (Linux focus)
+# Parley (parley-gpui) — dev launcher (Linux focus)
 #
 # Usage:
 #   ./dev.sh              # auto: CUDA on NVIDIA, CPU otherwise
@@ -14,7 +14,7 @@
 #   CUDAHOSTCXX          host C++ compiler for nvcc (default: auto-detect g++-15 on Fedora)
 #   CUDAARCHS            CUDA arch list (default: single-arch, detected via nvidia-smi)
 #
-# Builds and runs the `meetily-gpui` binary directly via `cargo run` — no
+# Builds and runs the `parley-gpui` binary directly via `cargo run` — no
 # webview, no Node/pnpm involved. First run also builds the `llama-helper`
 # sidecar in release mode (~2-3 min); subsequent runs reuse it.
 
@@ -104,7 +104,7 @@ run_gpui_dev() {
     local mode="$1"
     cd "$ROOT"
 
-    # meetily-gpui's build.rs embeds an $ORIGIN rpath for the binary, but
+    # parley-gpui's build.rs embeds an $ORIGIN rpath for the binary, but
     # `cargo run`'s target dir layout still needs LD_LIBRARY_PATH pointed at
     # target/debug for the dynamically-linked sherpa-onnx libs.
     local sherpa_lib_dir="$ROOT/target/debug"
@@ -128,7 +128,7 @@ run_gpui_dev() {
     esac
     echo "==> Building llama-helper sidecar (${mode}, release)"
     ( cd "$ROOT/llama-helper" && cargo build --release "${helper_features[@]}" )
-    export MEETILY_LLAMA_HELPER="${MEETILY_LLAMA_HELPER:-$ROOT/target/release/llama-helper}"
+    export PARLEY_LLAMA_HELPER="${PARLEY_LLAMA_HELPER:-$ROOT/target/release/llama-helper}"
 
     local gpui_features=()
     case "$mode" in
@@ -136,11 +136,11 @@ run_gpui_dev() {
         vulkan) gpui_features=(--features vulkan) ;;
     esac
 
-    echo "==> Running cargo run -p meetily-gpui (${mode})"
+    echo "==> Running cargo run -p parley-gpui (${mode})"
     if (( ${#gpui_features[@]} )); then
-        exec cargo run -p meetily-gpui "${gpui_features[@]}"
+        exec cargo run -p parley-gpui "${gpui_features[@]}"
     else
-        exec cargo run -p meetily-gpui
+        exec cargo run -p parley-gpui
     fi
 }
 

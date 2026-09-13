@@ -1,7 +1,7 @@
 # gpui-shell — Parley GPUI rewrite spike
 
 A time-boxed spike evaluating a [GPUI](https://www.gpui.rs/) rewrite of
-Parley/Meetily-Local's UI (currently Tauri 2 + Next.js/React). Standalone
+Parley UI (currently Tauri 2 + Next.js/React). Standalone
 crate, **not** a member of the root Cargo workspace — it has its own empty
 `[workspace]` table, its own `Cargo.lock` (committed), and its own
 `target/` (gitignored). Nothing under `frontend/` was touched.
@@ -54,7 +54,7 @@ cargo test                  # no #[test]s in this spike; exists for completeness
 
 3. **Summary editor** (`src/summary.rs` + `src/db.rs`) — a `zorite-editor`
    `EditorState` with WYSIWYG markdown styling (`SyntaxStyle` built from
-   `cx.theme()` tokens). Tries `~/.local/share/com.meetily.ai/meeting_minutes.sqlite`
+   `cx.theme()` tokens). Tries `~/.local/share/io.github.hankanman.Parley/meeting_minutes.sqlite`
    first: opens it `?mode=ro` via `rusqlite` (`bundled` feature — no system
    libsqlite3 needed), queries `summary_processes` for the most recently
    `completed` row, and parses the `result` JSON's `markdown` field (schema
@@ -135,7 +135,7 @@ on-screen check, not a text diff.
 - `zorite-editor`'s provider model (`set_markdown_style`, block providers)
   is well-documented (`API.md` is genuinely excellent) and the "source is
   the model" design is a good fit for a markdown notes editor.
-- `rusqlite` with `bundled` reads the real, live Meetily/Parley DB read-only
+- `rusqlite` with `bundled` reads the real, live Parley DB read-only
   with no coordination needed with the running Tauri app (WAL-mode SQLite
   tolerates concurrent readers fine).
 

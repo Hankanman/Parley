@@ -1,7 +1,7 @@
 [workspace]
 # Deliberately empty: this makes cargo treat spikes/gpui-shell as its own
 # workspace root (its own Cargo.lock, its own target/), independent of the
-# root Meetily-Local workspace. Do NOT add `members` here.
+# root Parley workspace. Do NOT add `members` here.
 
 [package]
 name = "gpui-shell"

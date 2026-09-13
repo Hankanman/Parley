@@ -1,6 +1,6 @@
 # Runtime whisper backend selection (issue #56 spike)
 
-Engineering spike: can Meetily ship one binary that picks a CPU/Vulkan/CUDA
+Engineering spike: can Parley ship one binary that picks a CPU/Vulkan/CUDA
 whisper backend at runtime, instead of building (and shipping) a separate
 binary per backend at compile time as it does today? This document reports
 what was found, what was prototyped, and what a real implementation would
@@ -49,7 +49,7 @@ Read directly from
   `WhisperContext` construction instead of linking one in — a substantial,
   upstream-affecting change with no guarantee of being accepted, and one
   this repo doesn't control (whisper-rs is a third-party crate, unlike
-  llama-cpp-2 which Meetily doesn't fork either).
+  llama-cpp-2 which Parley doesn't fork either).
 
 **Conclusion**: waiting for or patching in `GGML_BACKEND_DL` support is not
 a near-term option. The sidecar pattern — already shipped for LLM summaries
@@ -73,7 +73,7 @@ Plus, behind a Cargo feature that is **off by default** and touches nothing
 in the live recording path:
 
 ```
-meetily-core/src/audio/transcription/backend_probe.rs   (feature = "backend_probe")
+parley-core/src/audio/transcription/backend_probe.rs   (feature = "backend_probe")
 ```
 
 ### whisper-protocol
@@ -194,7 +194,7 @@ compiled binary directly over stdio.
 
 **Reading these numbers**: sidecar spawn and IPC are cheap relative to
 actual decode time — even on the tiny model, `full()` dominates the round
-trip by ~150×. For `base`/`small`/`medium` models (Meetily's actual
+trip by ~150×. For `base`/`small`/`medium` models (Parley's actual
 dev/production tiers per CLAUDE.md), decode time only grows, so the
 JSON+base64 transport is very unlikely to be the bottleneck; a shared-memory
 or tmpfile transport would shave single-digit milliseconds off something
@@ -257,8 +257,8 @@ not a fork of `whisper-rs-sys` to chase `GGML_BACKEND_DL`. Specifics:
      `utils::download::DownloadGuard`). This keeps the default AppImage
      close to today's size and only pays the CUDA/Vulkan cost on machines
      that can use it.
-  2. **Separate release artifacts** (`meetily-cpu.AppImage`,
-     `meetily-cuda.AppImage`, ...) as today, but each bundling *only* its
+  2. **Separate release artifacts** (`parley-cpu.AppImage`,
+     `parley-cuda.AppImage`, ...) as today, but each bundling *only* its
      own sidecar (which is a no-op today since the backend is compiled in)
      — this is the status quo and doesn't actually solve issue #56's stated
      problem (official releases shipping CPU-only), so it's listed only as
@@ -346,7 +346,7 @@ distribution-size tradeoff before committing.
 - `whisper-protocol`, `whisper-core`, `whisper-helper`: `cargo build
   --release -p whisper-helper` and `cargo test -p whisper-core -p
   whisper-protocol --release` both pass with **zero errors and zero
-  warnings** (`CARGO_TARGET_DIR=/home/user/Meetily-Local/target`,
+  warnings** (`CARGO_TARGET_DIR=/home/user/Parley/target`,
   `SHERPA_ONNX_ARCHIVE_DIR` set per the task instructions).
 - `backend_probe.rs`: could not run `cargo check` on the full
   `frontend/src-tauri` crate in this container — it fails **before**

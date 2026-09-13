@@ -1,6 +1,6 @@
 name: "Build"
 
-# Builds the Parley (meetily-gpui) AppImage via ./build.sh cpu. GitHub-hosted
+# Builds the Parley (parley-gpui) AppImage via ./build.sh cpu. GitHub-hosted
 # runners have no GPU, so every CI build is CPU-only; use ./build.sh
 # cuda|vulkan locally for accelerated builds.
 
@@ -39,11 +39,11 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
 
-      - name: Get version from meetily-gpui/Cargo.toml
+      - name: Get version from parley-gpui/Cargo.toml
         id: get-version
         shell: bash
         run: |
-          VERSION=$(awk -F'"' '/^version/ {print $2; exit}' meetily-gpui/Cargo.toml)
+          VERSION=$(awk -F'"' '/^version/ {print $2; exit}' parley-gpui/Cargo.toml)
           echo "Application version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 

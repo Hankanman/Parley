@@ -18,10 +18,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Get version from meetily-gpui/Cargo.toml
+      - name: Get version from parley-gpui/Cargo.toml
         id: get-version
         run: |
-          VERSION=$(awk -F'"' '/^version/ {print $2; exit}' meetily-gpui/Cargo.toml)
+          VERSION=$(awk -F'"' '/^version/ {print $2; exit}' parley-gpui/Cargo.toml)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"
 

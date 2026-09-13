@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Parley (meetily-gpui) — clean script: nuke build artifacts for a fresh build.
+# Parley (parley-gpui) — clean script: nuke build artifacts for a fresh build.
 #
 # Usage:
 #   ./clean.sh              # remove build artifacts (default)
@@ -8,7 +8,7 @@
 #   ./clean.sh --help
 #
 # Does NOT touch:
-#   - User data (~/.local/share/com.meetily.ai/  — Whisper/Parakeet models, db, settings)
+#   - User data (~/.local/share/io.github.hankanman.Parley/  — Whisper/Parakeet models, db, settings)
 #   - Your git working tree
 #
 # After running, do:  ./build.sh
