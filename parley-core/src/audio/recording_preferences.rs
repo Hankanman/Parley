@@ -93,6 +93,133 @@ pub fn get_default_recordings_folder() -> PathBuf {
         .join("parley-recordings")
 }
 
+/// Name of the default recordings folder before the Parley rename.
+const LEGACY_RECORDINGS_FOLDER_NAME: &str = "meetily-recordings";
+
+/// Move `~/Documents/meetily-recordings` to `~/Documents/parley-recordings`,
+/// once, and point everything stored in the database at the new location.
+/// Call once the database is open; logs rather than fails.
+pub async fn migrate_legacy_recordings_folder(pool: &sqlx::SqlitePool) {
+    let Some(documents) = dirs::document_dir() else {
+        return;
+    };
+    match migrate_legacy_recordings_folder_in(pool, &documents).await {
+        Ok(Some((from, to))) => info!(
+            "Moved recordings from {} to {}",
+            from.display(),
+            to.display()
+        ),
+        Ok(None) => {}
+        Err(e) => warn!("Recordings folder migration didn't complete: {e}"),
+    }
+}
+
+/// [`migrate_legacy_recordings_folder`] against an explicit documents dir,
+/// for tests. Returns the move it made, if any.
+///
+/// Meeting rows store absolute paths (`meetings.folder_path` / `audio_path`)
+/// and the recording preferences store `save_folder`, so the folder move is
+/// followed by rewriting those — a transaction that only touches paths
+/// under exactly the legacy folder. A symlink is left at the old path, so
+/// even if the rewrite fails (and is retried on the next launch) every
+/// stored path still resolves.
+pub async fn migrate_legacy_recordings_folder_in(
+    pool: &sqlx::SqlitePool,
+    documents: &std::path::Path,
+) -> Result<Option<(PathBuf, PathBuf)>> {
+    let legacy = documents.join(LEGACY_RECORDINGS_FOLDER_NAME);
+    let current = documents.join("parley-recordings");
+
+    let legacy_meta = std::fs::symlink_metadata(&legacy).ok();
+    let legacy_is_real_dir = legacy_meta.as_ref().is_some_and(|m| m.is_dir());
+    let legacy_is_symlink = legacy_meta.as_ref().is_some_and(|m| m.file_type().is_symlink());
+
+    let moved = if legacy_is_real_dir {
+        if current.exists() {
+            // Both exist: stored paths into the legacy folder still work, so
+            // leave everything alone rather than guess how to merge.
+            warn!(
+                "Both {} and {} exist; leaving recordings where they are",
+                legacy.display(),
+                current.display()
+            );
+            return Ok(None);
+        }
+        std::fs::rename(&legacy, &current)?;
+        if let Err(e) = std::os::unix::fs::symlink("parley-recordings", &legacy) {
+            warn!("Couldn't leave a symlink at {}: {e}", legacy.display());
+        }
+        true
+    } else if legacy_is_symlink && current.is_dir() {
+        // Moved on an earlier launch; make sure the rewrite below finished.
+        false
+    } else {
+        return Ok(None);
+    };
+
+    let legacy_str = legacy
+        .to_str()
+        .ok_or_else(|| anyhow!("non-UTF-8 recordings path {}", legacy.display()))?;
+    let current_str = current
+        .to_str()
+        .ok_or_else(|| anyhow!("non-UTF-8 recordings path {}", current.display()))?;
+    rewrite_recording_paths(pool, legacy_str, current_str).await?;
+
+    Ok(moved.then_some((legacy, current)))
+}
+
+/// Replace the `from` folder prefix with `to` in every stored recording path.
+/// Matches the folder itself or paths strictly inside it, never a sibling
+/// that merely shares the prefix (`meetily-recordings-old`).
+async fn rewrite_recording_paths(pool: &sqlx::SqlitePool, from: &str, to: &str) -> Result<()> {
+    // SQLite's substr/length count characters, not bytes.
+    let from_len = from.chars().count() as i64;
+    let mut tx = pool.begin().await?;
+
+    for column in ["folder_path", "audio_path"] {
+        let sql = format!(
+            "UPDATE meetings SET {column} = ?1 || substr({column}, ?2 + 1) \
+             WHERE substr({column}, 1, ?2) = ?3 \
+               AND (length({column}) = ?2 OR substr({column}, ?2 + 1, 1) = '/')"
+        );
+        sqlx::query(&sql)
+            .bind(to)
+            .bind(from_len)
+            .bind(from)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    // Edit the stored JSON as a value so fields this build doesn't know
+    // about survive the round trip.
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT value FROM app_settings WHERE key = ?1")
+            .bind(KEY_RECORDING_PREFERENCES)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if let Some(json) = stored {
+        let mut value: serde_json::Value = serde_json::from_str(&json)?;
+        let rewritten = value
+            .get("save_folder")
+            .and_then(|v| v.as_str())
+            .and_then(|folder| {
+                let rest = folder.strip_prefix(from)?;
+                (rest.is_empty() || rest.starts_with('/')).then(|| format!("{to}{rest}"))
+            });
+        if let Some(folder) = rewritten {
+            value["save_folder"] = serde_json::Value::String(folder);
+            sqlx::query("UPDATE app_settings SET value = ?1 WHERE key = ?2")
+                .bind(serde_json::to_string(&value)?)
+                .bind(KEY_RECORDING_PREFERENCES)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Ensure the recordings directory exists
 pub fn ensure_recordings_directory(path: &PathBuf) -> Result<()> {
     if !path.exists() {
@@ -227,6 +354,140 @@ pub async fn save_recording_preferences(
     ensure_recordings_directory(&preferences.save_folder)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod legacy_recordings_folder_tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+    use sqlx::SqlitePool;
+
+    async fn test_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite pool");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("run migrations");
+        pool
+    }
+
+    async fn insert_meeting(pool: &SqlitePool, id: &str, folder: &str, audio: Option<&str>) {
+        sqlx::query(
+            "INSERT INTO meetings (id, title, created_at, updated_at, folder_path, audio_path) \
+             VALUES (?1, 'm', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?2, ?3)",
+        )
+        .bind(id)
+        .bind(folder)
+        .bind(audio)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn paths_of(pool: &SqlitePool, id: &str) -> (String, Option<String>) {
+        sqlx::query_as("SELECT folder_path, audio_path FROM meetings WHERE id = ?1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn moves_the_folder_and_rewrites_stored_paths() {
+        let pool = test_pool().await;
+        let docs = tempfile::tempdir().unwrap();
+        let legacy = docs.path().join("meetily-recordings");
+        std::fs::create_dir_all(legacy.join("Standup")).unwrap();
+        std::fs::write(legacy.join("Standup/audio.mp4"), b"audio").unwrap();
+        let (legacy_s, docs_s) = (legacy.to_str().unwrap(), docs.path().to_str().unwrap());
+
+        insert_meeting(
+            &pool,
+            "moved",
+            &format!("{legacy_s}/Standup"),
+            Some(&format!("{legacy_s}/Standup/audio.mp4")),
+        )
+        .await;
+        // A sibling sharing the prefix, and a folder elsewhere: both untouched.
+        insert_meeting(&pool, "sibling", &format!("{legacy_s}-old/x"), None).await;
+        insert_meeting(&pool, "elsewhere", "/mnt/archive/y", None).await;
+        let prefs = serde_json::json!({
+            "save_folder": legacy_s, "auto_save": true, "file_format": "mp4",
+            "some_future_field": 42
+        });
+        SettingsRepository::set_setting(&pool, KEY_RECORDING_PREFERENCES, &prefs)
+            .await
+            .unwrap();
+
+        let current = docs.path().join("parley-recordings");
+        let moved = migrate_legacy_recordings_folder_in(&pool, docs.path())
+            .await
+            .unwrap();
+        assert_eq!(moved, Some((legacy.clone(), current.clone())));
+
+        assert_eq!(std::fs::read(current.join("Standup/audio.mp4")).unwrap(), b"audio");
+        assert!(std::fs::symlink_metadata(&legacy).unwrap().file_type().is_symlink());
+        assert_eq!(
+            paths_of(&pool, "moved").await,
+            (
+                format!("{docs_s}/parley-recordings/Standup"),
+                Some(format!("{docs_s}/parley-recordings/Standup/audio.mp4"))
+            )
+        );
+        assert_eq!(paths_of(&pool, "sibling").await.0, format!("{legacy_s}-old/x"));
+        assert_eq!(paths_of(&pool, "elsewhere").await.0, "/mnt/archive/y");
+
+        let stored: serde_json::Value =
+            SettingsRepository::get_setting(&pool, KEY_RECORDING_PREFERENCES)
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(stored["save_folder"], current.to_str().unwrap());
+        assert_eq!(stored["some_future_field"], 42);
+
+        // Second launch: nothing left to do, nothing changes.
+        assert_eq!(
+            migrate_legacy_recordings_folder_in(&pool, docs.path()).await.unwrap(),
+            None
+        );
+        assert_eq!(
+            paths_of(&pool, "moved").await.0,
+            format!("{docs_s}/parley-recordings/Standup")
+        );
+    }
+
+    #[tokio::test]
+    async fn leaves_everything_alone_when_both_folders_exist() {
+        let pool = test_pool().await;
+        let docs = tempfile::tempdir().unwrap();
+        let legacy = docs.path().join("meetily-recordings");
+        std::fs::create_dir(&legacy).unwrap();
+        std::fs::create_dir(docs.path().join("parley-recordings")).unwrap();
+        let folder = format!("{}/a", legacy.to_str().unwrap());
+        insert_meeting(&pool, "m", &folder, None).await;
+
+        assert_eq!(
+            migrate_legacy_recordings_folder_in(&pool, docs.path()).await.unwrap(),
+            None
+        );
+        assert!(legacy.is_dir() && !std::fs::symlink_metadata(&legacy).unwrap().file_type().is_symlink());
+        assert_eq!(paths_of(&pool, "m").await.0, folder);
+    }
+
+    #[tokio::test]
+    async fn no_legacy_folder_is_a_no_op() {
+        let pool = test_pool().await;
+        let docs = tempfile::tempdir().unwrap();
+        assert_eq!(
+            migrate_legacy_recordings_folder_in(&pool, docs.path()).await.unwrap(),
+            None
+        );
+        assert!(!docs.path().join("parley-recordings").exists());
+    }
 }
 
 #[cfg(test)]

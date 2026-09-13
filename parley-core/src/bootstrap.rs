@@ -74,7 +74,13 @@ pub fn init_paths() {
 /// state, or in whatever the GPUI shell's equivalent is) and for cloning its
 /// pool to pass to `spawn_background_init`.
 pub async fn prepare_database() -> Result<database::setup::StartupOutcome, String> {
-    database::setup::prepare_database_on_startup().await
+    let outcome = database::setup::prepare_database_on_startup().await?;
+    // Needs the pool (stored recording paths are rewritten alongside the
+    // folder move), and must finish before anything reads those paths.
+    if let database::setup::StartupOutcome::Initialized(db) = &outcome {
+        audio::recording_preferences::migrate_legacy_recordings_folder(db.pool()).await;
+    }
+    Ok(outcome)
 }
 
 /// Spawn the non-blocking background startup work on the current tokio
