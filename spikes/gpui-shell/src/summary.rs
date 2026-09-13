@@ -1,6 +1,6 @@
 //! Check 3: a `zorite-editor` view loading real-shaped summary markdown —
 //! either the most recently completed meeting summary from the user's real
-//! Meetily/Parley SQLite DB (read-only), or the bundled fixture.
+//! Parley SQLite DB (read-only), or the bundled fixture.
 
 use gpui_kit::component::{ActiveTheme, StyledExt as _, h_flex, v_flex, button::Button, button::ButtonVariants};
 use gpui_kit::*;

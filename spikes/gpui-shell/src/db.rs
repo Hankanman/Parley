@@ -1,5 +1,5 @@
-//! Read-only access to Meetily's real SQLite database, for the summary-editor
-//! check. Opens `~/.local/share/com.meetily.ai/meeting_minutes.sqlite` with
+//! Read-only access to Parley's real SQLite database, for the summary-editor
+//! check. Opens `~/.local/share/io.github.hankanman.Parley/meeting_minutes.sqlite` with
 //! `?mode=ro` and never writes to it.
 
 use anyhow::{Context as _, Result, anyhow};
@@ -11,11 +11,11 @@ struct SummaryResult {
     markdown: Option<String>,
 }
 
-/// Locate the production Meetily/Parley SQLite DB in the user's data dir.
+/// Locate the production Parley SQLite DB in the user's data dir.
 fn db_path() -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME")?;
     let path = std::path::Path::new(&home)
-        .join(".local/share/com.meetily.ai/meeting_minutes.sqlite");
+        .join(".local/share/io.github.hankanman.Parley/meeting_minutes.sqlite");
     path.exists().then_some(path)
 }
 
@@ -27,7 +27,7 @@ pub fn read_latest_summary_markdown() -> Result<(String, String)> {
     let path = db_path().ok_or_else(|| anyhow!("meeting_minutes.sqlite not found under HOME"))?;
 
     // Read-only URI open: never mutates the live app's database, and works
-    // even while the real Parley/Meetily app has it open (shared read lock).
+    // even while the real Parley app has it open (shared read lock).
     let uri = format!("file:{}?mode=ro", path.display());
     let conn = Connection::open_with_flags(
         &uri,

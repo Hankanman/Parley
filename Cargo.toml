@@ -3,12 +3,12 @@ resolver = "2"
 members = [
     "llama-helper",
     "llama-protocol",
-    "meetily-core",
-    "meetily-mcp",
+    "parley-core",
+    "parley-mcp",
     "whisper-helper",
     "whisper-protocol",
     "whisper-core",
-    "meetily-gpui"
+    "parley-gpui"
 ]
 
 # Shared workspace settings
@@ -27,13 +27,13 @@ tokio = { version = "1.32.0", features = ["full"] }
 # [patch.crates-io] sections in non-root package manifests.
 
 # Profiles must live at the workspace root (cargo ignores them in member
-# manifests). meetily uses cargo's default release profile (opt-level=3)
+# manifests). parley uses cargo's default release profile (opt-level=3)
 # while llama-helper wants size-optimised "s" for faster sidecar startup.
 #
 # lto/strip are workspace-profile-only settings (cargo rejects `lto` at the
 # per-package [profile.release.package.*] level — see below), so they live
 # here and apply to every crate in the workspace, including llama-helper and
-# meetily-mcp; those two keep their own opt-level/codegen-units overrides.
+# parley-mcp; those two keep their own opt-level/codegen-units overrides.
 [profile.release]
 lto = "thin"
 codegen-units = 1
@@ -47,10 +47,10 @@ strip = true
 codegen-units = 1
 opt-level = "s"
 
-# meetily-mcp is a short-lived stdio sidecar spawned per MCP session — its cost
+# parley-mcp is a short-lived stdio sidecar spawned per MCP session — its cost
 # is startup and footprint, not throughput, so optimise it for size like
 # llama-helper.
-[profile.release.package.meetily-mcp]
+[profile.release.package.parley-mcp]
 codegen-units = 1
 opt-level = "s"
 

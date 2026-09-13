@@ -1,8 +1,8 @@
-# Contributing to Meetily-Local (Parley)
+# Contributing to Parley
 
 Thank you for your interest in contributing! This document provides guidelines and instructions for contributing to this project.
 
-Meetily-Local is an independent fork — see [README.md](README.md#about-this-fork). PRs and issues go to
+Parley is an independent fork — see [README.md](README.md#about-this-fork). PRs and issues go to
 [Hankanman/Meetily-Local](https://github.com/Hankanman/Meetily-Local), not the upstream Zackriya-Solutions project.
 
 ## Development Workflow
@@ -33,7 +33,7 @@ Meetily-Local is an independent fork — see [README.md](README.md#about-this-fo
 2. Create a new branch for each feature/fix, named `fix/*` or `enhance/*`
 3. Make your changes
 4. Write or update tests as needed
-5. Ensure all tests pass (`cargo test -p meetily-core -p meetily-gpui`)
+5. Ensure all tests pass (`cargo test -p parley-core -p parley-gpui`)
 6. Update documentation if necessary — see [CLAUDE.md](CLAUDE.md) for where things live
 
 ### Issue Creation

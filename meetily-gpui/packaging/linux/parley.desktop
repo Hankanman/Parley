@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Parley
-Comment=Privacy-first AI meeting assistant (GPUI shell)
-Exec=meetily-gpui
-Icon=com.meetily.ai
-Terminal=false
-Categories=AudioVideo;Audio;Office;
-StartupWMClass=meetily-gpui

@@ -1,6 +1,6 @@
 <div align="center" style="border-bottom: none">
     <h1>
-        Meetily-Local — Privacy-First AI Meeting Assistant
+        Parley — Privacy-First AI Meeting Assistant
     </h1>
     <a href="https://github.com/Hankanman/Meetily-Local/releases"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License"></a>
     <a href="https://github.com/Hankanman/Meetily-Local/releases"><img src="https://img.shields.io/badge/Supported_OS-Linux-white" alt="Supported OS"></a>
@@ -11,7 +11,7 @@
 A privacy-first AI meeting assistant that captures, transcribes, and summarizes meetings entirely on your local infrastructure. No cloud calls, no telemetry, no upsells — just an offline meeting tool that works.
 
 <p align="center">
-    <img src="docs/meetily_demo.gif" width="650" alt="Meetily-Local Demo" />
+    <img src="docs/parley_demo.gif" width="650" alt="Parley Demo" />
 </p>
 
 </div>
@@ -20,11 +20,11 @@ A privacy-first AI meeting assistant that captures, transcribes, and summarizes 
 
 ## About this fork
 
-**Meetily-Local** is an independent fork of the original [Zackriya-Solutions/meetily](https://github.com/Zackriya-Solutions/meetily) project (the "Meetily Community Edition"), which is MIT-licensed.
+**Parley** is an independent fork of the original [Zackriya-Solutions/meetily](https://github.com/Zackriya-Solutions/meetily) project (the "Meetily Community Edition"), which is MIT-licensed.
 
 This fork is **fully independent** — not technically a GitHub fork anymore — and there is no commercial product. Everything is and will remain MIT-licensed and free.
 
-**What's different in Meetily-Local vs. upstream as of v0.4.0:**
+**What's different in Parley vs. upstream as of v0.4.0:**
 
 - ✅ **Linux-only.** This fork dropped macOS/Windows support to focus on one platform done well — native PipeWire audio capture (mic + system, no cpal/BlackHole-style virtual device needed) and ALSA device enumeration all fixed and tested.
 - ✅ **Native desktop shell.** No webview: the UI is [GPUI](https://www.gpui.rs/) (the framework behind Zed), talking to the Rust core in-process with no IPC/serialization overhead. The original Tauri + Next.js/React shell was retired once the GPUI app reached parity.
@@ -36,7 +36,7 @@ Credit for the original architecture, models, and significant feature work goes 
 
 ## Introduction
 
-Meetily-Local is a privacy-first AI meeting assistant that runs entirely on your local machine. It captures your meetings, transcribes them in real-time, and generates summaries — all without sending any data to a cloud you don't control. Suitable for professionals, teams, and individuals who need meeting intelligence without the privacy/compliance baggage of cloud meeting tools.
+Parley is a privacy-first AI meeting assistant that runs entirely on your local machine. It captures your meetings, transcribes them in real-time, and generates summaries — all without sending any data to a cloud you don't control. Suitable for professionals, teams, and individuals who need meeting intelligence without the privacy/compliance baggage of cloud meeting tools.
 
 ## Why this exists
 
@@ -109,7 +109,7 @@ Transcribe meetings entirely on your device using **Whisper** (ggml) or **Parake
 Import existing audio files to generate transcripts, or re-transcribe any recorded meeting with a different model or language.
 
 <p align="center">
-    <img src="docs/meetily-export.gif" width="650" style="border-radius: 10px;" alt="Import and Enhance" />
+    <img src="docs/parley-export.gif" width="650" style="border-radius: 10px;" alt="Import and Enhance" />
 </p>
 
 ### 🤖 AI-powered summaries
@@ -146,10 +146,10 @@ Selected automatically at build time by `build.sh` (or pass `cuda` / `vulkan` / 
 
 ## System architecture
 
-Meetily-Local (Parley) is a single self-contained GPUI desktop application:
+Parley is a single self-contained GPUI desktop application:
 
-- **`meetily-core`**: audio capture, mixing, VAD, Whisper/Parakeet inference, SQLite persistence, summary/LLM providers — no UI dependency.
-- **`meetily-gpui`**: the native [GPUI](https://www.gpui.rs/) desktop shell — meeting list, recording UI, settings — linking `meetily-core` directly, no IPC.
+- **`parley-core`**: audio capture, mixing, VAD, Whisper/Parakeet inference, SQLite persistence, summary/LLM providers — no UI dependency.
+- **`parley-gpui`**: the native [GPUI](https://www.gpui.rs/) desktop shell — meeting list, recording UI, settings — linking `parley-core` directly, no IPC.
 - **No external server required** — meeting/summary persistence, transcription, and LLM calls all happen inside the same Rust process.
 
 For more details, see [docs/architecture.md](docs/architecture.md).

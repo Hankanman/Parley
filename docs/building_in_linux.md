@@ -1,6 +1,6 @@
 ## 🐧 Building on Linux
 
-Meetily-Local is Linux-only. This guide covers building from source using the
+Parley is Linux-only. This guide covers building from source using the
 root-level `build.sh` / `dev.sh` / `clean.sh` scripts, which handle GPU-mode
 selection, the gnarly Fedora/CUDA build-environment quirks, and the
 `llama-helper` sidecar build for you.
@@ -46,7 +46,7 @@ curl -L -o ~/.cache/sherpa-onnx/sherpa-onnx-v1.13.7-linux-x64-shared-lib.tar.bz2
 export SHERPA_ONNX_ARCHIVE_DIR=~/.cache/sherpa-onnx
 ```
 
-(`ffmpeg` is fetched lazily at *runtime* by `meetily-core`'s
+(`ffmpeg` is fetched lazily at *runtime* by `parley-core`'s
 `audio/ffmpeg.rs`, not at build time — nothing to pre-seed for a build.)
 
 The exact sherpa-onnx version is the one pinned in `Cargo.lock`
@@ -95,13 +95,13 @@ is involved:
    `.cu.o` objects), and sets `NO_STRIP=1` (linuxdeploy's bundled `strip`
    chokes on Fedora 43+'s `SHT_RELR` sections).
 3. **Sidecar build**: builds the `llama-helper` crate (release) with the
-   matching GPU feature; `dev.sh` points `MEETILY_LLAMA_HELPER` at it directly,
+   matching GPU feature; `dev.sh` points `PARLEY_LLAMA_HELPER` at it directly,
    `build.sh` stages a copy into `target/gpui-dist/`.
-4. **GPUI build/run**: `dev.sh` runs `cargo run -p meetily-gpui --features
+4. **GPUI build/run**: `dev.sh` runs `cargo run -p parley-gpui --features
    {cuda,vulkan}` as needed; `build.sh` runs `cargo build --release -p
-   meetily-gpui`, stages the binary + native libs into `target/gpui-dist/`,
+   parley-gpui`, stages the binary + native libs into `target/gpui-dist/`,
    and packages that into an AppImage via
-   `meetily-gpui/packaging/linux/build-appimage.sh`.
+   `parley-gpui/packaging/linux/build-appimage.sh`.
 
 | Mode     | Feature Flag          | Typical Speedup |
 | -------- | ---------------------- | ---------------- |
@@ -159,12 +159,12 @@ them, build the workspace directly, e.g.:
 
 ```bash
 cargo build --release -p llama-helper --features hipblas
-cargo build --release -p meetily-gpui --features hipblas
+cargo build --release -p parley-gpui --features hipblas
 ```
 
 This path is unsupported by the helper scripts — expect to hand-manage the
 `llama-helper` sidecar staging and AppImage packaging steps yourself (see
-step 3-4 above, or run `meetily-gpui/packaging/linux/build-appimage.sh`
+step 3-4 above, or run `parley-gpui/packaging/linux/build-appimage.sh`
 directly against a dist dir you assemble by hand).
 
 ---
@@ -211,7 +211,7 @@ a `.deb`/`.rpm`'s dependency resolution.
 
 ### `Could not find dependency: libsherpa-onnx-c-api.so`
 - **Fix:** Already handled — `build.sh` and
-  `meetily-gpui/packaging/linux/build-appimage.sh` point linuxdeploy at the
+  `parley-gpui/packaging/linux/build-appimage.sh` point linuxdeploy at the
   staged dist dir via `LD_LIBRARY_PATH` so it can find and bundle the lib. If
   you invoke `build-appimage.sh` by hand against your own dist dir, export it
   yourself; a build without it produces an AppImage that is missing the

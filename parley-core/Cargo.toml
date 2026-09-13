@@ -1,0 +1,135 @@
+[package]
+name = "parley-core"
+version = "0.4.0"
+description = "Tauri-free core: audio capture/mixing/VAD, transcription, diarization, summaries, persistence"
+edition.workspace = true
+rust-version.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "parley_core"
+
+# Hardware acceleration features for whisper-rs (Linux-only build). Mirrors
+# the shell crate's features of the same name, which simply forward here —
+# see frontend/src-tauri/Cargo.toml.
+[features]
+default = ["platform-default"]
+platform-default = []
+cuda = ["whisper-rs/cuda"]
+vulkan = ["whisper-rs/vulkan"]
+hipblas = ["whisper-rs/hipblas"]
+openblas = ["whisper-rs/openblas"]
+openmp = ["whisper-rs/openmp"]
+
+# Issue #56 spike only: compiles audio::transcription::backend_probe, which
+# probes whisper-helper-{cuda,vulkan,cpu} sidecar binaries next to the exe.
+# Off by default — not wired into the live recording path or invoke_handler.
+# See docs/transcription-backends.md.
+backend_probe = ["dep:whisper-protocol"]
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+anyhow = "1.0"
+# Wire protocol shared with the llama-helper sidecar.
+llama-protocol = { path = "../llama-protocol" }
+# Wire protocol shared with the whisper-helper sidecar spike (issue #56).
+# Optional: only pulled in by the `backend_probe` feature, which is off by
+# default.
+whisper-protocol = { path = "../whisper-protocol", optional = true }
+# Encoding per-segment audio clips for playback in the webview.
+base64 = "0.22"
+# Native audio output for transcript-segment clip playback. The bundled
+# WebKit/GStreamer stack ships no plugins in the AppImage, so decoding/playing
+# in the webview fails ("element appsink not found"); we play clips natively
+# instead. `default-features = false` keeps only cpal output (no decoders).
+rodio = { version = "0.19", default-features = false }
+# Acoustic echo cancellation (WebRTC AEC3) for the microphone: subtracts the
+# system audio the mic picks up from the speakers. `bundled` builds the
+# library from the crate's vendored sources (needs `meson` + `ninja` at build
+# time) instead of requiring the system `webrtc-audio-processing-2` package,
+# which Ubuntu/Debian/Fedora do not ship in a compatible version.
+webrtc-audio-processing = { version = "2.1", features = ["bundled"] }
+once_cell = "1.17.1"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Dates
+chrono = { version = "0.4.31", features = ["serde"] }
+
+# Log
+log = "0.4"
+tracing = "0.1.40"
+which = "6.0.1"
+
+# Bytes
+bytemuck = "1.16.1"
+
+# EBU R128 loudness normalization (professional broadcast standard)
+ebur128 = "0.1"
+
+# Speech recognition and async utilities
+# NOTE: whisper-rs is declared in the Linux target-specific section below
+futures-util = "0.3"
+
+# General error handling helper
+thiserror = "2.0.16"
+
+# Speaker diarization + VAD via sherpa-onnx. Provides:
+# - SpeakerEmbeddingExtractor (3D-Speaker CAM++) for "who's speaking" attribution
+# - VoiceActivityDetector (silero-vad ONNX) for speech segmentation
+#
+# Linked with the `shared` feature (instead of the default `static`) because
+# the static linkage caused `free(): invalid pointer` aborts on Linux when
+# sherpa's bundled onnxruntime tried to load its first model alongside
+# whisper-rs's whisper.cpp — two static C++ runtimes in one binary collided
+# on glibc allocator state. Shared linkage keeps onnxruntime in a separate
+# .so loaded at runtime, which has different symbol-visibility and TLS
+# semantics. Prebuilt .so is fetched at build time, dropped next to the
+# binary, and resolved via rpath / LD_LIBRARY_PATH.
+sherpa-onnx = { version = "1.13.0", default-features = false, features = ["shared"] }
+
+# Async
+tokio = { version = "1.32.0", features = ["full", "tracing"] }
+tokio-util = "0.7"  # Utilities for tokio including CancellationToken
+
+reqwest = { version = "0.11", features = ["multipart", "json", "stream"] }
+
+# Directories
+dirs = "5.0.1"
+
+# Additional dependencies for notification system
+url = "2.5.0"
+
+# System monitoring for resource management
+sysinfo = "0.32"
+
+regex = "1.11.0"
+
+symphonia = { version = "0.5.4", features = ["aac", "isomp4", "mp3", "flac", "ogg", "vorbis", "pcm", "wav", "opt-simd"] }
+rayon = "1.10"
+rubato = "0.15.0"
+tempfile = "3.3.0"
+
+ffmpeg-sidecar = { git = "https://github.com/nathanbabcock/ffmpeg-sidecar", branch = "main" }
+
+sqlx = { version = "0.8", features = [ "runtime-tokio", "sqlite", "chrono"] }
+
+# Calendar / ICS parsing
+ical = "0.11"
+rrule = "0.13"
+chrono-tz = "0.10"
+
+# Linux-specific dependencies
+# Default: CPU-only build (no BLAS)
+# Users can enable features manually:
+#   --features cuda     (NVIDIA GPUs)
+#   --features vulkan   (AMD/Intel GPUs)
+#   --features hipblas  (AMD ROCm)
+#   --features openblas (OpenBLAS optimization, requires BLAS_INCLUDE_DIRS)
+[target.'cfg(target_os = "linux")'.dependencies]
+whisper-rs = { version = "0.16.0", features = ["raw-api", "log_backend"] }
+pipewire = { version = "0.10", features = ["v0_3_44"] }
+
+[dev-dependencies]
+criterion = { version = "0.5.1", features = ["async_tokio"] }

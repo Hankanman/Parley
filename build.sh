@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Parley (meetily-gpui) — all-in-one build script (Linux focus)
+# Parley (parley-gpui) — all-in-one build script (Linux focus)
 #
 # Usage:
 #   ./build.sh              # default: cuda on Linux with NVIDIA, cpu otherwise
@@ -17,10 +17,10 @@
 #
 # Produces:
 #   target/gpui-dist/               self-contained staged dir (binary + libs)
-#   Parley-<ver>-x86_64.AppImage    repo root (version from meetily-gpui/Cargo.toml)
-#   target/release/meetily-mcp      MCP server, left for the user to register
+#   Parley-<ver>-x86_64.AppImage    repo root (version from parley-gpui/Cargo.toml)
+#   target/release/parley-mcp      MCP server, left for the user to register
 #                                    (not bundled into the AppImage — see
-#                                    meetily-mcp/README.md)
+#                                    parley-mcp/README.md)
 
 set -euo pipefail
 
@@ -69,7 +69,7 @@ setup_linux_build_env() {
             export NO_STRIP="${NO_STRIP:-1}"
 
             # sherpa-onnx-sys drops `libsherpa-onnx-c-api.so` into target/release/ but
-            # leaves the meetily binary without a RUNPATH, so linuxdeploy fails with
+            # leaves the parley binary without a RUNPATH, so linuxdeploy fails with
             # `Could not find dependency: libsherpa-onnx-c-api.so`. Point its
             # dependency-resolver at the cargo output dir so it can bundle the lib.
             export LD_LIBRARY_PATH="$ROOT/target/release${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -161,34 +161,34 @@ case "$MODE" in
     cpu)    ;;
 esac
 
-echo "==> Building meetily-gpui (${MODE}, release)"
-cargo build --release -p meetily-gpui "${GPUI_FEATURES[@]}"
+echo "==> Building parley-gpui (${MODE}, release)"
+cargo build --release -p parley-gpui "${GPUI_FEATURES[@]}"
 
-GPUI_BIN="$ROOT/target/release/meetily-gpui"
+GPUI_BIN="$ROOT/target/release/parley"
 if [[ ! -x "$GPUI_BIN" ]]; then
     echo "error: $GPUI_BIN not found after build" >&2
     exit 1
 fi
 
-# ----- meetily-mcp -----
+# ----- parley-mcp -----
 # Not bundled into the app: it's a standalone MCP server that an external
 # client (Claude Desktop / Claude Code) spawns by absolute path, and it talks
 # to the SQLite database directly rather than to the app. So it's built and
 # left in target/release for the user to register. It has no GPU backend,
 # hence no feature flags.
-echo "==> Building meetily-mcp (MCP server)"
-cargo build --release -p meetily-mcp
-MCP_BIN="$ROOT/target/release/meetily-mcp"
+echo "==> Building parley-mcp (MCP server)"
+cargo build --release -p parley-mcp
+MCP_BIN="$ROOT/target/release/parley-mcp"
 
 # ----- stage a self-contained dist dir -----
 DIST_DIR="$ROOT/target/gpui-dist"
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
 
-cp "$GPUI_BIN" "$DIST_DIR/meetily-gpui"
+cp "$GPUI_BIN" "$DIST_DIR/parley"
 
 # Dynamically-linked sherpa-onnx / onnxruntime libs, dropped into
-# target/release/ by sherpa-onnx-sys's build script (see meetily-gpui's
+# target/release/ by sherpa-onnx-sys's build script (see parley-gpui's
 # $ORIGIN rpath in build.rs, which expects them next to the binary).
 shopt -s nullglob
 SO_FILES=("$ROOT"/target/release/*.so*)
@@ -199,7 +199,7 @@ if (( ${#SO_FILES[@]} == 0 )); then
 fi
 cp -P "${SO_FILES[@]}" "$DIST_DIR/"
 
-# llama-helper sidecar: meetily-core's resolver fuzzy-matches any file
+# llama-helper sidecar: parley-core's resolver fuzzy-matches any file
 # starting with "llama-helper" next to the executable, so the plain name
 # works both here and once packaged into the AppImage.
 cp "$ROOT/target/release/llama-helper" "$DIST_DIR/llama-helper"
@@ -208,13 +208,13 @@ echo "==> Staged: $DIST_DIR"
 du -sh "$DIST_DIR"/* | sed 's/^/    /'
 
 # ----- package as an AppImage -----
-GPUI_VERSION=$(awk -F'"' '/^version/ {print $2; exit}' "$ROOT/meetily-gpui/Cargo.toml")
+GPUI_VERSION=$(awk -F'"' '/^version/ {print $2; exit}' "$ROOT/parley-gpui/Cargo.toml")
 echo "==> Packaging AppImage (version $GPUI_VERSION)"
-APPIMAGE=$("$ROOT/meetily-gpui/packaging/linux/build-appimage.sh" "$DIST_DIR" "$GPUI_VERSION" "$ROOT")
+APPIMAGE=$("$ROOT/parley-gpui/packaging/linux/build-appimage.sh" "$DIST_DIR" "$GPUI_VERSION" "$ROOT")
 
 echo
 echo "==> Build succeeded"
 echo "    Dist dir: $DIST_DIR"
 echo "    AppImage: $APPIMAGE ($(du -h "$APPIMAGE" | cut -f1))"
 echo "    MCP server: $MCP_BIN ($(du -h "$MCP_BIN" | cut -f1))"
-echo "                register it with your MCP client — see meetily-mcp/README.md"
+echo "                register it with your MCP client — see parley-mcp/README.md"
