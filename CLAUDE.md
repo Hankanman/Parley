@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Parley** (formerly Meetily-Local, a fork of Zackriya-Solutions/meetily; the GitHub repo is still `Hankanman/Meetily-Local`) is a privacy-first AI meeting assistant that captures, transcribes, and summarizes meetings entirely on local infrastructure. It's a single self-contained GPUI desktop application — no separate backend server, no webview, no JavaScript.
+**Parley** (formerly Meetily-Local, a fork of Zackriya-Solutions/meetily; GitHub repo `Hankanman/Parley`) is a privacy-first AI meeting assistant that captures, transcribes, and summarizes meetings entirely on local infrastructure. It's a single self-contained GPUI desktop application — no separate backend server, no webview, no JavaScript.
 
 ### Key Technology Stack
 - **Desktop shell**: [GPUI](https://www.gpui.rs/) (Rust, the UI framework behind Zed) via `gpui-kit`/`gpui-component`
@@ -68,7 +68,7 @@ The app has no HTTP listener and no IPC boundary — the UI (`parley-gpui`) call
   diarization. **It must never depend on `tauri`** (there is no Tauri
   dependency anywhere in the workspace anymore) — check with
   `cargo tree -p parley-core | grep -i tauri` (must be empty).
-- **`parley-gpui/`** (bin `parley-gpui`) — the GPUI desktop shell: links
+- **`parley-gpui/`** (bin `parley`) — the GPUI desktop shell: links
   `parley-core` directly (no webview, no IPC). See `parley-gpui/src/`:
   - `main.rs` — entry point, window setup, shutdown coordination
   - `app_state.rs` — `AppServices`, the process-wide global (`cx.global::<AppServices>()`)

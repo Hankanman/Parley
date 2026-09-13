@@ -236,4 +236,4 @@ cargo install sccache
 
 ---
 
-**Need help?** Open an issue on [Hankanman/Meetily-Local](https://github.com/Hankanman/Meetily-Local/issues) with your GPU type, distro, and the output from `./build.sh`.
+**Need help?** Open an issue on [Hankanman/Parley](https://github.com/Hankanman/Parley/issues) with your GPU type, distro, and the output from `./build.sh`.

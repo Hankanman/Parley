@@ -1,9 +1,7 @@
 //! Tauri-free core of the Parley desktop app: audio
 //! capture/mixing/VAD, transcription, speaker diarization, summary
-//! generation, and SQLite persistence. Depends on no `tauri` /
-//! `tauri-plugin-*` crate — see the shell crate (`frontend/src-tauri`,
-//! package `meetily`, lib `app_lib`) for the Tauri command/event wiring on
-//! top of this.
+//! generation, and SQLite persistence. Depends on no UI framework;
+//! the GPUI desktop shell (`parley-gpui`) sits on top of this.
 
 // Performance optimization: Conditional logging macros for hot paths
 #[cfg(debug_assertions)]

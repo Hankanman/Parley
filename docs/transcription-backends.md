@@ -346,7 +346,7 @@ distribution-size tradeoff before committing.
 - `whisper-protocol`, `whisper-core`, `whisper-helper`: `cargo build
   --release -p whisper-helper` and `cargo test -p whisper-core -p
   whisper-protocol --release` both pass with **zero errors and zero
-  warnings** (`CARGO_TARGET_DIR=/home/user/Meetily-Local/target`,
+  warnings** (`CARGO_TARGET_DIR=/home/user/Parley/target`,
   `SHERPA_ONNX_ARCHIVE_DIR` set per the task instructions).
 - `backend_probe.rs`: could not run `cargo check` on the full
   `frontend/src-tauri` crate in this container — it fails **before**

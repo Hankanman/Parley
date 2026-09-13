@@ -2,9 +2,9 @@
     <h1>
         Parley — Privacy-First AI Meeting Assistant
     </h1>
-    <a href="https://github.com/Hankanman/Meetily-Local/releases"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License"></a>
-    <a href="https://github.com/Hankanman/Meetily-Local/releases"><img src="https://img.shields.io/badge/Supported_OS-Linux-white" alt="Supported OS"></a>
-    <a href="https://github.com/Hankanman/Meetily-Local/releases"><img alt="GitHub Tag" src="https://img.shields.io/github/v/tag/Hankanman/Meetily-Local?include_prereleases&color=yellow"></a>
+    <a href="https://github.com/Hankanman/Parley/releases"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License"></a>
+    <a href="https://github.com/Hankanman/Parley/releases"><img src="https://img.shields.io/badge/Supported_OS-Linux-white" alt="Supported OS"></a>
+    <a href="https://github.com/Hankanman/Parley/releases"><img alt="GitHub Tag" src="https://img.shields.io/github/v/tag/Hankanman/Parley?include_prereleases&color=yellow"></a>
     <br>
     <h3>Open Source • Privacy-First • Independent Fork</h3>
 
@@ -59,13 +59,13 @@ While many meeting transcription tools exist, this one stands out by:
 
 ## Installation
 
-Pre-built binaries are published to this fork's [Releases](https://github.com/Hankanman/Meetily-Local/releases) page when tagged.
+Pre-built binaries are published to this fork's [Releases](https://github.com/Hankanman/Parley/releases) page when tagged.
 
 ### 🐧 Linux
 
 The `.AppImage` works on most distros (Fedora 43+, Ubuntu 22.04+, Arch, etc.):
 
-Download `Parley-<version>-x86_64.AppImage` from the [latest release](https://github.com/Hankanman/Meetily-Local/releases/latest), then:
+Download `Parley-<version>-x86_64.AppImage` from the [latest release](https://github.com/Hankanman/Parley/releases/latest), then:
 
 ```bash
 chmod +x Parley-*-x86_64.AppImage
@@ -79,8 +79,8 @@ The `.deb` target is intentionally not shipped — it doesn't bundle `libsherpa-
 Clone, then run the all-in-one build script:
 
 ```bash
-git clone https://github.com/Hankanman/Meetily-Local.git
-cd Meetily-Local
+git clone https://github.com/Hankanman/Parley.git
+cd Parley
 ./build.sh           # auto: CUDA on Linux with NVIDIA, CPU otherwise
 ./build.sh cuda      # NVIDIA explicit
 ./build.sh vulkan    # AMD/Intel
@@ -178,4 +178,4 @@ This fork builds on substantial prior work:
 
 ## Star history
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Hankanman/Meetily-Local&type=Date)](https://star-history.com/#Hankanman/Meetily-Local&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Hankanman/Parley&type=Date)](https://star-history.com/#Hankanman/Parley&Date)

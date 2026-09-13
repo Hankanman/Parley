@@ -17,7 +17,7 @@ use gpui_kit::*;
 use super::state::{BetaFeatures, SettingsCache};
 use super::SettingsView;
 
-const REPO_URL: &str = "https://github.com/Hankanman/Meetily-Local";
+const REPO_URL: &str = "https://github.com/Hankanman/Parley";
 
 pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> SettingPage {
     let _ = cx;

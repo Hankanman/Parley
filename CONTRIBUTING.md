@@ -3,7 +3,7 @@
 Thank you for your interest in contributing! This document provides guidelines and instructions for contributing to this project.
 
 Parley is an independent fork — see [README.md](README.md#about-this-fork). PRs and issues go to
-[Hankanman/Meetily-Local](https://github.com/Hankanman/Meetily-Local), not the upstream Zackriya-Solutions project.
+[Hankanman/Parley](https://github.com/Hankanman/Parley), not the upstream Zackriya-Solutions project.
 
 ## Development Workflow
 
@@ -18,7 +18,7 @@ Parley is an independent fork — see [README.md](README.md#about-this-fork). PR
 1. Fork the repository
 2. Clone your fork:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/Meetily-Local.git
+   git clone https://github.com/YOUR_USERNAME/Parley.git
    ```
 3. Create a new branch from `main`:
    ```bash

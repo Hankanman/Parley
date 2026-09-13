@@ -29,7 +29,7 @@ pub struct OccurrenceForUpsert {
 pub async fn fetch_and_expand(url: &str) -> Result<Vec<OccurrenceForUpsert>> {
     let client = reqwest::Client::builder()
         .timeout(StdDuration::from_secs(30))
-        .user_agent("Parley/0.4 (+https://github.com/Hankanman/Meetily-Local)")
+        .user_agent("Parley/0.4 (+https://github.com/Hankanman/Parley)")
         .build()
         .context("building reqwest client")?;
 

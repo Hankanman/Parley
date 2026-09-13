@@ -345,7 +345,7 @@ async fn reminder_tick(pool: sqlx::SqlitePool, already_notified: &mut HashSet<St
 // Update check
 // ============================================================================
 
-const RELEASES_API: &str = "https://api.github.com/repos/Hankanman/Meetily-Local/releases/latest";
+const RELEASES_API: &str = "https://api.github.com/repos/Hankanman/Parley/releases/latest";
 
 #[derive(Deserialize)]
 struct ReleaseResponse {

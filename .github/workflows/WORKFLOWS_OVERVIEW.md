@@ -161,8 +161,8 @@ Standalone (don't use build.yml):
 
 None of the current workflows depend on repository secrets beyond the
 default `GITHUB_TOKEN` (for release creation/upload). The old Tauri updater
-signing keys (`TAURI_SIGNING_PRIVATE_KEY*`), license-validation key
-(`MEETILY_RSA_PUBLIC_KEY`), and Supabase secrets were removed along with the
+signing keys (`TAURI_SIGNING_PRIVATE_KEY*`), license-validation key,
+and Supabase secrets were removed along with the
 Tauri shell.
 
 ---
