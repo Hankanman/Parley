@@ -118,6 +118,21 @@ impl SummaryProcessesRepository {
         Ok(())
     }
 
+    /// A status update that matches no row means the run never registered a
+    /// `summary_processes` row (see [`Self::create_or_reset_process`]) and the
+    /// result would be silently dropped — surface that as an error instead.
+    fn ensure_updated(
+        result: &sqlx::sqlite::SqliteQueryResult,
+        meeting_id: &str,
+    ) -> Result<(), sqlx::Error> {
+        if result.rows_affected() == 0 {
+            return Err(sqlx::Error::Protocol(format!(
+                "no summary_processes row for meeting {meeting_id}; call create_or_reset_process first"
+            )));
+        }
+        Ok(())
+    }
+
     pub async fn update_process_completed(
         pool: &SqlitePool,
         meeting_id: &str,
@@ -129,7 +144,7 @@ impl SummaryProcessesRepository {
         let result_str = serde_json::to_string(&result)
             .map_err(|e| sqlx::Error::Protocol(format!("Failed to serialize result: {}", e)))?;
 
-        sqlx::query(
+        let result_of_update = sqlx::query(
             r#"
             UPDATE summary_processes
             SET status = 'completed', result = ?, updated_at = ?, end_time = ?, chunk_count = ?, processing_time = ?, error = NULL, result_backup = NULL, result_backup_timestamp = NULL
@@ -144,6 +159,7 @@ impl SummaryProcessesRepository {
         .bind(meeting_id)
         .execute(pool)
         .await?;
+        Self::ensure_updated(&result_of_update, meeting_id)?;
         log_info!(
             "Summary completed and backup cleared for meeting_id: {}",
             meeting_id
@@ -159,7 +175,7 @@ impl SummaryProcessesRepository {
         let now = Utc::now();
 
         // Restore from backup if it exists, otherwise keep current result
-        sqlx::query(
+        let result_of_update = sqlx::query(
             r#"
             UPDATE summary_processes
             SET
@@ -179,6 +195,7 @@ impl SummaryProcessesRepository {
         .bind(meeting_id)
         .execute(pool)
         .await?;
+        Self::ensure_updated(&result_of_update, meeting_id)?;
         log_info!(
             "Summary generation failed and backup restored for meeting_id: {}",
             meeting_id
@@ -193,7 +210,7 @@ impl SummaryProcessesRepository {
         let now = Utc::now();
 
         // Restore from backup if it exists, otherwise keep current result
-        sqlx::query(
+        let result_of_update = sqlx::query(
             r#"
             UPDATE summary_processes
             SET
@@ -212,10 +229,89 @@ impl SummaryProcessesRepository {
         .bind(meeting_id)
         .execute(pool)
         .await?;
+        Self::ensure_updated(&result_of_update, meeting_id)?;
         log_info!(
             "Marked summary process as cancelled and restored backup for meeting_id: {}",
             meeting_id
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::repositories::meeting::MeetingsRepository;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn test_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite pool");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("run migrations");
+        pool
+    }
+
+    /// A meeting with no prior `summary_processes` row: registering the run
+    /// first makes the completed summary persist.
+    #[tokio::test]
+    async fn summary_for_meeting_without_prior_row_is_persisted() {
+        let pool = test_pool().await;
+        MeetingsRepository::create_recording_meeting(&pool, "m1", "Standup", Some("/tmp/m1"))
+            .await
+            .unwrap();
+        assert!(SummaryProcessesRepository::get_summary_data_for_meeting(&pool, "m1")
+            .await
+            .unwrap()
+            .is_none());
+
+        SummaryProcessesRepository::create_or_reset_process(&pool, "m1")
+            .await
+            .unwrap();
+        SummaryProcessesRepository::update_process_completed(
+            &pool,
+            "m1",
+            serde_json::json!({ "markdown": "# Hello" }),
+            1,
+            0.5,
+        )
+        .await
+        .unwrap();
+
+        let row = SummaryProcessesRepository::get_summary_data_for_meeting(&pool, "m1")
+            .await
+            .unwrap()
+            .expect("row persisted");
+        assert_eq!(row.status, "completed");
+        assert!(row.result.unwrap().contains("# Hello"));
+    }
+
+    /// Updating without a registered row is an error, never a silent no-op.
+    #[tokio::test]
+    async fn updates_without_a_row_error_instead_of_noop() {
+        let pool = test_pool().await;
+        MeetingsRepository::create_recording_meeting(&pool, "m1", "Standup", Some("/tmp/m1"))
+            .await
+            .unwrap();
+        let done = SummaryProcessesRepository::update_process_completed(
+            &pool,
+            "m1",
+            serde_json::json!({ "markdown": "x" }),
+            1,
+            0.1,
+        )
+        .await;
+        assert!(done.is_err());
+        assert!(SummaryProcessesRepository::update_process_failed(&pool, "m1", "boom")
+            .await
+            .is_err());
+        assert!(SummaryProcessesRepository::update_process_cancelled(&pool, "m1")
+            .await
+            .is_err());
     }
 }

@@ -105,6 +105,17 @@ impl SummaryService {
         let (registration_id, cancellation_token) =
             Self::register_cancellation_token(&meeting_id);
 
+        // Register the run in `summary_processes` first: the completed /
+        // failed / cancelled updates below only UPDATE an existing row, so
+        // without this a summary for a meeting with no prior row is lost.
+        if let Err(e) = SummaryProcessesRepository::create_or_reset_process(&pool, &meeting_id).await
+        {
+            error!(
+                "Failed to register summary process for {}: {}",
+                meeting_id, e
+            );
+        }
+
         // Resolve provider, credentials and endpoints from settings — the
         // same resolution every other LLM caller uses.
         let app_data_dir = crate::paths::app_data_dir().ok();

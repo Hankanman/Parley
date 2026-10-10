@@ -706,10 +706,19 @@ pub fn spawn_auto_refine(
     meeting_folder_path: String,
 ) {
     tokio::spawn(async move {
-        if let Err(e) = run_auto_refine(sink, pool, meeting_id.clone(), meeting_folder_path).await
+        if let Err(e) = run_auto_refine(
+            sink.clone(),
+            pool.clone(),
+            meeting_id.clone(),
+            meeting_folder_path,
+        )
+        .await
         {
             info!("Auto-refine not performed for meeting {}: {}", meeting_id, e);
         }
+        // Summarise last, whether refine ran, was skipped or failed, so the
+        // summary sees the refined transcript when there is one.
+        crate::summary::auto_summary::maybe_auto_summarize(sink, pool, meeting_id).await;
     });
 }
 

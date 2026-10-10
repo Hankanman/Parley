@@ -635,12 +635,16 @@ impl RecordingSaver {
     ///
     /// # Arguments
     /// * `sink` - event sink for emitting `recording-saved`
-    /// * `recording_duration` - Actual recording duration in seconds (from RecordingState)
+    /// * `recording_duration` - Recording duration in seconds from RecordingState, if still available
+    ///
+    /// Returns the final audio path together with the duration actually
+    /// written to metadata.json (the state value, else the last transcript
+    /// segment's end time) so callers can store the same figure in the DB.
     pub async fn stop_and_save(
         &mut self,
         sink: &dyn crate::events::EventSink,
         recording_duration: Option<f64>,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Option<(String, Option<f64>)>, String> {
         info!("Stopping recording saver");
 
         // Mark accumulation as stopping (informational only - the accumulation
@@ -741,20 +745,21 @@ impl RecordingSaver {
             return Err("No incremental saver initialized".to_string());
         };
 
+        // Falls back to the last transcript segment when the state no longer
+        // has a duration (it is already cleared by the time we get here).
+        let final_duration = recording_duration.or_else(|| {
+            self.transcript_segments
+                .lock()
+                .ok()
+                .and_then(|segments| segments.last().and_then(|seg| seg.audio_end_time))
+        });
+
         // Update metadata to completed status with actual recording duration
         if let (Some(folder), Some(mut metadata)) = (&self.meeting_folder, self.metadata.clone()) {
             metadata.status = Some("completed".to_string());
             metadata.completed_at = Some(chrono::Utc::now().to_rfc3339());
 
-            // Use actual recording duration from RecordingState (more accurate than transcript segments)
-            // Falls back to last transcript segment if duration not provided
-            metadata.duration_seconds = recording_duration.or_else(|| {
-                if let Ok(segments) = self.transcript_segments.lock() {
-                    segments.last().and_then(|seg| seg.audio_end_time)
-                } else {
-                    None
-                }
-            });
+            metadata.duration_seconds = final_duration;
 
             if let Err(e) = self.write_metadata(folder, &metadata) {
                 error!("❌ Failed to update metadata to completed: {}", e);
@@ -786,7 +791,10 @@ impl RecordingSaver {
             segments.clear();
         }
 
-        Ok(Some(final_audio_path.to_string_lossy().to_string()))
+        Ok(Some((
+            final_audio_path.to_string_lossy().to_string(),
+            final_duration,
+        )))
     }
 
     /// Get the meeting folder path (for passing to backend)

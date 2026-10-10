@@ -213,9 +213,6 @@ impl LlmConfig {
     /// likely to hit there — chunking a long transcript is recoverable,
     /// overflowing the model's window is a hard API error.
     pub async fn token_threshold(&self) -> usize {
-        /// Reserved for the prompt scaffolding around the transcript.
-        const PROMPT_OVERHEAD: usize = 300;
-
         match self.provider {
             LLMProvider::Ollama => {
                 match crate::ollama::metadata::METADATA_CACHE
@@ -223,7 +220,7 @@ impl LlmConfig {
                     .await
                 {
                     Ok(metadata) => {
-                        let optimal = metadata.context_size.saturating_sub(PROMPT_OVERHEAD);
+                        let optimal = single_pass_threshold(metadata.context_size as usize);
                         info!(
                             "✓ Using dynamic context for {}: {} tokens (chunk size: {})",
                             self.model, metadata.context_size, optimal
@@ -243,11 +240,11 @@ impl LlmConfig {
                 use crate::summary::summary_engine::models;
                 match models::get_model_by_name(&self.model) {
                     Some(model_def) => {
-                        (model_def.context_size as usize).saturating_sub(PROMPT_OVERHEAD)
+                        single_pass_threshold(model_def.context_size as usize)
                     }
                     None => {
                         warn!("Unknown built-in model {}, using default 2048", self.model);
-                        2048 - PROMPT_OVERHEAD
+                        single_pass_threshold(2048)
                     }
                 }
             }
@@ -265,6 +262,25 @@ impl LlmConfig {
             LLMProvider::CustomOpenAI => 32_000,
         }
     }
+}
+
+/// Reserved for the prompt scaffolding around the transcript.
+const PROMPT_OVERHEAD: usize = 300;
+
+/// Headroom kept free on top of prompt and output (mirrors the built-in
+/// engine's `SAFETY_BUFFER_TOKENS` in `pick_context_size`).
+const CONTEXT_SAFETY_BUFFER: usize = 1024;
+
+/// Largest transcript that fits a model context window in one call: the
+/// window minus prompt scaffolding, the generated output (which shares the
+/// window) and a safety buffer. Anything longer must go through map-reduce,
+/// otherwise generation runs out of context mid-summary.
+fn single_pass_threshold(context_size: usize) -> usize {
+    use crate::summary::summary_engine::models::DEFAULT_MAX_TOKENS;
+    context_size
+        .saturating_sub(PROMPT_OVERHEAD)
+        .saturating_sub(DEFAULT_MAX_TOKENS as usize)
+        .saturating_sub(CONTEXT_SAFETY_BUFFER)
 }
 
 /// Outcome classification for one HTTP attempt.
@@ -570,5 +586,30 @@ fn provider_name(provider: &LLMProvider) -> &str {
         LLMProvider::BuiltInAI => "Built-in AI",
         LLMProvider::OpenRouter => "OpenRouter",
         LLMProvider::CustomOpenAI => "Custom OpenAI",
+    }
+}
+
+#[cfg(test)]
+mod threshold_tests {
+    use super::*;
+
+    #[test]
+    fn threshold_reserves_output_and_safety_buffer() {
+        // 32768 - 300 (prompt) - 4096 (output) - 1024 (safety)
+        assert_eq!(single_pass_threshold(32768), 27348);
+        assert_eq!(single_pass_threshold(65536), 60116);
+    }
+
+    #[test]
+    fn thirty_k_transcript_is_not_single_pass_at_32k_ctx() {
+        let threshold = single_pass_threshold(32768);
+        // Processor goes single-pass only when total_tokens < threshold.
+        assert!(!(30_000 < threshold));
+        assert!(30_000 < single_pass_threshold(65536));
+    }
+
+    #[test]
+    fn tiny_context_does_not_underflow() {
+        assert_eq!(single_pass_threshold(2048), 0);
     }
 }

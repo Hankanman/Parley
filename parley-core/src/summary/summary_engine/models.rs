@@ -75,7 +75,7 @@ pub fn get_available_models() -> Vec<ModelDef> {
                 "https://meetily.towardsgeneralintelligence.com/models/gemma-3-1b-it-Q8_0.gguf"
                     .to_string(),
             size_mb: 1019,
-            context_size: 32768,
+            context_size: 32768, // Gemma 3 1B's trained maximum (4B and up go to 128k)
             layer_count: 26,
             sampling: SamplingParams {
                 temperature: 1.0,
@@ -96,7 +96,7 @@ pub fn get_available_models() -> Vec<ModelDef> {
                 "https://meetily.towardsgeneralintelligence.com/models/gemma-3-4b-it-Q4_K_M.gguf"
                     .to_string(),
             size_mb: 2374,
-            context_size: 32768, // Supports 128k, but 32k is good for local·
+            context_size: 65536, // trained to 128k; 64k fits 60-90 min meetings in one pass
             layer_count: 35,
             sampling: SamplingParams {
                 temperature: 1.0,
