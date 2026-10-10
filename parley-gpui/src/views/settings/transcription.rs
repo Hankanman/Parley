@@ -69,6 +69,7 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
                 .description("Used for local, on-device transcription. Only downloaded models can be selected."),
             ),
         )
+        .group(super::glossary::group(&view, cx))
         .group(SettingGroup::new().title("Model catalog").items(catalog_items))
 }
 

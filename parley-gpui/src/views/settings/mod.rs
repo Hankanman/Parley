@@ -9,6 +9,7 @@
 mod about;
 mod appearance;
 mod calendar;
+mod glossary;
 mod integrations;
 mod model_utils;
 mod notifications;
@@ -34,6 +35,7 @@ impl SettingsView {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let view = cx.entity();
         state::load(view.clone(), cx);
+        glossary::load(view.clone(), cx);
 
         // Model download progress: mirrored into `SettingsCache` so the
         // Transcription page's model rows can render a live percentage.
