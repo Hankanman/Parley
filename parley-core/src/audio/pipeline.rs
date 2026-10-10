@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use super::audio_processing::{audio_to_mono, HighPassFilter, LoudnessNormalizer};
+use super::audio_processing::audio_to_mono;
 use super::devices::AudioDevice;
 use super::recording_state::{AudioChunk, DeviceType, RecordingState};
 use super::vad::ContinuousVadProcessor;
@@ -71,8 +71,8 @@ impl AudioMixerRingBuffer {
         // system audio as two independently-scheduled streams, so they can
         // drift apart by tens of milliseconds under scheduling pressure
         // before arriving here via channel. Accounts for that jitter plus
-        // the processing delay of the mic enhancement chain (HPF + loudness
-        // normalization, run AFTER AEC — see `AudioPipeline::run`).
+        // the (one-frame) latency of the mic voice chain, which runs on
+        // the aligned window — see `AudioPipeline::process_window`.
         let max_buffer_ms = 4800.0;
         let max_buffer_size = (sample_rate as f32 * max_buffer_ms / 1000.0) as usize;
 
@@ -502,18 +502,12 @@ pub struct AudioPipeline {
     processed_chunks: u64,
     // Aligns the async mic + system streams into equal-length windows.
     ring_buffer: AudioMixerRingBuffer,
-    // Acoustic echo canceller: removes the system audio the mic picks up from
-    // the speakers, using the aligned system window as the far-end reference.
-    // `None` when AEC couldn't initialize — recording continues without it.
-    echo_canceller: Option<super::aec::MicEchoCanceller>,
-    // Mic enhancement chain (issue #21): runs AFTER `echo_canceller.cancel`,
-    // never before it. AEC3 assumes a linear, time-invariant near-end path;
-    // running the high-pass filter and loudness normalizer on the mic
-    // upstream of AEC (as the old per-stream `AudioCapture` did) fed AEC a
-    // time-varying, gain-boosted, clipped signal and broke its convergence.
-    // Mic-only — system audio is left raw.
-    mic_high_pass: Option<HighPassFilter>,
-    mic_normalizer: Option<LoudnessNormalizer>,
+    // Mic speakerphone voice chain (WebRTC APM: HPF + AEC3 + noise
+    // suppression + AGC2, see `mic_processor`). Removes the system audio the
+    // mic picks up from the speakers, using the aligned system window as the
+    // far-end reference. Mic-only — system audio is left raw. `None` when the
+    // APM couldn't initialize — recording continues unprocessed.
+    mic_processor: Option<super::mic_processor::MicProcessor>,
     // Sender for the interleaved stereo recording chunks (mic L, system R).
     recording_sender_for_mixed: Option<mpsc::UnboundedSender<AudioChunk>>,
     // Streaming partials: snapshots of in-progress utterances sent to the
@@ -648,26 +642,9 @@ impl AudioPipeline {
         // permanently silent rather than something to wait on.
         let mut ring_buffer = AudioMixerRingBuffer::new(sample_rate);
         ring_buffer.set_expected_sources(mic_present, system_present);
-        // Echo canceller for the mic (uses the system window as reference).
-        let echo_canceller = super::aec::MicEchoCanceller::new(sample_rate);
-
-        // Mic enhancement chain (issue #21) — see the field docs on
-        // `mic_high_pass` / `mic_normalizer` for why this now lives here,
-        // downstream of AEC, instead of in the per-stream `AudioCapture`.
-        let mic_high_pass = Some(HighPassFilter::new(sample_rate, 80.0));
-        let mic_normalizer = match LoudnessNormalizer::new(1, sample_rate) {
-            Ok(normalizer) => {
-                info!("✅ EBU R128 normalizer initialized for microphone (target: -23 LUFS, capped +18/-12 dB)");
-                Some(normalizer)
-            }
-            Err(e) => {
-                warn!(
-                    "⚠️ Failed to create mic loudness normalizer: {}, normalization disabled",
-                    e
-                );
-                None
-            }
-        };
+        // Speakerphone voice chain for the mic (uses the system window as
+        // the AEC far-end reference).
+        let mic_processor = super::mic_processor::MicProcessor::new(sample_rate);
 
         // Note: target_chunk_duration_ms is ignored - VAD controls segmentation now
         let _ = target_chunk_duration_ms;
@@ -684,9 +661,7 @@ impl AudioPipeline {
             processed_chunks: 0,
             // Ring buffer for aligning mic + system into interleaved windows
             ring_buffer,
-            echo_canceller,
-            mic_high_pass,
-            mic_normalizer,
+            mic_processor,
             recording_sender_for_mixed: None, // Will be set by manager
             partial_sender: None,             // Will be set by manager if enabled
             mic_partial: PartialEmitState::default(),
@@ -755,8 +730,8 @@ impl AudioPipeline {
                     }
 
                     // STEP 1: Add raw audio to ring buffer for mixing
-                    // Microphone audio is already normalized at capture level (AudioCapture)
-                    // System audio remains raw
+                    // Both sources arrive raw; mic processing happens per window below
+                    // (`process_window`), system audio stays raw
                     self.ring_buffer.add_samples(chunk.device_type, chunk.data);
 
                     // STEP 2: Process audio in fixed windows when streams have sufficient data.
@@ -787,34 +762,21 @@ impl AudioPipeline {
         Ok(())
     }
 
-    /// Run one aligned mic/system window through AEC, mic enhancement,
+    /// Run one aligned mic/system window through the mic voice chain,
     /// source-tagged VAD, and the stereo recording split. Shared by the main
     /// receive loop and `flush_remaining_audio` (issue #22/#41), so the
     /// zero-padded tail window emitted at shutdown gets identical treatment
     /// to every window processed during recording.
     fn process_window(&mut self, mut mic_window: Vec<f32>, sys_window: Vec<f32>, timestamp: f64) {
-        // STEP 2.5: Acoustic echo cancellation. Subtract the
-        // system audio (played through the user's speakers)
-        // from the mic, using the aligned system window as
-        // the far-end reference. Runs before VAD and the
-        // recording split, so the cleaned mic flows to both
-        // transcription and the mic recording channel — a
-        // remote speaker no longer bleeds in as a duplicate
-        // "Me", and mic-side playback loses its echo.
-        if let Some(ref mut aec) = self.echo_canceller {
-            aec.cancel(&mut mic_window, &sys_window);
-        }
-
-        // STEP 2.7: Mic enhancement (issue #21) — high-pass
-        // then loudness normalization, mic only, and
-        // deliberately AFTER AEC (see field docs on
-        // `mic_high_pass`/`mic_normalizer`). System audio
-        // is left untouched.
-        if let Some(ref mut hpf) = self.mic_high_pass {
-            mic_window = hpf.process(&mic_window);
-        }
-        if let Some(ref mut normalizer) = self.mic_normalizer {
-            mic_window = normalizer.normalize_loudness(&mic_window);
+        // STEP 2.5: Mic speakerphone voice chain (WebRTC APM): high-pass,
+        // AEC3 using the aligned system window as the far-end reference,
+        // noise suppression, then AGC2 (which will not lift the noise
+        // floor). Runs before VAD and the recording split, so the cleaned
+        // mic flows to both transcription and the left recording channel —
+        // a remote speaker no longer bleeds in as a duplicate "Me", and
+        // room noise isn't boosted. System audio is left untouched.
+        if let Some(ref mut mp) = self.mic_processor {
+            mp.process(&mut mic_window, &sys_window);
         }
 
         // STEP 3: Source-tagged VAD on each stream independently

@@ -115,9 +115,10 @@ Mic stream (48 kHz)          System stream (48 kHz, sink monitor)
 │  AudioPipeline::run  (parley-core/src/audio/pipeline.rs) │
 │   1. AudioMixerRingBuffer aligns both sources by absolute      │
 │      sample position into 50 ms windows                        │
-│   2. AEC3 (aec.rs) subtracts the system window from the mic    │
-│   3. Mic-only enhancement: 80 Hz high-pass → capped, smoothed  │
-│      EBU R128 loudness normalisation → soft clip               │
+│   2. Mic-only speakerphone chain (mic_processor.rs, WebRTC APM)│
+│      HPF → AEC3 (system window = far-end ref) → noise supp.    │
+│      (VeryHigh) → AGC2 adaptive digital (never lifts noise floor)│
+│   3. System window is left untouched                           │
 │   4. Per-source VAD (vad.rs, sherpa silero) → 16 kHz speech    │
 │      segments tagged Microphone / System                        │
 │   5. Stereo interleave: mic = left, system = right             │
@@ -308,8 +309,7 @@ Recovery of an interrupted meeting is a database query
 Key components:
 - `AudioCapture`: minimal real-time capture callback (downmix + forward only)
 - `AudioMixerRingBuffer`: positional mic + system alignment into 50 ms windows
-- `MicEchoCanceller` (aec.rs): WebRTC AEC3 on the aligned mic window
-- `HighPassFilter` / `LoudnessNormalizer` (audio_processing.rs): mic chain, after AEC
+- `MicProcessor` (mic_processor.rs): WebRTC APM speakerphone chain on the aligned mic window (HPF, AEC3, noise suppression, AGC2). Offline check: `cargo test -p parley-core --release mic_processor -- --ignored --nocapture`
 - `ContinuousVadProcessor` (vad.rs): per-source VAD + 48→16 kHz downsampling
 - `AudioPipelineManager`: starts/stops the pipeline task and its channels
 
