@@ -35,6 +35,60 @@ pub struct AudioLevelUpdate {
     pub levels: Vec<AudioLevelData>,
 }
 
+/// Accumulates audio over one emit interval so the reported RMS/peak
+/// describe the whole period rather than a single capture buffer.
+#[derive(Debug, Default, Clone, Copy)]
+struct LevelAccumulator {
+    sum_sq: f64,
+    count: u64,
+    peak: f32,
+    /// A buffer has ever arrived for this role (so silence periods with no
+    /// buffers still emit a zero level instead of freezing the UI).
+    seen: bool,
+}
+
+impl LevelAccumulator {
+    fn push(&mut self, samples: &[f32]) {
+        let mut sum = 0.0_f32;
+        let mut peak = self.peak;
+        for &x in samples {
+            sum += x * x;
+            peak = peak.max(x.abs());
+        }
+        self.sum_sq += sum as f64;
+        self.count += samples.len() as u64;
+        self.peak = peak;
+        self.seen = true;
+    }
+
+    /// Level over the accumulated period, resetting the period. `None` if
+    /// this role never produced audio.
+    fn take(&mut self, role: &str, type_label: &str) -> Option<AudioLevelData> {
+        if !self.seen {
+            return None;
+        }
+        let rms = if self.count > 0 {
+            (self.sum_sq / self.count as f64).sqrt() as f32
+        } else {
+            0.0
+        };
+        let peak = self.peak;
+        self.sum_sq = 0.0;
+        self.count = 0;
+        self.peak = 0.0;
+        Some(AudioLevelData {
+            device_name: role.to_string(),
+            device_type: type_label.to_string(),
+            rms_level: rms.min(1.0),
+            peak_level: peak.min(1.0),
+            is_active: rms > 0.001,
+        })
+    }
+}
+
+/// Emit rate for `audio-levels` (~30 Hz).
+const EMIT_INTERVAL_MS: u64 = 33;
+
 /// Monotonically increasing generation; bumping it invalidates the
 /// running emit task and any streams from a prior start.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -63,31 +117,19 @@ fn open_role_stream(
     role: &'static str,
     device_id: &str,
     device_type: DeviceType,
-    levels: Arc<Mutex<HashMap<&'static str, AudioLevelData>>>,
+    levels: Arc<Mutex<HashMap<&'static str, LevelAccumulator>>>,
 ) -> Result<PwCaptureStream> {
     let target = capture_target_for(device_id, device_type);
-    let type_label = match device_type {
-        DeviceType::Microphone => "input",
-        DeviceType::System => "output",
-    };
     PwCaptureStream::open(
         target,
         Box::new(move |samples| {
             if samples.is_empty() {
                 return;
             }
-            let rms =
-                (samples.iter().map(|&x| x * x).sum::<f32>() / samples.len() as f32).sqrt();
-            let peak = samples.iter().map(|&x| x.abs()).fold(0.0_f32, f32::max);
-            let entry = AudioLevelData {
-                device_name: role.to_string(),
-                device_type: type_label.to_string(),
-                rms_level: rms.min(1.0),
-                peak_level: peak.min(1.0),
-                is_active: rms > 0.001,
-            };
+            // Real-time callback: one short mutex hold, no allocation after
+            // the first buffer (the map entry already exists).
             if let Ok(mut map) = levels.lock() {
-                map.insert(role, entry);
+                map.entry(role).or_default().push(samples);
             }
         }),
         Box::new(move |event| {
@@ -118,7 +160,7 @@ pub async fn start_monitoring(
     // completes — that we've been superseded and must not touch SESSION.
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
 
-    let levels: Arc<Mutex<HashMap<&'static str, AudioLevelData>>> =
+    let levels: Arc<Mutex<HashMap<&'static str, LevelAccumulator>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
     // Opening streams blocks on the PipeWire roundtrip — keep it off
@@ -189,12 +231,19 @@ pub async fn start_monitoring(
     }
 
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(EMIT_INTERVAL_MS));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         while is_generation_current(generation, GENERATION.load(Ordering::SeqCst)) {
             interval.tick().await;
 
             let snapshot: Vec<AudioLevelData> = match levels.lock() {
-                Ok(guard) => guard.values().cloned().collect(),
+                Ok(mut guard) => guard
+                    .iter_mut()
+                    .filter_map(|(role, acc)| {
+                        let label = if *role == "mic" { "input" } else { "output" };
+                        acc.take(role, label)
+                    })
+                    .collect(),
                 Err(_) => continue,
             };
             if snapshot.is_empty() {
@@ -246,7 +295,31 @@ pub fn is_monitoring() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_generation_current;
+    use super::{is_generation_current, LevelAccumulator};
+
+    #[test]
+    fn accumulator_reports_rms_and_peak_over_the_whole_period() {
+        let mut acc = LevelAccumulator::default();
+        acc.push(&[0.0, 0.0, 0.0, 0.0]);
+        acc.push(&[0.5, -1.0]);
+        let d = acc.take("mic", "input").unwrap();
+        let expected = ((0.25_f64 + 1.0) / 6.0).sqrt() as f32;
+        assert!((d.rms_level - expected).abs() < 1e-6);
+        assert_eq!(d.peak_level, 1.0);
+        assert!(d.is_active);
+    }
+
+    #[test]
+    fn accumulator_resets_after_take_and_reports_silence() {
+        let mut acc = LevelAccumulator::default();
+        assert!(acc.take("mic", "input").is_none());
+        acc.push(&[0.5]);
+        acc.take("mic", "input").unwrap();
+        let d = acc.take("mic", "input").unwrap();
+        assert_eq!(d.rms_level, 0.0);
+        assert_eq!(d.peak_level, 0.0);
+        assert!(!d.is_active);
+    }
 
     #[test]
     fn current_generation_matches_exactly() {

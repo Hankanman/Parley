@@ -167,6 +167,10 @@ pub struct RecordingView {
     /// `transcript-partial` — replaced by the final row once it lands.
     partials: HashMap<String, String>,
     levels: Levels,
+    /// Ballistics-smoothed linear levels actually drawn (see `logic::meter_step`).
+    displayed_levels: Levels,
+    /// Time of the last meter animation step; `None` while the meters are settled.
+    meter_tick: Option<std::time::Instant>,
     refining: bool,
     pending_toasts: Vec<(NotificationType, String)>,
     /// Provisional action items from the beta live extractor — see
@@ -221,6 +225,8 @@ impl RecordingView {
             scroller,
             partials: HashMap::new(),
             levels: Levels::default(),
+            displayed_levels: Levels::default(),
+            meter_tick: None,
             refining: false,
             pending_toasts: Vec::new(),
             live_action_items: Vec::new(),
@@ -830,8 +836,27 @@ impl Render for RecordingView {
 
         let buttons = logic::button_state(self.snapshot.phase);
         let elapsed = logic::format_elapsed(self.elapsed.displayed_secs().max(0.0) as u64);
-        let mic_level = self.levels.mic;
-        let system_level = self.levels.system;
+        let now = std::time::Instant::now();
+        let dt = self
+            .meter_tick
+            .map(|t| now.duration_since(t).as_secs_f32().min(0.1))
+            .unwrap_or(1.0 / 60.0);
+        let (mic_disp, mic_moving) =
+            logic::meter_step(self.displayed_levels.mic, self.levels.mic, dt);
+        let (sys_disp, sys_moving) =
+            logic::meter_step(self.displayed_levels.system, self.levels.system, dt);
+        self.displayed_levels = Levels {
+            mic: mic_disp,
+            system: sys_disp,
+        };
+        if mic_moving || sys_moving {
+            self.meter_tick = Some(now);
+            window.request_animation_frame();
+        } else {
+            self.meter_tick = None;
+        }
+        let mic_level = logic::level_to_meter_fraction(mic_disp);
+        let system_level = logic::level_to_meter_fraction(sys_disp);
         let this_entity = cx.entity();
         let partials: Vec<(String, String)> = self
             .partials

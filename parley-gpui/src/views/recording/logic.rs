@@ -151,6 +151,45 @@ pub fn levels_from_update(levels: &[AudioLevelData]) -> Levels {
     out
 }
 
+/// Meter attack time constant (seconds): how fast the bar rises to a louder level.
+pub const METER_ATTACK_SECS: f32 = 0.015;
+/// Meter release time constant (seconds): how slowly the bar falls back.
+pub const METER_RELEASE_SECS: f32 = 0.3;
+/// Bottom of the displayed dB range; anything quieter draws as an empty bar.
+pub const METER_FLOOR_DB: f32 = -60.0;
+/// Below this linear distance from the target the meter snaps and stops animating.
+const METER_SETTLE_EPS: f32 = 1e-4;
+
+/// One VU/PPM-style ballistics step on a linear level. Time-based
+/// (exponential approach with separate attack/release constants), so the
+/// result is independent of frame rate. Returns `(new_displayed, moving)`;
+/// `moving` is false once the value has settled on `target`.
+pub fn meter_step(displayed: f32, target: f32, dt_secs: f32) -> (f32, bool) {
+    let target = target.clamp(0.0, 1.0);
+    let tau = if target > displayed {
+        METER_ATTACK_SECS
+    } else {
+        METER_RELEASE_SECS
+    };
+    let alpha = 1.0 - (-dt_secs.max(0.0) / tau).exp();
+    let next = displayed + (target - displayed) * alpha;
+    if (target - next).abs() < METER_SETTLE_EPS {
+        (target, false)
+    } else {
+        (next, true)
+    }
+}
+
+/// Map a linear level (0..1) to a 0..1 bar fraction on a
+/// `METER_FLOOR_DB..0 dBFS` scale.
+pub fn level_to_meter_fraction(level: f32) -> f32 {
+    if level <= 0.0 {
+        return 0.0;
+    }
+    let db = 20.0 * level.log10();
+    ((db - METER_FLOOR_DB) / -METER_FLOOR_DB).clamp(0.0, 1.0)
+}
+
 // ============================================================================
 // Phase -> button enablement
 // ============================================================================
@@ -328,6 +367,58 @@ mod tests {
         let levels = levels_from_update(&update);
         assert_eq!(levels.mic, 0.42);
         assert_eq!(levels.system, 0.13);
+    }
+
+    #[test]
+    fn meter_attack_is_fast_and_release_is_slow() {
+        let (up, moving) = meter_step(0.0, 1.0, 0.033);
+        assert!(moving);
+        assert!(up > 0.85, "attack should nearly reach target in 33 ms, got {up}");
+        let (down, _) = meter_step(1.0, 0.0, 0.033);
+        assert!(down > 0.85, "release should still be high after 33 ms, got {down}");
+    }
+
+    #[test]
+    fn meter_step_is_frame_rate_independent() {
+        let mut a = (1.0, true);
+        for _ in 0..10 {
+            a = meter_step(a.0, 0.0, 0.01);
+        }
+        let b = meter_step(1.0, 0.0, 0.1);
+        assert!((a.0 - b.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn meter_settles_and_stops_moving() {
+        let (v, moving) = meter_step(0.00005, 0.0, 0.016);
+        assert_eq!(v, 0.0);
+        assert!(!moving);
+        let (v, moving) = meter_step(0.5, 0.5, 0.016);
+        assert_eq!(v, 0.5);
+        assert!(!moving);
+        let mut v = (1.0, true);
+        for _ in 0..2000 {
+            v = meter_step(v.0, 0.0, 0.016);
+            if !v.1 {
+                break;
+            }
+        }
+        assert!(!v.1, "release must eventually settle");
+    }
+
+    #[test]
+    fn meter_zero_dt_does_not_move() {
+        assert_eq!(meter_step(0.2, 0.8, 0.0).0, 0.2);
+    }
+
+    #[test]
+    fn db_mapping_covers_the_range() {
+        assert_eq!(level_to_meter_fraction(0.0), 0.0);
+        assert_eq!(level_to_meter_fraction(0.0005), 0.0); // below -60 dB
+        assert!((level_to_meter_fraction(1.0) - 1.0).abs() < 1e-6);
+        assert!((level_to_meter_fraction(0.1) - (40.0 / 60.0)).abs() < 1e-4); // -20 dB
+        assert!((level_to_meter_fraction(0.001) - 0.0).abs() < 1e-4); // -60 dB
+        assert_eq!(level_to_meter_fraction(2.0), 1.0);
     }
 
     #[test]
