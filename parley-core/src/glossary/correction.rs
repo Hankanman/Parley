@@ -271,9 +271,11 @@ impl Corrector {
         }
         // Possessive suffix on the last word is kept and re-attached.
         let last_core = tokens[n - 1].core;
-        let possessive = ["'s", "’s"]
+        // Matched against the original bytes (both cases spelled out) so
+        // the stem slice below always lands on a char boundary.
+        let possessive = ["'s", "'S", "’s", "’S"]
             .into_iter()
-            .find(|s| last_core.to_lowercase().ends_with(s) && last_core.len() > s.len());
+            .find(|s| last_core.ends_with(s) && last_core.len() > s.len());
 
         let mut best: Option<(MatchQuality, &Variant, &'static str)> = None;
 
@@ -524,6 +526,34 @@ mod tests {
         let c = corrector(&[("Kingfisher", ""), ("Kingfisher Cloud", "")]);
         assert_eq!(c.correct("on kingfisher cloud today"), "on Kingfisher Cloud today");
         assert_eq!(c.correct("on kingfisher today"), "on Kingfisher today");
+    }
+
+    #[test]
+    fn hostile_inputs_never_panic() {
+        let long = "x".repeat(10_000);
+        let c = corrector(&[
+            ("Zoë", "zo ee"),
+            ("🚀Rocket", ""),
+            ("İstanbul", ""),
+            ("ẞtraße", ""),
+            (&long, ""),
+            ("", "only hint"),
+        ]);
+        for text in [
+            "",
+            "   ",
+            "🚀rocket's 🚀🚀 launch",
+            "İSTANBUL'S İ̇stanbul's",
+            "ẞTRASSE's straße’S",
+            "'s ’s ' ’",
+            "Zoë's zoë’S ZOË'S",
+            &long,
+            &format!("{long}'s {long}s"),
+            "a\u{0}b \u{200b}zero width",
+        ] {
+            let _ = c.correct(text);
+        }
+        assert_eq!(c.correct("ZOË'S cat"), "Zoë'S cat");
     }
 
     #[test]

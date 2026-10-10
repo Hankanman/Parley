@@ -143,10 +143,10 @@ impl PreparedGlossary {
         let built = prompt::build_glossary_prompt(&terms, prompt::GLOSSARY_TOKEN_BUDGET);
         if let Some(b) = &built {
             if !b.dropped.is_empty() {
+                // Counts only — terms are often client/person names.
                 log::info!(
-                    "glossary: {} term(s) left out of the whisper prompt (budget full): {:?}",
-                    b.dropped.len(),
-                    b.dropped
+                    "glossary: {} term(s) left out of the whisper prompt (budget full)",
+                    b.dropped.len()
                 );
             }
         }
@@ -183,7 +183,8 @@ impl PreparedGlossary {
             Some(c) => {
                 let (out, reps) = c.correct_with_report(&text);
                 if !reps.is_empty() {
-                    log::debug!("glossary: corrected {:?}", reps);
+                    // Count only — never log terms or transcript text.
+                    log::debug!("glossary: corrected {} span(s) in segment", reps.len());
                 }
                 out
             }
@@ -253,7 +254,11 @@ pub async fn prepare(pool: Option<&SqlitePool>, meeting_id: Option<&str>) -> Pre
     };
     let prepared = PreparedGlossary::build(&glossary, &extra);
     if let Some(p) = &prepared.prompt {
-        log::info!("glossary: whisper prompt prefix: {}", p);
+        log::info!(
+            "glossary: whisper prompt prefix ready (~{} est. tokens, correction {})",
+            prompt::estimate_tokens(p),
+            if prepared.corrector.is_some() { "on" } else { "off" }
+        );
     }
     prepared
 }

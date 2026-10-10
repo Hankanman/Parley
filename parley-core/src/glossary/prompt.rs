@@ -205,16 +205,13 @@ pub fn compose(glossary_prompt: Option<&str>, context_tail: &str) -> Option<Stri
 /// so it never lands in the transcript. Text without the marker is
 /// returned unchanged.
 pub fn strip_prompt_echo(text: &str) -> String {
-    let marker = PREFIX.to_lowercase();
     let mut out = text.to_string();
     loop {
-        let lower = out.to_lowercase();
-        // `to_lowercase` can change byte lengths for some non-ASCII text;
-        // only trust the index when the lengths agree.
-        if lower.len() != out.len() {
-            return out;
-        }
-        let Some(start) = lower.find(&marker) else {
+        // ASCII case-insensitive search on the original bytes: the marker is
+        // pure ASCII, so a match always starts (and ends) on a char boundary
+        // — unlike indices taken from a `to_lowercase()` copy, whose byte
+        // offsets can drift for some non-ASCII text.
+        let Some(start) = find_ascii_ci(&out, PREFIX) else {
             return out;
         };
         let end = out[start..]
@@ -224,6 +221,16 @@ pub fn strip_prompt_echo(text: &str) -> String {
         out.replace_range(start..end, " ");
         out = out.split_whitespace().collect::<Vec<_>>().join(" ");
     }
+}
+
+/// Byte index of the first ASCII-case-insensitive occurrence of the ASCII
+/// `needle` in `haystack`.
+fn find_ascii_ci(haystack: &str, needle: &str) -> Option<usize> {
+    let (h, n) = (haystack.as_bytes(), needle.as_bytes());
+    if n.is_empty() || h.len() < n.len() {
+        return None;
+    }
+    (0..=h.len() - n.len()).find(|&i| h[i..i + n.len()].eq_ignore_ascii_case(n))
 }
 
 #[cfg(test)]
@@ -341,6 +348,48 @@ mod tests {
         assert_eq!(trim_tail_chars("héllo wörld", 6), "wörld");
         assert_eq!(trim_tail_chars("abc def", 3), "def");
         assert_eq!(trim_tail_chars("abcdef", 3), "");
+    }
+
+    #[test]
+    fn hostile_inputs_never_panic() {
+        let long = "ß".repeat(5_000);
+        let emoji = "🚀".repeat(300);
+        let terms = vec![
+            String::new(),
+            " ".to_string(),
+            "Zoë".to_string(),
+            "İstanbul".to_string(),
+            emoji.clone(),
+            long.clone(),
+            "a\0b\n,c".to_string(),
+            "...".to_string(),
+        ];
+        for budget in [0, 1, 4, 10, GLOSSARY_TOKEN_BUDGET, usize::MAX / 2] {
+            if let Some(b) = build_glossary_prompt(&terms, budget) {
+                assert!(budget >= estimate_tokens(&b.text));
+                let _ = compose(Some(&b.text), &format!("{long} {emoji} İİİ tail"));
+            }
+        }
+        for tail in ["", " ", "ß", "🚀🚀 🚀", long.as_str(), emoji.as_str(), "İ İ İ"] {
+            let _ = compose(None, tail);
+            let _ = compose(Some("Glossary: X."), tail);
+            for n in [0, 1, 2, 3, 7, 600] {
+                let _ = trim_tail_chars(tail, n);
+                let _ = trim_tail_tokens(tail, n);
+            }
+        }
+        for text in [
+            "",
+            "İGLOSSARY: Zoë, 🚀.",
+            "ẞ glossary:",
+            "glossary:glossary:glossary:",
+            "İİİİ Glossary: ß. after",
+            "🚀Glossary🚀: no",
+        ] {
+            let _ = strip_prompt_echo(text);
+        }
+        assert_eq!(strip_prompt_echo("İ Glossary: Zoë. après"), "İ après");
+        assert_eq!(strip_prompt_echo("glossary:glossary:"), "");
     }
 
     #[test]
