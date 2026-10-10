@@ -33,6 +33,8 @@ use serde::Serialize;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{FromRow, Row, SqlitePool};
 
+use crate::stats;
+
 /// How long SQLite blocks waiting for a lock held by the Parley app before
 /// giving up on a statement.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -555,6 +557,127 @@ pub async fn get_transcript(
             })
         })
         .collect()
+}
+
+/// A meeting's segments shaped for [`crate::stats::compute`], in recorded
+/// order, plus the stored recording length. Mirrors
+/// `parley_core::analytics::load_meeting_segments`.
+pub async fn get_stats_segments(
+    pool: &SqlitePool,
+    meeting_id: &str,
+) -> Result<(Vec<stats::Segment>, Option<f64>), sqlx::Error> {
+    let duration: Option<f64> = sqlx::query_scalar("SELECT duration_seconds FROM meetings WHERE id = ?")
+        .bind(meeting_id)
+        .fetch_optional(pool)
+        .await?
+        .flatten();
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            t.transcript, t.speaker, t.source,
+            t.audio_start_time, t.audio_end_time, t.duration,
+            vp.name AS profile_name, vp.is_self AS profile_is_self
+        FROM transcripts t
+        LEFT JOIN voice_profiles vp ON vp.id = t.voice_profile_id
+        WHERE t.meeting_id = ?
+        ORDER BY
+            t.sequence_id IS NULL, t.sequence_id,
+            t.audio_start_time IS NULL, t.audio_start_time,
+            t.timestamp
+        "#,
+    )
+    .bind(meeting_id)
+    .fetch_all(pool)
+    .await?;
+
+    let segments = rows
+        .into_iter()
+        .map(|r| {
+            let speaker: Option<String> = r.try_get("speaker")?;
+            let source: Option<String> = r.try_get("source")?;
+            let profile: Option<String> = r.try_get("profile_name")?;
+            let is_self: Option<i64> = r.try_get("profile_is_self")?;
+            let mut channel = stats::Channel::from_source(source.as_deref());
+            if channel == stats::Channel::Unknown {
+                channel = match (is_self, speaker.as_deref().map(str::trim)) {
+                    (Some(1), _) | (_, Some("mic")) => stats::Channel::Me,
+                    (_, Some("system")) => stats::Channel::Others,
+                    _ => stats::Channel::Unknown,
+                };
+            }
+            Ok(stats::Segment {
+                speaker: Some(stats::speaker_display_name(
+                    profile.as_deref(),
+                    speaker.as_deref(),
+                    source.as_deref(),
+                )),
+                channel,
+                text: r.try_get("transcript")?,
+                start: r.try_get("audio_start_time")?,
+                end: r.try_get("audio_end_time")?,
+                duration: r.try_get("duration")?,
+            })
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
+    Ok((segments, duration))
+}
+
+/// Render meeting stats as a short plain-text report for an agent.
+pub fn render_stats(s: &stats::MeetingStats) -> String {
+    use stats::{format_clock, format_span};
+    if s.is_empty() {
+        return "No transcript segments for this meeting.".to_string();
+    }
+    let pct = |f: f64| format!("{}%", (f * 100.0).round() as i64);
+    let mut out = String::new();
+    if let Some(d) = s.duration_secs {
+        out.push_str(&format!("Duration: {}", format_span(d)));
+        if let Some(r) = s.silence_ratio {
+            out.push_str(&format!(" ({} silence)", pct(r)));
+        }
+        out.push('\n');
+    }
+    if let Some(me) = s.me_share {
+        out.push_str(&format!(
+            "You (microphone) vs others: {} / {} of talk time\n",
+            pct(me),
+            pct(1.0 - me)
+        ));
+    }
+    out.push_str(&format!(
+        "Questions: {}, interruptions: {}\n",
+        s.total_questions, s.total_interruptions
+    ));
+    if let Some((name, m)) = &s.longest_monologue {
+        out.push_str(&format!(
+            "Longest monologue: {name}, {} starting at {}\n",
+            format_span(m.duration_secs),
+            format_clock(m.start_secs)
+        ));
+    }
+    out.push_str("\nPer speaker:\n");
+    for sp in &s.speakers {
+        let wpm = sp
+            .words_per_minute
+            .map(|w| format!(", {} wpm", w.round() as i64))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "- {}: {} of talk ({}), {} turns{wpm}, {} questions, {} interruptions\n",
+            sp.name,
+            pct(sp.share),
+            format_span(sp.talk_secs),
+            sp.turns,
+            sp.questions,
+            sp.interruptions
+        ));
+    }
+    if s.untimed_segments > 0 {
+        out.push_str(&format!(
+            "\n{} of {} segments have no timestamps and add no talk time.\n",
+            s.untimed_segments, s.segment_count
+        ));
+    }
+    out
 }
 
 /// Ranked full-text search across every transcript segment.
@@ -1271,6 +1394,24 @@ mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("{hostile:?} errored: {e}"));
         }
+    }
+
+    #[tokio::test]
+    async fn stats_segments_resolve_speakers_and_feed_compute() {
+        let pool = migrated_pool().await;
+        seed(&pool).await;
+        let (segments, duration) = get_stats_segments(&pool, "m2").await.unwrap();
+        assert_eq!(duration, None);
+        assert_eq!(segments.len(), 2);
+        assert!(segments.iter().all(|s| s.speaker.as_deref() == Some("Me")));
+        assert!(segments.iter().all(|s| s.channel == stats::Channel::Me));
+        let computed = stats::compute(&segments, duration);
+        // The seed rows have a start but no end/duration: untimed.
+        assert_eq!(computed.untimed_segments, 2);
+        assert_eq!(computed.speakers[0].turns, 1);
+        let text = render_stats(&computed);
+        assert!(text.contains("- Me:"), "{text}");
+        assert!(text.contains("2 of 2 segments have no timestamps"), "{text}");
     }
 
     #[tokio::test]

@@ -109,6 +109,7 @@ recording in progress, and writes wait their turn rather than failing.
 | `list_meetings` | `limit?` (default 50, max 500), `since?`/`until?` (`YYYY-MM-DD`, UTC), `query?` (title substring) | id, title, created_at, has_summary, open_action_item_count |
 | `get_meeting` | `meeting_id` | metadata, summary markdown, summary status, transcript/action-item/note counts |
 | `get_transcript` | `meeting_id`, `include_speakers?` (default true) | rendered text plus, when attributed, per-segment speaker + timestamps |
+| `get_meeting_stats` | `meeting_id` | talk-time analytics computed from the transcript (no AI): per-speaker talk share, turns, words per minute, longest monologue, questions, interruptions; duration, silence ratio, you-vs-others split |
 | `search_transcripts` | `query`, `limit?` (default 50, max 500) | matching segments across all meetings with meeting title, snippet, speaker |
 | `get_action_items` | `meeting_id?`, `status?` (`open`/`done`) | action items, open first |
 | `get_recent_summaries` | `limit?` (default 5, max 500) | recent meetings' summary markdown |
