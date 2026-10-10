@@ -15,6 +15,9 @@ pub mod devices;
 #[cfg(target_os = "linux")]
 pub mod pw;
 
+// Meeting auto-detection: watch PipeWire for meeting apps capturing the mic
+pub mod meeting_detect;
+
 // Recording system
 pub mod hardware_detector;
 pub mod incremental_saver;
