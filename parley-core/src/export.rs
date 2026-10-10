@@ -26,6 +26,7 @@
 
 mod document;
 mod docx;
+pub mod folder_sync;
 mod pdf;
 mod subtitles;
 

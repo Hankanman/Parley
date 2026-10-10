@@ -259,6 +259,10 @@ impl SummaryService {
                         );
                     }
 
+                    // Best-effort, no-op unless the user turned on export
+                    // folder sync (Settings → Integrations); logs its own errors.
+                    crate::export::folder_sync::sync_after_summary(&pool, &meeting_id).await;
+
                     // Best-effort: extract structured action items from the
                     // *transcript* (grounded to their timestamps), not the
                     // summary. Spawned rather than awaited — the summary is
