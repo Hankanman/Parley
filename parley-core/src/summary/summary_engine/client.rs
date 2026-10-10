@@ -93,6 +93,8 @@ fn resolve_model_path(app_data_dir: &PathBuf, model_name: &str) -> Result<PathBu
 /// * `cancellation_token` - Optional token for cancellation
 /// * `on_delta` - Optional callback receiving incremental output text as
 ///   the sidecar streams it (the returned String stays authoritative)
+/// * `json_schema` - Optional JSON Schema; the sidecar turns it into a GBNF
+///   grammar so sampling can only produce matching JSON
 ///
 /// # Returns
 /// Generated text
@@ -103,6 +105,7 @@ pub async fn generate_with_builtin(
     user_prompt: &str,
     cancellation_token: Option<&CancellationToken>,
     on_delta: Option<&(dyn Fn(&str) + Send + Sync)>,
+    json_schema: Option<&str>,
 ) -> Result<String> {
     // Check cancellation at start
     if let Some(token) = cancellation_token {
@@ -169,6 +172,7 @@ pub async fn generate_with_builtin(
         top_k: Some(model_def.sampling.top_k),
         top_p: Some(model_def.sampling.top_p),
         stop_tokens: Some(model_def.sampling.stop_tokens.clone()),
+        json_schema: json_schema.map(str::to_string),
     };
 
     // Send request with timeout

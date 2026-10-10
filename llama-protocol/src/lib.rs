@@ -26,6 +26,14 @@ pub enum Request {
         top_k: Option<i32>,
         top_p: Option<f32>,
         stop_tokens: Option<Vec<String>>,
+        /// Optional JSON Schema the output must conform to. The helper
+        /// converts it to a llama.cpp GBNF grammar and constrains sampling
+        /// with it, so the model can only emit matching JSON.
+        /// `#[serde(default)]` keeps requests without the field valid; an
+        /// older helper ignores it and samples freely, which the app's
+        /// parse-and-fallback path tolerates.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        json_schema: Option<String>,
     },
     Ping,
     Shutdown,
@@ -64,6 +72,7 @@ mod tests {
             top_k: Some(64),
             top_p: Some(0.95),
             stop_tokens: Some(vec!["<end_of_turn>".to_string()]),
+            json_schema: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -74,6 +83,38 @@ mod tests {
             Request::Generate { prompt, max_tokens, .. } => {
                 assert_eq!(prompt, "test prompt");
                 assert_eq!(max_tokens, Some(512));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn generate_request_without_json_schema_still_parses() {
+        // A request from an app predating the field must keep working.
+        let json = r#"{"type":"generate","prompt":"p","max_tokens":null,"context_size":null,"model_path":null,"temperature":null,"top_k":null,"top_p":null,"stop_tokens":null}"#;
+        match serde_json::from_str::<Request>(json).unwrap() {
+            Request::Generate { json_schema, .. } => assert!(json_schema.is_none()),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn generate_request_carries_json_schema() {
+        let request = Request::Generate {
+            prompt: "p".to_string(),
+            max_tokens: None,
+            context_size: None,
+            model_path: None,
+            temperature: None,
+            top_k: None,
+            top_p: None,
+            stop_tokens: None,
+            json_schema: Some(r#"{"type":"object"}"#.to_string()),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        match serde_json::from_str::<Request>(&json).unwrap() {
+            Request::Generate { json_schema, .. } => {
+                assert_eq!(json_schema.as_deref(), Some(r#"{"type":"object"}"#))
             }
             _ => panic!("wrong variant"),
         }

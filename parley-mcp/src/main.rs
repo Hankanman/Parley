@@ -10,6 +10,12 @@
 mod cli;
 mod db;
 mod server;
+/// Talk-time / speaking statistics, compiled from parley-core's own source
+/// so the app's Insights tab and `get_meeting_stats` share one definition
+/// (this crate doesn't link parley-core; that file is std + serde only).
+#[path = "../../parley-core/src/analytics/compute.rs"]
+#[allow(dead_code)]
+mod stats;
 
 use std::process::ExitCode;
 

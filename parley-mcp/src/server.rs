@@ -166,6 +166,19 @@ pub struct TranscriptResult {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
+pub struct MeetingStatsResult {
+    pub meeting_id: String,
+    pub title: String,
+    /// The stats as a short readable report.
+    pub text: String,
+    /// Structured stats: per-speaker talk time (seconds) and share (0-1),
+    /// turns, words per minute, longest monologue, questions, interruptions;
+    /// meeting duration, silence ratio and mic-vs-system talk share.
+    #[schemars(with = "serde_json::Value")]
+    pub stats: crate::stats::MeetingStats,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct SearchResult {
     pub count: usize,
     /// True when the result was cut off at `limit` — there may be more.
@@ -297,6 +310,35 @@ impl ParleyMcp {
             segment_count: segments.len(),
             text: db::render_transcript(&segments, include_speakers),
             segments: include_speakers.then_some(segments),
+        }))
+    }
+
+    #[tool(
+        name = "get_meeting_stats",
+        description = "Talk-time and speaking analytics for one meeting, \
+                       computed from the transcript (no AI): each speaker's \
+                       share of talk time, turns, words per minute, longest \
+                       monologue, questions asked and interruptions, plus \
+                       meeting duration, silence ratio and how much the user \
+                       (microphone) spoke versus everyone else."
+    )]
+    pub async fn get_meeting_stats(
+        &self,
+        Parameters(args): Parameters<MeetingIdArgs>,
+    ) -> Result<Json<MeetingStatsResult>, ErrorData> {
+        let meeting = db::get_meeting(&self.pool, &args.meeting_id)
+            .await
+            .map_err(|e| db_err("failed to get meeting", e))?
+            .ok_or_else(|| not_found("meeting", &args.meeting_id))?;
+        let (segments, duration) = db::get_stats_segments(&self.pool, &args.meeting_id)
+            .await
+            .map_err(|e| db_err("failed to load transcript", e))?;
+        let stats = crate::stats::compute(&segments, duration);
+        Ok(Json(MeetingStatsResult {
+            meeting_id: meeting.id,
+            title: meeting.title,
+            text: db::render_stats(&stats),
+            stats,
         }))
     }
 
@@ -727,6 +769,7 @@ mod tests {
                 "create_action_item",
                 "get_action_items",
                 "get_meeting",
+                "get_meeting_stats",
                 "get_recent_summaries",
                 "get_transcript",
                 "list_meetings",

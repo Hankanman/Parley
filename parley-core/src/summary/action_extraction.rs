@@ -227,6 +227,27 @@ fn find_json_array(text: &str) -> Option<&str> {
     None
 }
 
+/// Apply the same cleaning, sentinel handling, speaker-label stripping,
+/// de-duplication and cap to `(text, owner, due)` triples that came from a
+/// structured summary, so they're stored exactly like extracted items.
+pub(crate) fn normalize_structured_items(
+    items: impl IntoIterator<Item = (String, Option<String>, Option<String>)>,
+) -> Vec<NewActionItem> {
+    normalize_elements(
+        items
+            .into_iter()
+            .map(|(text, assignee, due_hint)| {
+                RawElement::Object(RawActionItem {
+                    text: Some(text),
+                    assignee,
+                    due_hint,
+                    quote: None,
+                })
+            })
+            .collect(),
+    )
+}
+
 /// Validate, clean and de-duplicate parsed elements into storable items.
 fn normalize_elements(elements: Vec<RawElement>) -> Vec<NewActionItem> {
     let mut out: Vec<NewActionItem> = Vec::new();
@@ -522,6 +543,22 @@ mod tests {
         assert!(items[0].assignee.is_none(), "Speaker 1 should be dropped");
         assert!(items[1].assignee.is_none(), "speaker_2 should be dropped");
         assert_eq!(items[2].assignee.as_deref(), Some("Amanda"));
+    }
+
+    #[test]
+    fn structured_items_get_the_same_normalization() {
+        let items = normalize_structured_items(vec![
+            ("Send the deck".to_string(), Some("Speaker 2".to_string()), Some("TBD".to_string())),
+            ("send the deck.".to_string(), None, None),
+            ("Ok".to_string(), None, None),
+            ("Book the room".to_string(), Some("Bob".to_string()), Some("Monday".to_string())),
+        ]);
+        assert_eq!(items.len(), 2);
+        assert!(items[0].assignee.is_none());
+        assert!(items[0].due_hint.is_none());
+        assert_eq!(items[1].assignee.as_deref(), Some("Bob"));
+        assert_eq!(items[1].due_hint.as_deref(), Some("Monday"));
+        assert!(items.iter().all(|i| i.source_start_secs.is_none()));
     }
 
     #[test]

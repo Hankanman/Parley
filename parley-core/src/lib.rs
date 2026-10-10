@@ -18,6 +18,7 @@ macro_rules! perf_debug {
 
 // perf_debug! is auto-visible through `crate::` paths.
 
+pub mod analytics;
 pub mod anthropic;
 pub mod audio;
 pub mod bookmarks;

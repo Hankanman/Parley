@@ -1,7 +1,8 @@
 //! Meeting page: editable header (title + delete), a virtualized transcript
 //! panel, and a right-hand pane with two tabs: the summary (generate/
-//! regenerate, WYSIWYG editing, copy/export, retranscription) and "Ask"
-//! (chat with the meeting, see `ask.rs`).
+//! regenerate, WYSIWYG editing, copy/export, retranscription), "Ask"
+//! (chat with the meeting, see `ask.rs`) and "Insights" (talk-time
+//! analytics, see `insights.rs`).
 //!
 //! Loading, generation and polling are all guarded by a `generation`
 //! counter bumped on every [`MeetingView::load`] — async work started for an
@@ -13,6 +14,7 @@ mod ask;
 mod calendar_format;
 mod format;
 mod moments;
+mod insights;
 mod speaker_chip;
 
 use std::time::Duration;
@@ -223,12 +225,14 @@ pub struct MeetingView {
     summary_reveal_pending: String,
     _summary_reveal_task: Option<Task<()>>,
 
-    // -- Right-hand pane: Summary | Ask -----------------------------------------
+    // -- Right-hand pane: Summary | Ask | Insights ------------------------------
     right_tab: RightTab,
     /// "Ask Parley" chat (see `ask.rs`).
     ask_panel: Entity<ask::AskPanel>,
     /// Chapters & bookmarks strip above the transcript (see `moments.rs`).
     moments_panel: Entity<moments::MomentsPanel>,
+    /// Talk-time analytics (see `insights.rs`).
+    insights_panel: Entity<insights::InsightsPanel>,
     /// Transcript row briefly highlighted after a citation jump.
     highlighted_segment: Option<String>,
     _highlight_task: Option<Task<()>>,
@@ -244,6 +248,7 @@ pub struct MeetingView {
 enum RightTab {
     Summary,
     Ask,
+    Insights,
 }
 
 impl MeetingView {
@@ -260,6 +265,7 @@ impl MeetingView {
 
         let ask_panel = cx.new(|cx| ask::AskPanel::new(window, cx));
         let moments_panel = cx.new(|cx| moments::MomentsPanel::new(window, cx));
+        let insights_panel = cx.new(|cx| insights::InsightsPanel::new(window, cx));
         let core_events = AppServices::global(cx).core_events.clone();
         let mut subscriptions = vec![cx.subscribe(&core_events, |this, _, event, cx| {
             match event.name.as_str() {
@@ -284,6 +290,10 @@ impl MeetingView {
         subscriptions.push(cx.observe(&moments_panel, |this, _, cx| {
             this.transcript_list_state.remeasure();
             cx.notify();
+        }));
+        subscriptions.push(cx.subscribe(&insights_panel, |this, _, event: &insights::InsightsPanelEvent, cx| {
+            let insights::InsightsPanelEvent::JumpTo(seconds) = event;
+            this.jump_to_time(*seconds, cx);
         }));
 
         let templates = parley_core::summary::templates::list_templates();
@@ -357,6 +367,7 @@ impl MeetingView {
             right_tab: RightTab::Summary,
             ask_panel,
             moments_panel,
+            insights_panel,
             highlighted_segment: None,
             _highlight_task: None,
             pending_jump: None,
@@ -451,6 +462,8 @@ impl MeetingView {
         self.summary_state.update(cx, |state, cx| state.set_text("", cx));
         self.ask_panel.update(cx, |panel, cx| panel.set_meeting(id.clone(), cx));
         self.moments_panel.update(cx, |panel, cx| panel.set_meeting(id.clone(), cx));
+        let insights_visible = self.right_tab == RightTab::Insights;
+        self.insights_panel.update(cx, |panel, cx| panel.set_meeting(id.clone(), insights_visible, cx));
         cx.notify();
 
         let Some(pool) = AppServices::global(cx).pool() else {
@@ -544,8 +557,18 @@ impl MeetingView {
     fn set_right_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) {
         if self.right_tab != tab {
             self.right_tab = tab;
+            if tab == RightTab::Insights {
+                self.insights_panel.update(cx, |panel, cx| panel.refresh(cx));
+            }
             cx.notify();
         }
+    }
+
+    /// The stored transcript or its speaker attribution changed: keep the
+    /// Insights numbers in step.
+    fn transcript_changed(&mut self, cx: &mut Context<Self>) {
+        let visible = self.right_tab == RightTab::Insights;
+        self.insights_panel.update(cx, |panel, cx| panel.invalidate(visible, cx));
     }
 
     fn apply_meeting_details(&mut self, details: MeetingDetails, cx: &mut Context<Self>) {
@@ -788,12 +811,24 @@ impl MeetingView {
         struct Delta {
             meeting_id: String,
             delta: String,
+            /// Discard the preview streamed so far: the core is about to
+            /// re-stream (a structured-summary retry or the Markdown
+            /// fallback).
+            #[serde(default)]
+            reset: bool,
         }
         let Some(payload) = event.decode::<Delta>() else {
             return;
         };
         if self.meeting_id.as_deref() != Some(payload.meeting_id.as_str()) {
             return;
+        }
+        if payload.reset {
+            self.summary_has_content = false;
+            self.summary_markdown.clear();
+            self.summary_reveal_pending.clear();
+            self.summary_state.update(cx, |state, cx| state.set_text("", cx));
+            cx.notify();
         }
         if payload.delta.is_empty() {
             return;
@@ -1210,6 +1245,7 @@ impl MeetingView {
                 if let Ok(Ok(Some(details))) = result {
                     this.transcript_list_state.reset(details.transcripts.len());
                     this.transcripts = details.transcripts;
+                    this.transcript_changed(cx);
                 }
                 cx.notify();
             });
@@ -2281,6 +2317,9 @@ impl Render for MeetingView {
                                     })
                                     .when(self.right_tab == RightTab::Ask, |this| {
                                         this.child(self.ask_panel.clone())
+                                    })
+                                    .when(self.right_tab == RightTab::Insights, |this| {
+                                        this.child(self.insights_panel.clone())
                                     }),
                             ),
                     ),
@@ -2297,7 +2336,7 @@ impl Render for MeetingView {
 }
 
 impl MeetingView {
-    /// "Summary | Ask" switcher above the right-hand pane.
+    /// "Summary | Ask | Insights" switcher above the right-hand pane.
     fn render_right_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity().downgrade();
         h_flex()
@@ -2311,11 +2350,17 @@ impl MeetingView {
                     .selected_index(match self.right_tab {
                         RightTab::Summary => 0,
                         RightTab::Ask => 1,
+                        RightTab::Insights => 2,
                     })
                     .child(Tab::new().icon(Lucide::FileText).label("Summary"))
                     .child(Tab::new().icon(Lucide::Sparkles).label("Ask"))
+                    .child(Tab::new().icon(Lucide::ChartBar).label("Insights"))
                     .on_click(move |ix, _, cx| {
-                        let tab = if *ix == 1 { RightTab::Ask } else { RightTab::Summary };
+                        let tab = match *ix {
+                            1 => RightTab::Ask,
+                            2 => RightTab::Insights,
+                            _ => RightTab::Summary,
+                        };
                         let _ = entity.update(cx, |this, cx| this.set_right_tab(tab, cx));
                     }),
             )
