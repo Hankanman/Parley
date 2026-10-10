@@ -54,6 +54,46 @@ pub struct RecordingPreferences {
     /// the model can't be fetched.
     #[serde(default = "default_true")]
     pub offline_diarization_on_import: bool,
+    /// What to do when a meeting app starts a call (issue #85, see
+    /// `audio::meeting_detect`): nothing, offer to record, or record.
+    #[serde(default)]
+    pub meeting_autodetect: MeetingAutoDetect,
+    /// Stop the recording when the detected call it was started during
+    /// ends.
+    #[serde(default)]
+    pub stop_when_call_ends: bool,
+}
+
+/// Meeting auto-detection mode (Settings → Recording).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeetingAutoDetect {
+    /// Don't watch for calls at all.
+    Off,
+    /// Show a notification offering to record.
+    #[default]
+    Notify,
+    /// Start recording automatically.
+    AutoRecord,
+}
+
+impl MeetingAutoDetect {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Notify => "notify",
+            Self::AutoRecord => "auto_record",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "off" => Some(Self::Off),
+            "notify" => Some(Self::Notify),
+            "auto_record" => Some(Self::AutoRecord),
+            _ => None,
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -73,6 +113,8 @@ impl Default for RecordingPreferences {
             streaming_partials: true,
             unload_model_after_recording: false,
             offline_diarization_on_import: true,
+            meeting_autodetect: MeetingAutoDetect::default(),
+            stop_when_call_ends: false,
         }
     }
 }
@@ -533,5 +575,29 @@ mod unload_after_stop_tests {
         let prefs: RecordingPreferences = serde_json::from_value(json).unwrap();
         assert!(prefs.offline_diarization_on_import);
         assert!(RecordingPreferences::default().offline_diarization_on_import);
+    }
+
+    #[test]
+    fn meeting_autodetect_defaults_to_notify_and_round_trips() {
+        use super::MeetingAutoDetect;
+        let json = serde_json::json!({
+            "save_folder": "/tmp/x",
+            "auto_save": true,
+            "file_format": "mp4",
+        });
+        let prefs: RecordingPreferences = serde_json::from_value(json).unwrap();
+        assert_eq!(prefs.meeting_autodetect, MeetingAutoDetect::Notify);
+        assert!(!prefs.stop_when_call_ends);
+
+        let mut prefs = RecordingPreferences::default();
+        prefs.meeting_autodetect = MeetingAutoDetect::AutoRecord;
+        let value = serde_json::to_value(&prefs).unwrap();
+        assert_eq!(value["meeting_autodetect"], "auto_record");
+        let back: RecordingPreferences = serde_json::from_value(value).unwrap();
+        assert_eq!(back.meeting_autodetect, MeetingAutoDetect::AutoRecord);
+
+        for mode in [MeetingAutoDetect::Off, MeetingAutoDetect::Notify, MeetingAutoDetect::AutoRecord] {
+            assert_eq!(MeetingAutoDetect::parse(mode.as_str()), Some(mode));
+        }
     }
 }

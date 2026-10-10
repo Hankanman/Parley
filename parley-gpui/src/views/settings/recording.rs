@@ -1,4 +1,5 @@
-//! "Recording" settings page: save folder, default devices, auto-save.
+//! "Recording" settings page: save folder, default devices, auto-save,
+//! meeting auto-detection.
 //! Reads/writes `recording_preferences` (`parley-core/src/audio/recording_preferences.rs`),
 //! the same table the Tauri app's Recording settings tab uses.
 
@@ -9,6 +10,8 @@ use gpui_kit::component::{
     IconName,
 };
 use gpui_kit::*;
+
+use parley_core::audio::recording_preferences::MeetingAutoDetect;
 
 use super::state::SettingsCache;
 use super::SettingsView;
@@ -127,6 +130,50 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
             )
             .description("Pick out action items from the transcript while the meeting is still being recorded.")
             .keywords(["action items", "live"]),
+        ]))
+        .group(SettingGroup::new().title("Meeting detection").items(vec![
+            SettingItem::new(
+                "When a call starts",
+                SettingField::dropdown(
+                    vec![
+                        (SharedString::from("off"), SharedString::from("Do nothing")),
+                        (SharedString::from("notify"), SharedString::from("Notify me")),
+                        (SharedString::from("auto_record"), SharedString::from("Record automatically")),
+                    ],
+                    |cx: &App| {
+                        SharedString::from(
+                            SettingsCache::global(cx).recording.meeting_autodetect.as_str(),
+                        )
+                    },
+                    {
+                        let view = view.clone();
+                        move |val: SharedString, cx: &mut App| {
+                            let Some(mode) = MeetingAutoDetect::parse(val.as_ref()) else {
+                                return;
+                            };
+                            set_recording(cx, &view, |prefs| prefs.meeting_autodetect = mode);
+                            crate::meeting_detect::apply_mode(cx, mode);
+                        }
+                    },
+                ),
+            )
+            .description(
+                "Watch for Teams, Zoom, Slack, Discord, Webex, Jitsi or a browser call using your microphone, and offer to record it — or record it straight away. Auto-recording uses the title of the calendar event in progress.",
+            )
+            .keywords(["auto-detect", "detect", "teams", "zoom", "call", "auto record"]),
+            SettingItem::new(
+                "Stop recording when the call ends",
+                SettingField::switch(
+                    |cx: &App| SettingsCache::global(cx).recording.stop_when_call_ends,
+                    {
+                        let view = view.clone();
+                        move |val: bool, cx: &mut App| {
+                            set_recording(cx, &view, |prefs| prefs.stop_when_call_ends = val);
+                        }
+                    },
+                ),
+            )
+            .description("Stop a recording made during a detected call once that call's microphone stream closes."),
         ]))
 }
 

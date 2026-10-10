@@ -1225,6 +1225,22 @@ pub async fn is_recording() -> bool {
         .unwrap_or(false)
 }
 
+/// True if a recording is active, starting, or still finalising — i.e. a
+/// new `start()` would be refused. Used by auto-start paths (meeting
+/// auto-detection) that must never begin a second recording.
+pub async fn is_busy() -> bool {
+    START_IN_PROGRESS.load(Ordering::SeqCst) || is_stop_in_progress() || is_recording().await
+}
+
+/// The `meeting_id` of the recording currently in progress, if any.
+pub fn current_meeting_id() -> Option<String> {
+    RECORDING_MANAGER
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get_meeting_id())
+}
+
 /// Get recording statistics
 pub async fn get_transcription_status() -> TranscriptionStatus {
     TranscriptionStatus {
