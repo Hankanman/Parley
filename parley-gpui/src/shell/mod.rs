@@ -74,6 +74,11 @@ const REFRESH_EVENTS: &[&str] = &[
     "retranscription-complete",
 ];
 
+/// How many ranked segment hits the sidebar's transcript search fetches.
+/// They're reduced to one row per meeting, so this bounds how many distinct
+/// meetings can show up, not how many rows render.
+const CONTENT_SEARCH_LIMIT: u32 = 200;
+
 pub struct AppShell {
     route: Route,
     recording: Entity<RecordingView>,
@@ -92,10 +97,8 @@ pub struct AppShell {
     search: Entity<InputState>,
     /// Transcript-content search hits for the current query (debounced —
     /// see [`Self::search_transcript_content`]), shown below the
-    /// title-filtered groups. Mirrors the React sidebar's "search inside
-    /// transcripts" behaviour, backed by the same
-    /// `TranscriptsRepository::search_transcripts` the Tauri
-    /// `transcript-search` command uses.
+    /// title-filtered groups, best match first. Backed by the FTS5 index
+    /// (`parley_core::database::search`).
     content_matches: Vec<ContentMatch>,
     content_search_loading: bool,
     _content_search_debounce: Option<Task<()>>,
@@ -269,10 +272,9 @@ impl AppShell {
     }
 
     /// Debounced transcript-content search: 300ms after the last keystroke,
-    /// searches transcript text for the current query via the same core fn
-    /// (`TranscriptsRepository::search_transcripts`) the Tauri
-    /// `transcript-search` command uses, and stashes the results as
-    /// [`ContentMatch`]es for `render` to show below the title-filtered
+    /// runs a ranked FTS5 search over transcript text for the current query
+    /// (`parley_core::database::search::search_transcripts`), and stashes the
+    /// results as [`ContentMatch`]es for `render` to show below the title-filtered
     /// groups. Superseded debounces are dropped by replacing
     /// `_content_search_debounce`, which cancels the previous task.
     fn search_transcript_content(&mut self, cx: &mut Context<Self>) {
@@ -303,9 +305,11 @@ impl AppShell {
             let query_for_search = query.clone();
             let result = io
                 .spawn(async move {
-                    parley_core::database::repositories::transcript::TranscriptsRepository::search_transcripts(
+                    parley_core::database::search::search_transcripts(
                         &pool,
                         &query_for_search,
+                        CONTENT_SEARCH_LIMIT,
+                        parley_core::database::search::Highlight::NONE,
                     )
                     .await
                 })
@@ -318,10 +322,12 @@ impl AppShell {
                 }
                 match result {
                     Ok(Ok(rows)) => {
+                        // Hits arrive best-first (bm25), so keeping the
+                        // first per meeting keeps each meeting's best hit.
                         let rows = rows.into_iter().map(|r| ContentMatch {
-                            meeting_id: r.id,
-                            title: r.title,
-                            snippet: r.match_context,
+                            meeting_id: r.meeting_id,
+                            title: r.meeting_title,
+                            snippet: r.snippet,
                         });
                         let already_shown: Vec<String> =
                             meeting_list::filter_by_title(&this.meetings, &query).into_iter().map(|m| m.id.clone()).collect();

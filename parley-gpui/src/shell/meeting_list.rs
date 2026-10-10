@@ -72,10 +72,10 @@ pub fn filter_by_title<'a>(meetings: &'a [MeetingRow], query: &str) -> Vec<&'a M
 }
 
 /// One transcript-content search hit, already reduced to the shape the
-/// sidebar renders: which meeting, its title, and a snippet of context
-/// around the first match (mirrors the Tauri transcript-search command's
-/// `TranscriptSearchResult`, kept as a local plain type so this module has
-/// no dependency on the database layer — see [`MeetingRow`]).
+/// sidebar renders: which meeting, its title, and the FTS5 snippet of its
+/// best-ranked matching segment (a local plain type rather than
+/// `parley_core::database::search::SearchHit`, so this module has no
+/// dependency on the database layer — see [`MeetingRow`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContentMatch {
     pub meeting_id: String,
@@ -83,9 +83,10 @@ pub struct ContentMatch {
     pub snippet: String,
 }
 
-/// Reduces raw search rows (one per matching transcript segment, as
-/// `TranscriptsRepository::search_transcripts` returns them) to at most one
-/// [`ContentMatch`] per meeting — the first hit, preserving row order — and
+/// Reduces raw search rows (one per matching transcript segment, best first,
+/// as `parley_core::database::search::search_transcripts` returns them) to at
+/// most one [`ContentMatch`] per meeting — the first (best-ranked) hit,
+/// preserving row order — and
 /// drops any meeting whose title already matched the same query (so the
 /// sidebar doesn't show a meeting twice).
 pub fn build_content_matches(
