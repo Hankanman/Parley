@@ -8,7 +8,10 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 llama-protocol = { path = "../llama-protocol" }
-llama-cpp-2 = "0.1.128"
+# Pinned exactly: Cargo.lock is gitignored, so a caret range lets fresh
+# checkouts (CI, worktrees) resolve newer 0.1.x releases, which have
+# broken this crate's API use (AddBos, str_to_token, token_to_piece_bytes).
+llama-cpp-2 = "=0.1.146"
 encoding_rs = "0.8"
 # Restore the default SIGPIPE disposition at startup (Rust ignores it, which
 # turns a closed-stdout write into an EPIPE panic instead of a clean exit).
