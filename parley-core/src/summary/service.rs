@@ -186,6 +186,10 @@ impl SummaryService {
             }
         };
 
+        // Bookmarked moments (issue #87) ride along as emphasis context.
+        let custom_prompt =
+            crate::bookmarks::with_bookmark_context(&pool, &meeting_id, custom_prompt).await;
+
         let result = generate_meeting_summary(
             &config,
             &text,

@@ -412,7 +412,17 @@ async fn delete_meeting_with_transaction(
         .execute(&mut *transaction)
         .await?;
 
-    // 5. Finally, delete the meeting
+    // 5. Delete bookmarks and chapters (issue #87). Also ON DELETE CASCADE.
+    sqlx::query("DELETE FROM meeting_bookmarks WHERE meeting_id = ?")
+        .bind(meeting_id)
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::query("DELETE FROM meeting_chapters WHERE meeting_id = ?")
+        .bind(meeting_id)
+        .execute(&mut *transaction)
+        .await?;
+
+    // 6. Finally, delete the meeting
     let result = sqlx::query("DELETE FROM meetings WHERE id = ?")
         .bind(meeting_id)
         .execute(&mut *transaction)

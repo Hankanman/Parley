@@ -3,6 +3,7 @@
 //! `parley_core::bootstrap`.
 
 mod app_state;
+mod bookmark;
 mod core_events;
 mod crash_log;
 mod fonts;
@@ -99,6 +100,7 @@ fn main() {
     app.run(move |cx| {
         gpui_kit::init(cx);
         zorite_editor::bind_keys(cx);
+        bookmark::install(cx);
         // After `gpui_kit::init` (which sets the Theme global), before any
         // text is laid out.
         fonts::apply_system_mono_font(cx);

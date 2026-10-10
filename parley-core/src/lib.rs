@@ -21,8 +21,10 @@ macro_rules! perf_debug {
 pub mod analytics;
 pub mod anthropic;
 pub mod audio;
+pub mod bookmarks;
 pub mod bootstrap;
 pub mod calendar;
+pub mod chapters;
 pub mod chat;
 pub mod config;
 pub mod database;

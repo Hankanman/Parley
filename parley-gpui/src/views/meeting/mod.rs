@@ -13,6 +13,7 @@
 mod ask;
 mod calendar_format;
 mod format;
+mod moments;
 mod insights;
 mod speaker_chip;
 
@@ -228,6 +229,8 @@ pub struct MeetingView {
     right_tab: RightTab,
     /// "Ask Parley" chat (see `ask.rs`).
     ask_panel: Entity<ask::AskPanel>,
+    /// Chapters & bookmarks strip above the transcript (see `moments.rs`).
+    moments_panel: Entity<moments::MomentsPanel>,
     /// Talk-time analytics (see `insights.rs`).
     insights_panel: Entity<insights::InsightsPanel>,
     /// Transcript row briefly highlighted after a citation jump.
@@ -261,6 +264,7 @@ impl MeetingView {
         });
 
         let ask_panel = cx.new(|cx| ask::AskPanel::new(window, cx));
+        let moments_panel = cx.new(|cx| moments::MomentsPanel::new(window, cx));
         let insights_panel = cx.new(|cx| insights::InsightsPanel::new(window, cx));
         let core_events = AppServices::global(cx).core_events.clone();
         let mut subscriptions = vec![cx.subscribe(&core_events, |this, _, event, cx| {
@@ -277,6 +281,15 @@ impl MeetingView {
         subscriptions.push(cx.subscribe(&ask_panel, |this, _, event: &ask::AskPanelEvent, cx| {
             let ask::AskPanelEvent::JumpTo(seconds) = event;
             this.jump_to_time(*seconds, cx);
+        }));
+        subscriptions.push(cx.subscribe(&moments_panel, |this, _, event: &moments::MomentsEvent, cx| {
+            let moments::MomentsEvent::JumpTo(seconds) = event;
+            this.jump_to_time(*seconds, cx);
+        }));
+        // Chapter/bookmark markers change transcript row heights.
+        subscriptions.push(cx.observe(&moments_panel, |this, _, cx| {
+            this.transcript_list_state.remeasure();
+            cx.notify();
         }));
         subscriptions.push(cx.subscribe(&insights_panel, |this, _, event: &insights::InsightsPanelEvent, cx| {
             let insights::InsightsPanelEvent::JumpTo(seconds) = event;
@@ -353,6 +366,7 @@ impl MeetingView {
             _summary_reveal_task: None,
             right_tab: RightTab::Summary,
             ask_panel,
+            moments_panel,
             insights_panel,
             highlighted_segment: None,
             _highlight_task: None,
@@ -447,6 +461,7 @@ impl MeetingView {
         self.pending_jump = None;
         self.summary_state.update(cx, |state, cx| state.set_text("", cx));
         self.ask_panel.update(cx, |panel, cx| panel.set_meeting(id.clone(), cx));
+        self.moments_panel.update(cx, |panel, cx| panel.set_meeting(id.clone(), cx));
         let insights_visible = self.right_tab == RightTab::Insights;
         self.insights_panel.update(cx, |panel, cx| panel.set_meeting(id.clone(), insights_visible, cx));
         cx.notify();
@@ -2845,13 +2860,16 @@ impl MeetingView {
         let loading_segment = self.loading_segment.clone();
         let show_confidence = self.show_confidence;
         let highlighted_segment = self.highlighted_segment.clone();
+        let markers = self.moments_panel.read(cx).transcript_markers(&self.transcripts);
 
         v_flex()
             .size_full()
             .child(header)
+            .child(self.moments_panel.clone())
             .child(
                 list(list_state, move |ix, _window, cx| {
                     let t = &transcripts[ix];
+                    let row_markers = markers.get(&t.id);
                     let time = format::segment_timestamp(t.audio_start_time, &t.timestamp);
                     let speaker = t.speaker.clone().unwrap_or_else(|| "Speaker".to_string());
                     let editable = speaker_chip::can_edit_speaker(&speaker, t.voice_profile_id.as_deref());
@@ -2949,6 +2967,7 @@ impl MeetingView {
                         .when(highlighted_segment.as_deref() == Some(t.id.as_str()), |this| {
                             this.bg(cx.theme().primary.opacity(0.15))
                         })
+                        .when_some(row_markers, |this, m| this.child(moments::render_row_markers(m, cx)))
                         .child(header_row)
                         .child(div().text_sm().child(t.text.clone()));
 
