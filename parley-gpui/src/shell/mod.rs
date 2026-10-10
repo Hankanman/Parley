@@ -22,7 +22,7 @@ use parley_core::database::repositories::meeting::MeetingsRepository;
 use crate::app_state::AppServices;
 use crate::runtime::Io;
 use crate::views::{
-    action_items::ActionItemsView, import, meeting::MeetingView, recording::RecordingView,
+    action_items::ActionItemsView, ask::AskView, import, meeting::MeetingView, recording::RecordingView,
     settings::SettingsView, speakers::SpeakersView,
 };
 use meeting_list::{ContentMatch, MeetingRow};
@@ -34,6 +34,8 @@ pub enum Route {
     Settings,
     ActionItems,
     Speakers,
+    /// "Ask Parley" across all meetings.
+    Ask,
 }
 
 /// Lets any view switch pages without holding the shell: `navigate(Route::Meeting(id), cx)`.
@@ -46,6 +48,20 @@ pub fn navigate(route: Route, cx: &mut App) {
         return;
     };
     let _ = shell.update(cx, |shell, cx| shell.navigate(route, cx));
+}
+
+/// Open meeting `id` and, once its transcript has loaded, scroll to
+/// `seconds` (used by cross-meeting "Ask Parley" citations).
+pub fn open_meeting_at(id: String, seconds: Option<f64>, cx: &mut App) {
+    let Some(shell) = cx.try_global::<Navigator>().map(|n| n.0.clone()) else {
+        return;
+    };
+    let _ = shell.update(cx, |shell, cx| {
+        shell.navigate(Route::Meeting(id), cx);
+        if let Some(seconds) = seconds {
+            shell.meeting.update(cx, |view, cx| view.jump_when_loaded(seconds, cx));
+        }
+    });
 }
 
 /// Lets any view ask the sidebar to reload its meeting list — e.g. after a
@@ -86,6 +102,7 @@ pub struct AppShell {
     settings: Entity<SettingsView>,
     action_items: Entity<ActionItemsView>,
     speakers: Entity<SpeakersView>,
+    ask: Entity<AskView>,
     meetings: Vec<MeetingRow>,
     meetings_loading: bool,
     /// (groups, meeting rows) the sidebar was last rendered with. gpui-kit's
@@ -132,6 +149,7 @@ impl AppShell {
             settings: cx.new(|cx| SettingsView::new(window, cx)),
             action_items: cx.new(|cx| ActionItemsView::new(window, cx)),
             speakers: cx.new(|cx| SpeakersView::new(window, cx)),
+            ask: cx.new(|cx| AskView::new(window, cx)),
             meetings: Vec::new(),
             meetings_loading: false,
             rendered_sidebar_shape: (0, 0),
@@ -149,6 +167,9 @@ impl AppShell {
         if let Route::Meeting(id) = &route {
             let id = id.clone();
             self.meeting.update(cx, |view, cx| view.load(id, cx));
+        }
+        if route == Route::Ask {
+            self.ask.update(cx, |view, cx| view.on_show(cx));
         }
         // Leaving the Speakers page while self-voice enrollment is recording
         // would otherwise leave the microphone open indefinitely — cancel it,
@@ -351,7 +372,7 @@ impl AppShell {
     fn nav_item(
         &self,
         label: &'static str,
-        icon: IconName,
+        icon: impl Into<gpui_kit::component::Icon>,
         route: Route,
         cx: &mut Context<Self>,
     ) -> SidebarMenuItem {
@@ -417,6 +438,7 @@ impl Render for AppShell {
             Route::Settings => self.settings.clone().into(),
             Route::ActionItems => self.action_items.clone().into(),
             Route::Speakers => self.speakers.clone().into(),
+            Route::Ask => self.ask.clone().into(),
         };
 
         let query = self.search.read(cx).value().to_string();
@@ -436,6 +458,7 @@ impl Render for AppShell {
             .child(
                 SidebarGroup::new("Meetings").child(SidebarMenu::new().children([
                     self.nav_item("Record", IconName::Play, Route::Recording, cx),
+                    self.nav_item("Ask Parley", gpui_kit::assets::IconName::Sparkles, Route::Ask, cx),
                     SidebarMenuItem::new("Import audio")
                         .icon(gpui_kit::assets::IconName::Upload)
                         .on_click(|_, window, cx| import::open(window, cx)),
