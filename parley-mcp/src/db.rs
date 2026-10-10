@@ -590,36 +590,22 @@ pub async fn get_stats_segments(
     .fetch_all(pool)
     .await?;
 
-    let segments = rows
+    let stored = rows
         .into_iter()
         .map(|r| {
-            let speaker: Option<String> = r.try_get("speaker")?;
-            let source: Option<String> = r.try_get("source")?;
-            let profile: Option<String> = r.try_get("profile_name")?;
-            let is_self: Option<i64> = r.try_get("profile_is_self")?;
-            let mut channel = stats::Channel::from_source(source.as_deref());
-            if channel == stats::Channel::Unknown {
-                channel = match (is_self, speaker.as_deref().map(str::trim)) {
-                    (Some(1), _) | (_, Some("mic")) => stats::Channel::Me,
-                    (_, Some("system")) => stats::Channel::Others,
-                    _ => stats::Channel::Unknown,
-                };
-            }
-            Ok(stats::Segment {
-                speaker: Some(stats::speaker_display_name(
-                    profile.as_deref(),
-                    speaker.as_deref(),
-                    source.as_deref(),
-                )),
-                channel,
+            Ok(stats::StoredSegment {
                 text: r.try_get("transcript")?,
+                speaker: r.try_get("speaker")?,
+                source: r.try_get("source")?,
+                profile_name: r.try_get("profile_name")?,
+                profile_is_self: r.try_get::<Option<i64>, _>("profile_is_self")? == Some(1),
                 start: r.try_get("audio_start_time")?,
                 end: r.try_get("audio_end_time")?,
                 duration: r.try_get("duration")?,
             })
         })
         .collect::<Result<Vec<_>, sqlx::Error>>()?;
-    Ok((segments, duration))
+    Ok((stats::segments_from_rows(stored), duration))
 }
 
 /// Render meeting stats as a short plain-text report for an agent.
@@ -639,7 +625,7 @@ pub fn render_stats(s: &stats::MeetingStats) -> String {
     }
     if let Some(me) = s.me_share {
         out.push_str(&format!(
-            "You (microphone) vs others: {} / {} of talk time\n",
+            "You vs others: {} / {} of talk time\n",
             pct(me),
             pct(1.0 - me)
         ));

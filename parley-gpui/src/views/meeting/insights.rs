@@ -39,11 +39,17 @@ pub struct InsightsPanel {
     stats: Option<MeetingStats>,
     loading: bool,
     error: Option<String>,
+    /// List every speaker instead of the top [`TOP_SPEAKERS`].
+    show_all_speakers: bool,
 }
+
+/// Diarization can split a long meeting into dozens of speakers, most of
+/// them a few seconds of crosstalk; list this many and fold the rest.
+const TOP_SPEAKERS: usize = 6;
 
 impl InsightsPanel {
     pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
-        Self { meeting_id: None, load_seq: 0, stats: None, loading: false, error: None }
+        Self { meeting_id: None, load_seq: 0, stats: None, loading: false, error: None, show_all_speakers: false }
     }
 
     /// Show `id`'s insights (called by the meeting page on every load).
@@ -52,6 +58,7 @@ impl InsightsPanel {
         self.meeting_id = Some(id);
         self.load_seq += 1;
         self.stats = None;
+        self.show_all_speakers = false;
         self.loading = false;
         self.error = None;
         if visible {
@@ -195,10 +202,51 @@ impl InsightsPanel {
             .children(monologue_tile);
 
         // ---- Per-speaker talk share ------------------------------------
-        let speakers = v_flex().w_full().gap_3().children(stats.speakers.iter().enumerate().map(|(ix, s)| {
+        let shown = if self.show_all_speakers { stats.speakers.len() } else { TOP_SPEAKERS };
+        let hidden = &stats.speakers[shown.min(stats.speakers.len())..];
+        let mut speakers = v_flex().w_full().gap_3().children(stats.speakers.iter().take(shown).enumerate().map(|(ix, s)| {
             let color = palette[ix % palette.len()];
             self.render_speaker(ix, s, color, cx)
         }));
+        if !hidden.is_empty() {
+            let share: f64 = hidden.iter().map(|s| s.share).sum();
+            let talk: f64 = hidden.iter().map(|s| s.talk_secs).sum();
+            speakers = speakers.child(
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        Button::new("insights-show-all-speakers")
+                            .ghost()
+                            .xsmall()
+                            .label(format!("+ {} more speakers", hidden.len()))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.show_all_speakers = true;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!("{} · {}", percent(share), format_span(talk))),
+                    ),
+            );
+        } else if self.show_all_speakers && stats.speakers.len() > TOP_SPEAKERS {
+            speakers = speakers.child(
+                Button::new("insights-show-top-speakers")
+                    .ghost()
+                    .xsmall()
+                    .label(format!("Show top {TOP_SPEAKERS} only"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.show_all_speakers = false;
+                        cx.notify();
+                    })),
+            );
+        }
 
         v_flex()
             .w_full()

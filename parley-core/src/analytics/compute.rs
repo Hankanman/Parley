@@ -44,6 +44,10 @@ pub const OVERLAP_TOLERANCE_SECS: f64 = 0.5;
 /// Below this much talk time a words-per-minute figure is noise.
 pub const MIN_WPM_TALK_SECS: f64 = 10.0;
 
+/// "You vs others" is only reported when this fraction of the talk time
+/// knows which channel it came from; a split over a sliver of it misleads.
+pub const ME_SHARE_MIN_COVERAGE: f64 = 0.8;
+
 /// Display name for a segment with no speaker information at all.
 pub const UNKNOWN_SPEAKER: &str = "Unknown speaker";
 
@@ -107,6 +111,77 @@ pub fn speaker_display_name(profile_name: Option<&str>, speaker: Option<&str>, s
     }
 }
 
+/// One stored transcript row, as both the app's and the MCP server's
+/// loaders read it (see [`segments_from_rows`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StoredSegment {
+    pub text: String,
+    /// `transcripts.speaker`.
+    pub speaker: Option<String>,
+    /// `transcripts.source` (`"mic"` / `"system"`).
+    pub source: Option<String>,
+    /// The linked voice profile's name, if any.
+    pub profile_name: Option<String>,
+    /// The linked voice profile is the user's own enrolled voice.
+    pub profile_is_self: bool,
+    pub start: Option<f64>,
+    pub end: Option<f64>,
+    pub duration: Option<f64>,
+}
+
+/// Resolve stored rows into [`Segment`]s: display names, and the capture
+/// channel. Live recordings store the channel (`source`). Imported or
+/// retranscribed meetings don't; there a segment is "me" when it is linked
+/// to the self voice profile, carries the legacy `"mic"` label, or shares a
+/// display name with such a segment (speakers are grouped by name, so a
+/// second profile with the user's name is the user too). Only when the
+/// meeting has such a segment, i.e. the diarizer did know who "me" was, is
+/// every other segment someone else.
+pub fn segments_from_rows(rows: Vec<StoredSegment>) -> Vec<Segment> {
+    let stored_channel = |r: &StoredSegment| match Channel::from_source(r.source.as_deref()) {
+        Channel::Unknown => match r.speaker.as_deref().map(str::trim) {
+            _ if r.profile_is_self => Channel::Me,
+            Some("mic") => Channel::Me,
+            Some("system") => Channel::Others,
+            _ => Channel::Unknown,
+        },
+        known => known,
+    };
+    let resolved: Vec<(String, Channel, bool)> = rows
+        .iter()
+        .map(|r| {
+            let name = speaker_display_name(r.profile_name.as_deref(), r.speaker.as_deref(), r.source.as_deref());
+            let has_source = Channel::from_source(r.source.as_deref()) != Channel::Unknown;
+            (name, stored_channel(r), has_source)
+        })
+        .collect();
+    let self_names: std::collections::HashSet<&str> = resolved
+        .iter()
+        .filter(|(_, channel, has_source)| !has_source && *channel == Channel::Me)
+        .map(|(name, _, _)| name.as_str())
+        .collect();
+    let channels: Vec<Channel> = resolved
+        .iter()
+        .map(|(name, channel, has_source)| match channel {
+            Channel::Unknown if !has_source && self_names.contains(name.as_str()) => Channel::Me,
+            Channel::Unknown if !self_names.is_empty() => Channel::Others,
+            c => *c,
+        })
+        .collect();
+    rows.into_iter()
+        .zip(resolved)
+        .zip(channels)
+        .map(|((r, (name, _, _)), channel)| Segment {
+            speaker: Some(name),
+            channel,
+            text: r.text,
+            start: r.start,
+            end: r.end,
+            duration: r.duration,
+        })
+        .collect()
+}
+
 /// The longest uninterrupted stretch by one speaker.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Monologue {
@@ -145,8 +220,8 @@ pub struct MeetingStats {
     pub silence_secs: f64,
     /// Silence over duration (0–1). `None` without a duration.
     pub silence_ratio: Option<f64>,
-    /// Share (0–1) of talk time from the microphone channel. `None` when no
-    /// segment knows its channel.
+    /// Share (0–1) of talk time from the microphone channel. `None` unless
+    /// at least [`ME_SHARE_MIN_COVERAGE`] of the talk time knows its channel.
     pub me_share: Option<f64>,
     pub segment_count: usize,
     /// Segments without usable timestamps (no talk time counted).
@@ -256,7 +331,7 @@ pub fn compute(segments: &[Segment], recorded_duration: Option<f64>) -> MeetingS
     }
 
     let mut untimed = 0;
-    let (mut me_talk, mut channel_known_talk, mut any_channel) = (0.0, 0.0, false);
+    let (mut me_talk, mut channel_known_talk) = (0.0, 0.0);
     let mut turn: Option<Turn> = None;
     let mut prev: Option<(usize, Option<(f64, f64)>)> = None;
 
@@ -276,19 +351,13 @@ pub fn compute(segments: &[Segment], recorded_duration: Option<f64>) -> MeetingS
                 acc.talk_secs += e - s;
                 acc.timed_words += words;
                 if item.seg.channel != Channel::Unknown {
-                    any_channel = true;
                     channel_known_talk += e - s;
                     if item.seg.channel == Channel::Me {
                         me_talk += e - s;
                     }
                 }
             }
-            None => {
-                untimed += 1;
-                if item.seg.channel != Channel::Unknown {
-                    any_channel = true;
-                }
-            }
+            None => untimed += 1,
         }
 
         // Interruption: a speaker change that starts over the previous
@@ -388,7 +457,8 @@ pub fn compute(segments: &[Segment], recorded_duration: Option<f64>) -> MeetingS
         total_talk_secs: total_talk,
         silence_secs: silence,
         silence_ratio: duration.filter(|d| *d > 0.0).map(|d| (silence / d).clamp(0.0, 1.0)),
-        me_share: (any_channel && channel_known_talk > 0.0).then(|| me_talk / channel_known_talk),
+        me_share: (channel_known_talk > 0.0 && channel_known_talk >= ME_SHARE_MIN_COVERAGE * total_talk)
+            .then(|| me_talk / channel_known_talk),
         segment_count: segments.len(),
         untimed_segments: untimed,
         total_words: speakers.iter().map(|s| s.words).sum(),
@@ -652,6 +722,55 @@ mod tests {
         assert!(approx(stats.me_share.unwrap(), 0.25));
         assert!(speaker(&stats, "Me").is_me);
         assert!(!speaker(&stats, "Alice").is_me);
+    }
+
+    #[test]
+    fn me_share_needs_most_talk_to_know_its_channel() {
+        let mut me = seg("Me", 0.0, 10.0, "a");
+        me.channel = Channel::Me;
+        let unknown = seg("Speaker 1", 10.0, 60.0, "b");
+        let stats = compute(&[me, unknown], None);
+        assert_eq!(stats.me_share, None);
+    }
+
+    #[test]
+    fn rows_without_source_infer_channels_from_the_self_profile() {
+        let row = |speaker: &str, profile: Option<&str>, is_self: bool, source: Option<&str>| StoredSegment {
+            speaker: Some(speaker.to_string()),
+            profile_name: profile.map(str::to_string),
+            profile_is_self: is_self,
+            source: source.map(str::to_string),
+            ..StoredSegment::default()
+        };
+        // Imported meeting: the self profile is recognised, so the rest is
+        // everyone else.
+        // A second, non-self profile with the same name is still "me".
+        let segs = segments_from_rows(vec![
+            row("Speaker 1", Some("Seb"), true, None),
+            row("Speaker 2", None, false, None),
+            row("Seb", Some("Seb"), false, None),
+        ]);
+        assert_eq!(segs[0].speaker.as_deref(), Some("Seb"));
+        assert_eq!(
+            segs.iter().map(|s| s.channel).collect::<Vec<_>>(),
+            vec![Channel::Me, Channel::Others, Channel::Me]
+        );
+
+        // No self anywhere: unknown stays unknown.
+        let segs = segments_from_rows(vec![row("Speaker 1", None, false, None), row("Speaker 2", None, false, None)]);
+        assert!(segs.iter().all(|s| s.channel == Channel::Unknown));
+
+        // Live recording: the stored source wins.
+        let segs = segments_from_rows(vec![
+            row("Me", None, false, Some("mic")),
+            row("Alice", Some("Alice"), false, Some("system")),
+            row("system", None, false, None),
+        ]);
+        assert_eq!(
+            segs.iter().map(|s| s.channel).collect::<Vec<_>>(),
+            vec![Channel::Me, Channel::Others, Channel::Others]
+        );
+        assert_eq!(segs[2].speaker.as_deref(), Some("Others"));
     }
 
     #[test]

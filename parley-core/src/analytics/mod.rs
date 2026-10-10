@@ -7,8 +7,8 @@
 pub mod compute;
 
 pub use compute::{
-    compute, format_clock, format_span, speaker_display_name, Channel, MeetingStats, Monologue, Segment,
-    SpeakerStats,
+    compute, format_clock, format_span, segments_from_rows, speaker_display_name, Channel, MeetingStats, Monologue,
+    Segment, SpeakerStats, StoredSegment,
 };
 
 use sqlx::{Row, SqlitePool};
@@ -46,27 +46,15 @@ pub async fn load_meeting_segments(
     .fetch_all(pool)
     .await?;
 
-    let segments = rows
+    let stored = rows
         .into_iter()
         .map(|r| {
-            let speaker: Option<String> = r.try_get("speaker")?;
-            let source: Option<String> = r.try_get("source")?;
-            let profile: Option<String> = r.try_get("profile_name")?;
-            let is_self: Option<i64> = r.try_get("profile_is_self")?;
-            let mut channel = Channel::from_source(source.as_deref());
-            if channel == Channel::Unknown {
-                // Older rows: no source column, but the enrolled self profile
-                // or the legacy raw-channel label still tells us.
-                channel = match (is_self, speaker.as_deref().map(str::trim)) {
-                    (Some(1), _) | (_, Some("mic")) => Channel::Me,
-                    (_, Some("system")) => Channel::Others,
-                    _ => Channel::Unknown,
-                };
-            }
-            Ok(Segment {
-                speaker: Some(speaker_display_name(profile.as_deref(), speaker.as_deref(), source.as_deref())),
-                channel,
+            Ok(StoredSegment {
                 text: r.try_get("transcript")?,
+                speaker: r.try_get("speaker")?,
+                source: r.try_get("source")?,
+                profile_name: r.try_get("profile_name")?,
+                profile_is_self: r.try_get::<Option<i64>, _>("profile_is_self")? == Some(1),
                 start: r.try_get("audio_start_time")?,
                 end: r.try_get("audio_end_time")?,
                 duration: r.try_get("duration")?,
@@ -74,7 +62,7 @@ pub async fn load_meeting_segments(
         })
         .collect::<Result<Vec<_>, sqlx::Error>>()?;
 
-    Ok((segments, duration))
+    Ok((segments_from_rows(stored), duration))
 }
 
 /// Load and compute a meeting's stats in one go.
