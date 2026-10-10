@@ -40,6 +40,10 @@ pub enum Kind {
     TranscriptionComplete,
     SystemError(String),
     MeetingReminder { minutes: u64, title: Option<String> },
+    /// Auto-record (meeting auto-detection) started a recording. No
+    /// per-kind toggle: the user opted in via Settings → Recording, and a
+    /// recording starting unannounced would be a surprise.
+    CallRecordingStarted { app_label: String, title: String },
     Test,
 }
 
@@ -135,6 +139,7 @@ fn should_notify(settings: &SettingsMini, kind: &Kind) -> bool {
         Kind::TranscriptionComplete => p.show_transcription_complete,
         Kind::SystemError(_) => p.show_system_errors,
         Kind::MeetingReminder { .. } => p.show_meeting_reminders,
+        Kind::CallRecordingStarted { .. } => true,
         Kind::Test => true,
     }
 }
@@ -163,11 +168,100 @@ fn notification_text(kind: &Kind) -> (&'static str, String) {
                 None => format!("Meeting starts in {} minutes", minutes),
             },
         ),
+        Kind::CallRecordingStarted { app_label, title } => (
+            "Parley — recording",
+            format!(
+                "{app_label} detected, so Parley started recording \"{title}\". \
+                 Please let others in the meeting know."
+            ),
+        ),
         Kind::Test => (
             "Parley",
             "This is a test notification to verify the system is working correctly".to_string(),
         ),
     }
+}
+
+// ============================================================================
+// Meeting auto-detection prompt
+// ============================================================================
+
+/// What the user did with a "call detected — record?" notification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallPromptResponse {
+    /// Clicked the "Record" action button.
+    Record,
+    /// Clicked the notification body (the `default` action).
+    Open,
+    /// Closed it, let it expire, or the server doesn't support actions.
+    Dismissed,
+}
+
+/// How long the prompt stays up before the server expires it.
+const CALL_PROMPT_TIMEOUT_MS: u32 = 60_000;
+
+/// "Teams call detected — Record?" with a **Record** action button and a
+/// clickable body, when the notification server advertises the `actions`
+/// capability; otherwise a plain notification (the tray hint is then the
+/// way to act on it). Gated by consent / permission / manual DND only —
+/// the per-feature opt-in is the Recording page's auto-detect setting.
+/// Resolves once the user acts on it (or it closes).
+pub async fn prompt_call_detected(
+    pool: Option<sqlx::SqlitePool>,
+    app_label: String,
+) -> CallPromptResponse {
+    let settings = load_settings(pool).await;
+    if !settings.consent_given || !settings.system_permission_granted || settings.manual_dnd_mode {
+        return CallPromptResponse::Dismissed;
+    }
+    let result = tokio::task::spawn_blocking(move || show_call_prompt_blocking(&app_label)).await;
+    match result {
+        Ok(response) => response,
+        Err(e) => {
+            log::warn!("call prompt notification task panicked: {}", e);
+            CallPromptResponse::Dismissed
+        }
+    }
+}
+
+fn show_call_prompt_blocking(app_label: &str) -> CallPromptResponse {
+    let supports_actions = notify_rust::get_capabilities()
+        .map(|caps| caps.iter().any(|c| c == "actions"))
+        .unwrap_or(false);
+
+    let mut notification = notify_rust::Notification::new();
+    notification
+        .appname("Parley")
+        .summary(&format!("{app_label} detected — Record?"))
+        .timeout(notify_rust::Timeout::Milliseconds(CALL_PROMPT_TIMEOUT_MS));
+    if supports_actions {
+        notification
+            .body("Record this call with Parley.")
+            .action("default", "Open Parley")
+            .action("record", "Record");
+    } else {
+        notification.body("Open Parley's tray menu to record this call.");
+    }
+
+    let handle = match notification.show() {
+        Ok(handle) => handle,
+        Err(e) => {
+            log::warn!("failed to show call-detected notification: {}", e);
+            return CallPromptResponse::Dismissed;
+        }
+    };
+    if !supports_actions {
+        return CallPromptResponse::Dismissed;
+    }
+    let mut response = CallPromptResponse::Dismissed;
+    handle.wait_for_action(|action| {
+        response = match action {
+            "record" => CallPromptResponse::Record,
+            "default" => CallPromptResponse::Open,
+            _ => CallPromptResponse::Dismissed,
+        };
+    });
+    response
 }
 
 /// Look up whether `kind` should be shown right now, and fire it
@@ -481,6 +575,19 @@ mod tests {
         assert!(!should_notify(&settings, &Kind::Paused));
         assert!(should_notify(&settings, &Kind::Resumed));
         assert!(should_notify(&settings, &Kind::Started));
+    }
+
+    #[test]
+    fn auto_record_notice_ignores_per_kind_toggles_but_respects_dnd() {
+        let kind = Kind::CallRecordingStarted {
+            app_label: "Microsoft Teams call".into(),
+            title: "Weekly sync".into(),
+        };
+        let mut settings = settings_all_on();
+        settings.notification_preferences.show_recording_started = false;
+        assert!(should_notify(&settings, &kind));
+        settings.manual_dnd_mode = true;
+        assert!(!should_notify(&settings, &kind));
     }
 
     #[test]

@@ -6,6 +6,7 @@ mod app_state;
 mod core_events;
 mod crash_log;
 mod fonts;
+mod meeting_detect;
 mod notifications;
 mod recovery;
 mod root;
@@ -127,6 +128,7 @@ fn main() {
                     );
                 }
                 notifications::start_meeting_reminder_loop(cx);
+                meeting_detect::install(cx);
             });
         })
         .detach();

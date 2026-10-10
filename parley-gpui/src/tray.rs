@@ -29,6 +29,7 @@ actions!(
         TrayStopRecording,
         TrayPauseRecording,
         TrayResumeRecording,
+        TrayRecordDetectedCall,
         TrayOpenParley,
         TraySettings,
         TrayCheckForUpdates,
@@ -112,9 +113,32 @@ fn build_menu(cx: &mut App) -> Vec<MenuItem> {
     let can_pause = matches!(phase, Recording);
     let can_resume = matches!(phase, Paused);
 
-    vec![
+    // Meeting auto-detection hint: while a call is detected and nothing is
+    // recording, offer a one-click "Record … call".
+    let detected_call = if can_start {
+        crate::meeting_detect::active_call(cx)
+    } else {
+        None
+    };
+    let status_label = match &detected_call {
+        Some(call) => format!(
+            "{} detected",
+            crate::meeting_detect::call_label(call)
+        ),
+        None => status_label.to_string(),
+    };
+
+    let mut items = vec![
         disabled(MenuItem::action(status_label, NoAction), true),
         MenuItem::separator(),
+    ];
+    if let Some(call) = &detected_call {
+        items.push(MenuItem::action(
+            format!("Record {}", crate::meeting_detect::call_label(call)),
+            TrayRecordDetectedCall,
+        ));
+    }
+    items.extend([
         disabled(
             MenuItem::action("Start recording", TrayStartRecording),
             !can_start,
@@ -137,14 +161,15 @@ fn build_menu(cx: &mut App) -> Vec<MenuItem> {
         MenuItem::action("Check for updates", TrayCheckForUpdates),
         MenuItem::separator(),
         MenuItem::action("Quit", TrayQuit),
-    ]
+    ]);
+    items
 }
 
 /// Bring the main window back: re-opens it if it has been closed (the app
 /// keeps running without a window under `QuitMode::Explicit`), then asks the
 /// compositor to focus it. Wayland compositors commonly refuse an
 /// unsolicited raise, so the re-open is what actually gets the UI back.
-fn open_parley(cx: &mut App) {
+pub(crate) fn open_parley(cx: &mut App) {
     let Some(handle) = crate::window::ensure_main_window(cx) else {
         return;
     };
@@ -204,7 +229,7 @@ fn open_settings(cx: &mut App) {
     navigate(Route::Settings, cx);
 }
 
-fn stop_recording_from_tray(cx: &mut App) {
+pub(crate) fn stop_recording(cx: &mut App) {
     let services = AppServices::global(cx);
     let ctx = services.recording_context();
     let save_path = parley_core::paths::app_data_dir()
@@ -235,7 +260,7 @@ pub fn install(cx: &mut App) -> gpui_tray::Result<()> {
     });
     cx.on_action(|_: &TrayStopRecording, cx: &mut App| {
         log::info!("tray: stop recording");
-        stop_recording_from_tray(cx);
+        stop_recording(cx);
     });
     cx.on_action(|_: &TrayPauseRecording, cx: &mut App| {
         log::info!("tray: pause recording");
@@ -244,6 +269,12 @@ pub fn install(cx: &mut App) -> gpui_tray::Result<()> {
     cx.on_action(|_: &TrayResumeRecording, cx: &mut App| {
         log::info!("tray: resume recording");
         resume_recording_from_tray(cx);
+    });
+    cx.on_action(|_: &TrayRecordDetectedCall, cx: &mut App| {
+        if let Some(call) = crate::meeting_detect::active_call(cx) {
+            log::info!("tray: record detected {} call", call.app_name);
+            crate::meeting_detect::record_call(cx, call, false);
+        }
     });
     cx.on_action(|_: &TrayOpenParley, cx: &mut App| {
         log::info!("tray: open Parley");
@@ -323,7 +354,7 @@ pub fn install(cx: &mut App) -> gpui_tray::Result<()> {
 
 /// Rebuild the tray menu from the current `TrayPhase`. Cheap; called on
 /// every `recording-state` event.
-fn refresh(cx: &mut App) {
+pub(crate) fn refresh(cx: &mut App) {
     if let Some(tray) = cx.try_global::<AppTray>() {
         let tray = tray.tray.clone();
         if let Err(e) = tray.refresh_menu(cx) {
