@@ -985,11 +985,18 @@ fn extract_json_object(raw: &str) -> Option<Value> {
     }
 }
 
-/// A string field. `null` reads as empty (models emit both).
+/// A string field. `null` reads as empty (models emit both); an array of
+/// strings is joined line by line (unconstrained models often answer a
+/// paragraph field with bullet points).
 fn as_text(value: &Value) -> Option<String> {
     match value {
         Value::String(s) => Some(s.trim().replace("\r\n", "\n")),
         Value::Null => Some(String::new()),
+        Value::Array(items) => items
+            .iter()
+            .map(|v| v.as_str().map(|s| s.trim().to_string()))
+            .collect::<Option<Vec<_>>>()
+            .map(|lines| lines.join("\n")),
         _ => None,
     }
 }
@@ -1328,6 +1335,9 @@ mod tests {
         assert_eq!(items, ["one", "two"]);
         // A newline-separated string is accepted as a list.
         assert_eq!(as_list(&json!("- a\n- b")).unwrap(), ["a", "b"]);
+        // ...and a list of strings as a paragraph.
+        assert_eq!(as_text(&json!(["a", "b"])).unwrap(), "a\nb");
+        assert!(as_text(&json!([1, {"x": 2}])).is_none());
     }
 
     #[test]

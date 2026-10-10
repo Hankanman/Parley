@@ -1260,3 +1260,55 @@ mod generation_tests {
         assert!(!preview.is_empty());
     }
 }
+
+/// End-to-end check against the real built-in model and llama-helper
+/// sidecar (grammar-constrained decoding). Ignored by default; run with:
+///
+/// ```text
+/// cargo build --release -p llama-helper
+/// PARLEY_LLAMA_HELPER=$PWD/target/release/llama-helper \
+/// PARLEY_SMOKE_APP_DIR=<dir containing models/summary/gemma-3-4b-it-Q4_K_M.gguf> \
+/// cargo test -p parley-core --lib builtin_structured_smoke -- --ignored --nocapture
+/// ```
+#[cfg(test)]
+mod builtin_smoke {
+    use super::*;
+    use crate::summary::llm_client::LLMProvider;
+
+    #[tokio::test]
+    #[ignore]
+    async fn builtin_structured_smoke() {
+        let app_dir = std::env::var("PARLEY_SMOKE_APP_DIR").expect("set PARLEY_SMOKE_APP_DIR");
+        let config = LlmConfig {
+            provider: LLMProvider::BuiltInAI,
+            model: std::env::var("PARLEY_SMOKE_MODEL").unwrap_or_else(|_| "gemma3:4b".into()),
+            api_key: String::new(),
+            ollama_endpoint: None,
+            custom_openai_endpoint: None,
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            app_data_dir: Some(app_dir.into()),
+        };
+        let transcript = "[00:01] Alice: Okay, let's go through the Q3 budget. Marketing is 20% over.\n\
+            [00:12] Bob: We agreed to freeze hiring until October, right?\n\
+            [00:15] Alice: Yes, hiring freeze until October is decided.\n\
+            [00:30] Bob: I'll send the revised budget to Finance by Friday.\n\
+            [00:41] Alice: We still don't know whether to renew the office lease.";
+        let notes = vec!["hiring freeze?".to_string(), "lease".to_string()];
+        let out = generate_meeting_summary(
+            &config,
+            transcript,
+            "",
+            "standard_meeting",
+            &notes,
+            config.token_threshold().await,
+            None,
+            None,
+        )
+        .await
+        .expect("summary");
+        println!("{}\n---\n{:#?}", out.markdown, out.structured);
+        assert!(out.structured.is_some(), "structured path should succeed");
+    }
+}
