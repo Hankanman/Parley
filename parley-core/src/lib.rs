@@ -22,6 +22,7 @@ pub mod anthropic;
 pub mod audio;
 pub mod bootstrap;
 pub mod calendar;
+pub mod chat;
 pub mod config;
 pub mod database;
 pub mod events;
