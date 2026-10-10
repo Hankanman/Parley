@@ -540,10 +540,10 @@ fn assistant_row(id: SharedString, content: &str, entity: WeakEntity<AskPanel>) 
         TextView::markdown(id, markdown)
             .selectable(true)
             .on_link_click(move |url, _, _, cx| {
+                // Only citations act. Answers are model output steered by
+                // transcript text, so nothing else in them is opened.
                 if let Some(seconds) = chat::citation_link_seconds(url) {
                     let _ = entity.update(cx, |_, cx| cx.emit(AskPanelEvent::JumpTo(seconds)));
-                } else {
-                    cx.open_url(url);
                 }
             }),
     )
