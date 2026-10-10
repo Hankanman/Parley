@@ -1,11 +1,14 @@
 use crate::database::repositories::{
-    meeting::MeetingsRepository, summary::SummaryProcessesRepository,
+    action_item::ActionItemsRepository, meeting::MeetingsRepository,
+    meeting_note::MeetingNotesRepository, summary::SummaryProcessesRepository,
 };
 use crate::events::{EventSinkExt, SharedEventSink};
 use crate::summary::llm_client::LlmConfig;
 use crate::summary::processor::{
     extract_meeting_name_from_markdown, generate_meeting_summary, strip_first_heading_line,
+    SummaryStream,
 };
+use crate::summary::structured::StructuredSummary;
 use once_cell::sync::Lazy;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -24,6 +27,37 @@ static CANCELLATION_REGISTRY: Lazy<Arc<Mutex<HashMap<String, (u64, CancellationT
     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 static REGISTRATION_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Forwards the final summary's live preview to the UI as `summary-stream`
+/// events. A `reset: true` event tells the UI to discard what it has
+/// streamed so far (a retry or the Markdown fallback is about to re-stream).
+struct EventSummaryStream {
+    sink: SharedEventSink,
+    meeting_id: String,
+}
+
+impl SummaryStream for EventSummaryStream {
+    fn delta(&self, text: &str) {
+        let _ = self.sink.emit_event(
+            "summary-stream",
+            &serde_json::json!({
+                "meeting_id": self.meeting_id,
+                "delta": text,
+            }),
+        );
+    }
+
+    fn reset(&self) {
+        let _ = self.sink.emit_event(
+            "summary-stream",
+            &serde_json::json!({
+                "meeting_id": self.meeting_id,
+                "delta": "",
+                "reset": true,
+            }),
+        );
+    }
+}
 
 /// Summary service - handles all summary generation logic
 pub struct SummaryService;
@@ -131,20 +165,25 @@ impl SummaryService {
 
         let token_threshold = config.token_threshold().await;
 
-        // Forward the final pass's streamed tokens to the UI so the summary
+        // Forward the final pass's streamed output to the UI so the summary
         // renders progressively instead of appearing all at once. Providers
         // that don't stream (everything except built-in AI today) simply
         // never invoke the sink and the UI keeps its spinner.
-        let stream_event_sink = sink.clone();
-        let stream_meeting_id = meeting_id.clone();
-        let stream_sink = move |delta: &str| {
-            let _ = stream_event_sink.emit_event(
-                "summary-stream",
-                &serde_json::json!({
-                    "meeting_id": stream_meeting_id,
-                    "delta": delta,
-                }),
-            );
+        let stream = EventSummaryStream {
+            sink: sink.clone(),
+            meeting_id: meeting_id.clone(),
+        };
+
+        // The user's own notes ride along as priorities (#82). A failure to
+        // read them shouldn't cost the user their summary.
+        let notes: Vec<String> = match MeetingNotesRepository::list_by_meeting(&pool, &meeting_id)
+            .await
+        {
+            Ok(notes) => notes.into_iter().map(|n| n.body).collect(),
+            Err(e) => {
+                warn!("Failed to load notes for {}: {}", meeting_id, e);
+                Vec::new()
+            }
         };
 
         let result = generate_meeting_summary(
@@ -152,9 +191,10 @@ impl SummaryService {
             &text,
             &custom_prompt,
             &template_id,
+            &notes,
             token_threshold,
             Some(&cancellation_token),
-            Some(&stream_sink),
+            Some(&stream),
         )
         .await;
 
@@ -184,10 +224,16 @@ impl SummaryService {
                     duration
                 );
 
-                // Adopt the summary's heading as the meeting name, but only
+                // Adopt the summary's title as the meeting name, but only
                 // over a generated placeholder ("Meeting 08_10_26_…") — a
                 // title the user typed or a calendar event supplied stays.
-                if let Some(name) = extract_meeting_name_from_markdown(&final_markdown) {
+                // Structured output carries it as an explicit (already
+                // sanitized) field; free-form Markdown in its first heading.
+                let title = match &output.structured {
+                    Some(structured) => Some(structured.title.clone()),
+                    None => extract_meeting_name_from_markdown(&final_markdown),
+                };
+                if let Some(name) = title {
                     if !name.is_empty() {
                         match MeetingsRepository::update_placeholder_title(
                             &pool,
@@ -219,6 +265,10 @@ impl SummaryService {
                 let mut result_json = serde_json::json!({
                     "markdown": final_markdown,
                 });
+                if let Some(structured) = &output.structured {
+                    result_json["structured"] =
+                        serde_json::to_value(structured).unwrap_or(serde_json::Value::Null);
+                }
                 if output.failed_chunks > 0 {
                     warn!(
                         "Summary for {} is partial: {} chunk(s) failed",
@@ -259,24 +309,40 @@ impl SummaryService {
                         );
                     }
 
-                    // Best-effort, no-op unless the user turned on export
-                    // folder sync (Settings → Integrations); logs its own errors.
-                    crate::export::folder_sync::sync_after_summary(&pool, &meeting_id).await;
+                    match &output.structured {
+                        // The structured summary already carries its action
+                        // items: store them directly, no extra LLM pass.
+                        Some(structured) => {
+                            Self::store_structured_action_items(
+                                &sink,
+                                &pool,
+                                &meeting_id,
+                                structured,
+                            )
+                            .await
+                        }
+                        // Free-form fallback: extract structured action
+                        // items from the *transcript* (grounded to their
+                        // timestamps). Spawned rather than awaited — the
+                        // summary is already saved and on screen; a slow or
+                        // failing extraction must not delay or affect it.
+                        // Only runs once the summary is committed, so a
+                        // failure here can never roll one back.
+                        None => crate::summary::transcript_action_items::spawn_transcript_extraction(
+                            sink.clone(),
+                            pool.clone(),
+                            meeting_id.clone(),
+                            model_provider.clone(),
+                            model_name.clone(),
+                        ),
+                    }
 
-                    // Best-effort: extract structured action items from the
-                    // *transcript* (grounded to their timestamps), not the
-                    // summary. Spawned rather than awaited — the summary is
-                    // already saved and on screen; a slow or failing
-                    // extraction must not delay or affect it. Only runs once
-                    // the summary is committed, so a failure here can never
-                    // roll one back.
-                    crate::summary::transcript_action_items::spawn_transcript_extraction(
-                        sink.clone(),
-                        pool.clone(),
-                        meeting_id.clone(),
-                        model_provider.clone(),
-                        model_name.clone(),
-                    );
+                    // Best-effort, no-op unless the user turned on export
+                    // folder sync (Settings → Integrations); logs its own
+                    // errors. Runs after the structured action items are
+                    // stored so the note includes them; writes the stored
+                    // (final rendered) Markdown on both paths.
+                    crate::export::folder_sync::sync_after_summary(&pool, &meeting_id).await;
                 }
             }
             Err(e) => {
@@ -299,6 +365,40 @@ impl SummaryService {
                     Self::update_process_failed(&pool, &meeting_id, &e).await;
                 }
             }
+        }
+    }
+
+    /// Replace the meeting's extractor-owned action items with the ones the
+    /// structured summary returned — the same slot (and the same cleanup and
+    /// carry-over rules) the transcript extraction pass writes to, so ticked
+    /// items survive a regeneration. Emits `action-items-extracted`.
+    async fn store_structured_action_items(
+        sink: &SharedEventSink,
+        pool: &SqlitePool,
+        meeting_id: &str,
+        structured: &StructuredSummary,
+    ) {
+        let items = crate::summary::action_extraction::normalize_structured_items(
+            structured
+                .action_items
+                .iter()
+                .map(|a| (a.text.clone(), a.owner.clone(), a.due.clone())),
+        );
+        match ActionItemsRepository::replace_summary_items(pool, meeting_id, &items).await {
+            Ok(count) => {
+                info!(
+                    "Stored {} action item(s) from the structured summary for {}",
+                    count, meeting_id
+                );
+                let _ = sink.emit_event(
+                    "action-items-extracted",
+                    &serde_json::json!({ "meeting_id": meeting_id, "count": count }),
+                );
+            }
+            Err(e) => error!(
+                "Failed to store structured action items for {}: {}",
+                meeting_id, e
+            ),
         }
     }
 

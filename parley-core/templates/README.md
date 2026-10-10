@@ -84,3 +84,31 @@ let available = templates::list_templates();
 let custom_json = std::fs::read_to_string("custom.json")?;
 let validated = templates::validate_template(&custom_json)?;
 ```
+
+## Structured (JSON) Output
+
+Summaries are generated as structured JSON first and rendered back to the
+Markdown layout below (`# Title`, then one `**Section**` block per template
+section). Each template gets its **own JSON schema, derived automatically
+from its sections** — nothing extra to write, custom templates included:
+
+- `title` and `overview` are always present. A paragraph/string section
+  whose title contains "summary" or "overview" is filled from `overview`;
+  otherwise the overview renders as an untitled lead paragraph.
+- Every other section becomes a property keyed by a slug of its title
+  (`"Top Risks & Mitigations"` → `top_risks_mitigations`): a string for
+  `paragraph`/`string`, an array of strings for `list`. A table-style
+  `item_format` becomes per-item guidance ("Each item should cover: Owner,
+  Blocker, Impact"); list items render as bullets.
+- List sections about decisions, action items / next steps, or open
+  questions are filled from the core `decisions`, `action_items`
+  (`{text, owner, due}`) and `open_questions` fields. Those core fields are
+  always requested; when the template has no section for them they're
+  appended as **Key Decisions** / **Action Items** / **Open Questions**, only
+  if non-empty.
+- When the meeting has notes, a **Your Notes** section lists each note
+  verbatim with what the transcript says about it.
+
+If a provider can't produce valid JSON (after one retry), the summary falls
+back to the free-form Markdown prompt built from the same template. See
+`parley-core/src/summary/structured.rs`.
