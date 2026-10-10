@@ -53,8 +53,10 @@ async fn run(sink: SharedEventSink, pool: SqlitePool, meeting_id: &str) -> Resul
         .await?
         .ok_or_else(|| anyhow!("no summary model configured"))?;
 
+    // Stored with `set_setting::<String>`, i.e. as a JSON string — read it
+    // back typed so the quotes don't end up in the template id.
     let configured_template =
-        SettingsRepository::get_setting_json(&pool, KEY_DEFAULT_SUMMARY_TEMPLATE).await?;
+        SettingsRepository::get_setting::<String>(&pool, KEY_DEFAULT_SUMMARY_TEMPLATE).await?;
     let template_id = resolve_template(configured_template.as_deref());
 
     info!(
