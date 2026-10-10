@@ -4,6 +4,7 @@
 
 mod app_state;
 mod core_events;
+mod crash_log;
 mod fonts;
 mod notifications;
 mod recovery;
@@ -32,11 +33,12 @@ use runtime::Io;
 static QUIT_STARTED: AtomicBool = AtomicBool::new(false);
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(
+    // stderr + ~/.local/state/parley/logs/parley.log, panic and
+    // fatal-signal breadcrumbs (issue #91).
+    crash_log::init(
         "info,whisper_rs=warn,zbus=warn,tracing=warn,wgpu_hal=warn,wgpu_core=warn,naga=warn,\
          wgpu_hal::vulkan::instance=error,gpui_component::theme::mono_font=error",
-    ))
-    .init();
+    );
 
     let io = Io::new().expect("failed to start the tokio runtime");
     let (sink, events_rx) = core_events::channel();

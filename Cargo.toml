@@ -37,11 +37,14 @@ tokio = { version = "1.32.0", features = ["full"] }
 [profile.release]
 lto = "thin"
 codegen-units = 1
-strip = true
+# Keep the symbol table, drop only DWARF: crash stacks from systemd-coredump
+# then name functions instead of "n/a (parley + 0xe614551)" (issue #91), for
+# a fraction of full debuginfo's size.
+strip = "debuginfo"
 
 # NOTE: `NO_STRIP` in build.sh works around a Fedora linuxdeploy SHT_RELR
 # issue in the *bundler* step (AppImage packaging), not this cargo profile —
-# `strip = true` here still runs during `cargo build --release` regardless
+# `strip = "debuginfo"` here still runs during `cargo build --release` regardless
 # of that env var; it only suppresses linuxdeploy's own separate strip pass.
 [profile.release.package.llama-helper]
 codegen-units = 1
