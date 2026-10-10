@@ -117,7 +117,7 @@ Mic stream (48 kHz)          System stream (48 kHz, sink monitor)
 │      sample position into 50 ms windows                        │
 │   2. Mic-only speakerphone chain (mic_processor.rs, WebRTC APM)│
 │      HPF → AEC3 (system window = far-end ref) → noise supp.    │
-│      (High) → AGC2 adaptive digital (never lifts noise floor)  │
+│      (VeryHigh) → AGC2 adaptive digital (never lifts noise floor)│
 │   3. System window is left untouched                           │
 │   4. Per-source VAD (vad.rs, sherpa silero) → 16 kHz speech    │
 │      segments tagged Microphone / System                        │
