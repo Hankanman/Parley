@@ -267,8 +267,10 @@ impl RecordingManager {
     ) -> Result<(Option<String>, Option<f64>)> {
         debug!("Saving recording with transcript chunks");
 
-        // Get actual recording duration from state
-        let recording_duration = self.state.get_active_recording_duration();
+        // The state's duration is usually already cleared by now; the saver
+        // computes the real one (falling back to the state value) and hands
+        // it back so the DB gets the same figure as metadata.json.
+        let mut recording_duration = self.state.get_active_recording_duration();
         info!("Recording duration from state: {:?}s", recording_duration);
 
         // Save the recording with actual duration
@@ -277,8 +279,9 @@ impl RecordingManager {
             .stop_and_save(sink, recording_duration)
             .await
         {
-            Ok(Some(file_path)) => {
+            Ok(Some((file_path, saved_duration))) => {
                 info!("Recording saved successfully to: {}", file_path);
+                recording_duration = saved_duration.or(recording_duration);
                 Some(file_path)
             }
             Ok(None) => {
@@ -326,7 +329,7 @@ impl RecordingManager {
             .stop_and_save(sink, recording_duration)
             .await
         {
-            Ok(Some(file_path)) => {
+            Ok(Some((file_path, _))) => {
                 info!("Recording saved successfully to: {}", file_path);
             }
             Ok(None) => {
