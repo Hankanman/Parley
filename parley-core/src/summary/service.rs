@@ -340,6 +340,13 @@ impl SummaryService {
                             model_name.clone(),
                         ),
                     }
+
+                    // Best-effort, no-op unless the user turned on export
+                    // folder sync (Settings → Integrations); logs its own
+                    // errors. Runs after the structured action items are
+                    // stored so the note includes them; writes the stored
+                    // (final rendered) Markdown on both paths.
+                    crate::export::folder_sync::sync_after_summary(&pool, &meeting_id).await;
                 }
             }
             Err(e) => {

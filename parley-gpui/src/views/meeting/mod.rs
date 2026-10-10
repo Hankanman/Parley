@@ -957,7 +957,11 @@ impl MeetingView {
             // Best-effort sidecar write, same as the Tauri save command —
             // failures here don't fail the save, the DB is the source of truth.
             let _ = io
-                .spawn(async move { markdown_export::write_summary_md(&pool_for_md, &id_for_md, &value_for_md).await })
+                .spawn(async move {
+                    let _ = markdown_export::write_summary_md(&pool_for_md, &id_for_md, &value_for_md).await;
+                    // Keep the export-folder note (if enabled) in step with edits.
+                    parley_core::export::folder_sync::sync_after_summary(&pool_for_md, &id_for_md).await;
+                })
                 .await;
 
             let _ = this.update(cx, |this, cx| {
@@ -1038,10 +1042,9 @@ impl MeetingView {
         .detach();
     }
 
-    /// Export, then a native save-file dialog, mirroring
-    /// `export_meeting_to_file`'s Tauri command (minus the Tauri dialog
-    /// plugin — GPUI's own `prompt_for_new_path`).
-    fn export_save(&mut self, format: &'static str, cx: &mut Context<Self>) {
+    /// Export in any format (Markdown, JSON, SRT, VTT, DOCX, PDF), then a
+    /// native save-file dialog (GPUI's `prompt_for_new_path`).
+    fn export_save(&mut self, format: parley_core::export::ExportFormat, cx: &mut Context<Self>) {
         let Some(id) = self.meeting_id.clone() else {
             return;
         };
@@ -1051,11 +1054,18 @@ impl MeetingView {
         let io = Io::global(cx);
         cx.spawn(async move |_this, cx| {
             let result = io
-                .spawn(async move { parley_core::export::build_export(&pool, &id, format).await })
+                .spawn(async move { parley_core::export::build_export_file(&pool, &id, format).await })
                 .await;
             let export = match result {
                 Ok(Ok(export)) => export,
-                _ => {
+                Ok(Err(e)) => {
+                    log::warn!("meeting: {} export failed: {e}", format.name());
+                    // Core errors here are written for people ("This
+                    // transcript has no timestamps…"), so show them.
+                    let _ = cx.update(|cx| notify(cx, Notification::error(format!("Export failed: {e}"))));
+                    return;
+                }
+                Err(_) => {
                     let _ = cx.update(|cx| notify(cx, Notification::error("Failed to export meeting")));
                     return;
                 }
@@ -1065,7 +1075,7 @@ impl MeetingView {
             let rx = cx.update(|cx| cx.prompt_for_new_path(&home, Some(&export.filename)));
             match rx.await {
                 Ok(Ok(Some(path))) => {
-                    let content = export.content;
+                    let content = export.bytes;
                     let write_result = io.spawn(async move { std::fs::write(&path, content) }).await;
                     let _ = cx.update(|cx| match write_result {
                         Ok(Ok(())) => notify(cx, Notification::success("Meeting exported")),
@@ -1081,6 +1091,44 @@ impl MeetingView {
             }
         })
         .detach();
+    }
+
+    /// The header's "Export…" button: one menu entry per save format.
+    fn render_export_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+        use parley_core::export::ExportFormat;
+
+        let view = cx.entity().downgrade();
+        Button::new("export-meeting")
+            .ghost()
+            .icon(Lucide::Download)
+            .tooltip("Export meeting…")
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                for (i, format) in [
+                    ExportFormat::Markdown,
+                    ExportFormat::Json,
+                    ExportFormat::Docx,
+                    ExportFormat::Pdf,
+                    ExportFormat::Srt,
+                    ExportFormat::Vtt,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    // Separate the documents from the transcript-only subtitles.
+                    if i == 4 {
+                        menu = menu.separator();
+                    }
+                    let view = view.clone();
+                    menu = menu.item(PopupMenuItem::new(format!("{}…", format.label())).on_click(
+                        move |_, _, cx| {
+                            let _ = view.update(cx, |this, cx| this.export_save(format, cx));
+                        },
+                    ));
+                }
+                menu
+            })
     }
 
     // ---- Retranscription -----------------------------------------------------
@@ -2472,20 +2520,7 @@ impl MeetingView {
                             .tooltip("Copy meeting as JSON")
                             .on_click(cx.listener(|this, _, _, cx| this.export_copy("json", cx))),
                     )
-                    .child(
-                        Button::new("save-summary-md")
-                            .ghost()
-                            .icon(Lucide::Download)
-                            .tooltip("Save meeting as Markdown…")
-                            .on_click(cx.listener(|this, _, _, cx| this.export_save("markdown", cx))),
-                    )
-                    .child(
-                        Button::new("save-summary-json")
-                            .ghost()
-                            .icon(Lucide::FileCode)
-                            .tooltip("Save meeting as JSON…")
-                            .on_click(cx.listener(|this, _, _, cx| this.export_save("json", cx))),
-                    )
+                    .child(self.render_export_menu(cx))
                     .child(
                         Button::new("delete-meeting")
                             .danger()
