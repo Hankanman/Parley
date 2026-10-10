@@ -169,6 +169,26 @@ impl MeetingsRepository {
         Ok((transcripts, total.0))
     }
 
+    /// Replace the title with `new_title` only if the current one is a
+    /// generated placeholder (see `is_placeholder_title`). Returns whether
+    /// the title was changed.
+    pub async fn update_placeholder_title(
+        pool: &SqlitePool,
+        meeting_id: &str,
+        new_title: &str,
+    ) -> Result<bool, SqlxError> {
+        let current: Option<(String,)> = sqlx::query_as("SELECT title FROM meetings WHERE id = ?")
+            .bind(meeting_id)
+            .fetch_optional(pool)
+            .await?;
+        match current {
+            Some((title,)) if crate::summary::processor::is_placeholder_title(&title) => {
+                Self::update_meeting_title(pool, meeting_id, new_title).await
+            }
+            _ => Ok(false),
+        }
+    }
+
     pub async fn update_meeting_title(
         pool: &SqlitePool,
         meeting_id: &str,
@@ -434,6 +454,42 @@ mod lifecycle_tests {
         assert_eq!(meeting.duration_seconds, Some(123.5));
         assert_eq!(meeting.audio_path.as_deref(), Some("/tmp/m1/audio.mp4"));
         assert!(meeting.completed_at.is_some());
+    }
+
+    /// A summary heading replaces only a generated placeholder title; a
+    /// user- or calendar-supplied title is kept (issue #78).
+    #[tokio::test]
+    async fn summary_title_only_replaces_placeholders() {
+        let pool = test_pool().await;
+        MeetingsRepository::create_recording_meeting(&pool, "p", "Meeting 08_10_26_10_24_37", None)
+            .await
+            .unwrap();
+        MeetingsRepository::create_recording_meeting(&pool, "n", "Kingfisher Catch Up", None)
+            .await
+            .unwrap();
+
+        assert!(MeetingsRepository::update_placeholder_title(&pool, "p", "Cloud Strategy")
+            .await
+            .unwrap());
+        assert!(!MeetingsRepository::update_placeholder_title(&pool, "n", "Something Else")
+            .await
+            .unwrap());
+        assert!(!MeetingsRepository::update_placeholder_title(&pool, "missing", "X")
+            .await
+            .unwrap());
+
+        let title = |id: &'static str| {
+            let pool = pool.clone();
+            async move {
+                MeetingsRepository::get_meeting_metadata(&pool, id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .title
+            }
+        };
+        assert_eq!(title("p").await, "Cloud Strategy");
+        assert_eq!(title("n").await, "Kingfisher Catch Up");
     }
 
     /// A fatal-error stop moves the row to "interrupted" instead.
