@@ -37,6 +37,7 @@ pub mod llm_client;
 pub mod markdown_export;
 pub mod processor;
 pub mod service;
+pub mod structured;
 pub mod summary_engine;
 pub mod templates;
 
