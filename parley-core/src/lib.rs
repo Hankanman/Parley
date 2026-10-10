@@ -28,6 +28,7 @@ pub mod config;
 pub mod database;
 pub mod events;
 pub mod export;
+pub mod followup;
 pub mod glossary;
 pub mod groq;
 pub mod llm_providers;
