@@ -21,7 +21,8 @@ use crate::database::models::MeetingTranscript;
 use crate::events::{EventSinkExt, SharedEventSink};
 
 /// Emitted whenever a meeting's bookmarks change:
-/// `{ "meeting_id": String }`.
+/// `{ "meeting_id": String, "added"?: MeetingBookmark }` (`added` is set by
+/// [`bookmark_now`], so the recording view can confirm the new mark).
 pub const BOOKMARKS_CHANGED_EVENT: &str = "meeting-bookmarks-changed";
 
 /// Longest label kept, in characters.
@@ -135,10 +136,21 @@ impl BookmarksRepository {
     }
 }
 
-fn emit_changed(sink: &SharedEventSink, meeting_id: &str) {
+/// Payload of [`BOOKMARKS_CHANGED_EVENT`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BookmarksChanged {
+    pub meeting_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added: Option<MeetingBookmark>,
+}
+
+fn emit_changed(sink: &SharedEventSink, meeting_id: &str, added: Option<&MeetingBookmark>) {
     let _ = sink.emit_event(
         BOOKMARKS_CHANGED_EVENT,
-        &serde_json::json!({ "meeting_id": meeting_id }),
+        &BookmarksChanged {
+            meeting_id: meeting_id.to_string(),
+            added: added.cloned(),
+        },
     );
 }
 
@@ -156,7 +168,7 @@ pub async fn bookmark_now(
     let bookmark = BookmarksRepository::add(&pool, &meeting_id, offset, label.as_deref())
         .await
         .map_err(|e| format!("Failed to save bookmark: {e}"))?;
-    emit_changed(&sink, &meeting_id);
+    emit_changed(&sink, &meeting_id, Some(&bookmark));
     Ok(bookmark)
 }
 
@@ -171,7 +183,7 @@ pub async fn rename_bookmark(
     BookmarksRepository::update_label(&pool, &id, &label)
         .await
         .map_err(|e| format!("Failed to rename bookmark: {e}"))?;
-    emit_changed(&sink, &meeting_id);
+    emit_changed(&sink, &meeting_id, None);
     Ok(())
 }
 
@@ -185,7 +197,7 @@ pub async fn delete_bookmark(
     BookmarksRepository::delete(&pool, &id)
         .await
         .map_err(|e| format!("Failed to delete bookmark: {e}"))?;
-    emit_changed(&sink, &meeting_id);
+    emit_changed(&sink, &meeting_id, None);
     Ok(())
 }
 
