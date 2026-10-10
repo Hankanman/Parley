@@ -80,10 +80,11 @@ pub struct GetTranscriptArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchTranscriptsArgs {
-    /// Text to find. This is a literal case-insensitive SUBSTRING match, not
-    /// fuzzy or semantic search: "budgets" will not match "budget", and
-    /// multi-word queries match only an exact contiguous phrase. Prefer short
-    /// single keywords.
+    /// Words to find. Full-text keyword search: every word must appear in the
+    /// segment (any order), case- and accent-insensitive, and the last word
+    /// also matches as a prefix ("budg" finds "budget", "budgets"). Not
+    /// semantic — synonyms don't match. Search operators and quotes are
+    /// treated as plain text.
     pub query: String,
     /// Max matching segments to return. Default 50, capped at 500.
     pub limit: Option<u32>,
@@ -301,10 +302,13 @@ impl ParleyMcp {
 
     #[tool(
         name = "search_transcripts",
-        description = "Find transcript segments containing a literal substring, \
-                       across every meeting. Case-insensitive but NOT fuzzy or \
-                       semantic — use short single keywords, and expect exact \
-                       word forms only."
+        description = "Full-text keyword search over transcript segments across \
+                       every meeting, ranked by relevance (best first). Every \
+                       word must appear in a segment (any order); case- and \
+                       accent-insensitive; the last word also matches as a \
+                       prefix. Each hit has a snippet with matched words in \
+                       **bold**. Keyword-based, not semantic: try a few \
+                       distinctive words, and synonyms if nothing comes back."
     )]
     pub async fn search_transcripts(
         &self,
@@ -530,8 +534,8 @@ impl ServerHandler for ParleyMcp {
                  Typical flow: `list_meetings` (or `search_transcripts`) to find \
                  a meeting_id, then `get_meeting` for the summary or \
                  `get_transcript` for what was actually said.\n\n\
-                 Notes: `search_transcripts` is literal substring matching, not \
-                 semantic — use short keywords. All timestamps are UTC. Anything \
+                 Notes: `search_transcripts` is ranked full-text keyword search \
+                 (all words must match), not semantic. All timestamps are UTC. Anything \
                  you create is tagged source=\"agent\" so the user can tell it \
                  apart from their own entries. `update_summary` overwrites the \
                  whole summary; read it first if revising.\n\n\

@@ -212,15 +212,6 @@ pub struct TranscriptSetting {
 // are part of the UI contract.
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TranscriptSearchResult {
-    pub id: String,
-    pub title: String,
-    #[serde(rename = "matchContext")]
-    pub match_context: String,
-    pub timestamp: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct MeetingDetails {
     pub id: String,
     pub title: String,

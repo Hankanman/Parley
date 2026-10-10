@@ -557,8 +557,136 @@ pub async fn get_transcript(
         .collect()
 }
 
-/// Substring search across every transcript segment.
+/// Ranked full-text search across every transcript segment.
+///
+/// Uses the app's `transcripts_fts` FTS5 index (bm25-ranked, FTS5 snippets
+/// with matched terms in `**bold**`). A database migrated by an older app
+/// build won't have that index yet, so we fall back to the old
+/// case-insensitive substring scan there rather than failing.
 pub async fn search_transcripts(
+    pool: &SqlitePool,
+    query: &str,
+    limit: u32,
+) -> Result<Vec<TranscriptHit>, sqlx::Error> {
+    if has_fts_index(pool).await? {
+        search_transcripts_fts(pool, query, limit).await
+    } else {
+        search_transcripts_like(pool, query, limit).await
+    }
+}
+
+/// Whether the app's FTS5 transcript index exists in this database.
+async fn has_fts_index(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
+    let found: Option<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'transcripts_fts'",
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(found.is_some())
+}
+
+/// Upper bound on the number of terms taken from a search query.
+const MAX_FTS_TERMS: usize = 32;
+
+/// Turn free-form agent input into a safe FTS5 `MATCH` expression, or `None`
+/// if nothing in it is searchable.
+///
+/// Mirrors `parley_core::database::search::match_expression` (this crate
+/// deliberately doesn't link `parley-core`): every word is double-quoted so
+/// FTS5 operators and stray quotes are matched as text, words are ANDed, the
+/// last word is a prefix match unless the input ends in whitespace, and words
+/// with no letters or digits are dropped.
+pub fn fts_match_expression(input: &str) -> Option<String> {
+    let words: Vec<&str> = input
+        .split_whitespace()
+        .filter(|w| w.chars().any(char::is_alphanumeric))
+        .take(MAX_FTS_TERMS)
+        .collect();
+    if words.is_empty() {
+        return None;
+    }
+    let last_is_partial = !input.ends_with(char::is_whitespace);
+    let last = words.len() - 1;
+    let terms: Vec<String> = words
+        .iter()
+        .enumerate()
+        .map(|(i, word)| {
+            let quoted = format!("\"{}\"", word.replace('"', "\"\""));
+            if i == last && last_is_partial {
+                quoted + "*"
+            } else {
+                quoted
+            }
+        })
+        .collect();
+    Some(terms.join(" "))
+}
+
+async fn search_transcripts_fts(
+    pool: &SqlitePool,
+    query: &str,
+    limit: u32,
+) -> Result<Vec<TranscriptHit>, sqlx::Error> {
+    let Some(expression) = fts_match_expression(query) else {
+        return Ok(Vec::new());
+    };
+
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            m.id AS meeting_id,
+            m.title AS meeting_title,
+            m.created_at AS meeting_created_at,
+            snippet(transcripts_fts, 0, '**', '**', '…', 24) AS snippet,
+            t.speaker,
+            t.audio_start_time,
+            vp.name AS voice_profile_name
+        FROM transcripts_fts
+        JOIN transcripts t ON t.rowid = transcripts_fts.rowid
+        JOIN meetings m ON m.id = t.meeting_id
+        LEFT JOIN voice_profiles vp ON vp.id = t.voice_profile_id
+        WHERE transcripts_fts MATCH ?
+        ORDER BY transcripts_fts.rank
+        LIMIT ?
+        "#,
+    )
+    .bind(&expression)
+    .bind(limit)
+    .fetch_all(pool)
+    .await;
+
+    let rows = match rows {
+        Ok(rows) => rows,
+        // The quoting above should make this unreachable; if FTS5 still
+        // rejects the expression, report "no matches" rather than leaking a
+        // syntax error to the agent.
+        Err(sqlx::Error::Database(db))
+            if db.message().contains("fts5") || db.message().contains("MATCH") =>
+        {
+            tracing::warn!(%expression, error = %db, "FTS5 rejected search expression");
+            return Ok(Vec::new());
+        }
+        Err(e) => return Err(e),
+    };
+
+    rows.into_iter()
+        .map(|r| {
+            let speaker: Option<String> = r.try_get("speaker")?;
+            let profile: Option<String> = r.try_get("voice_profile_name")?;
+            Ok(TranscriptHit {
+                meeting_id: r.try_get("meeting_id")?,
+                meeting_title: r.try_get("meeting_title")?,
+                meeting_created_at: r.try_get("meeting_created_at")?,
+                snippet: r.try_get("snippet")?,
+                speaker_label: speaker_label(speaker.as_deref(), profile.as_deref()),
+                start: format_offset(r.try_get("audio_start_time")?),
+            })
+        })
+        .collect()
+}
+
+/// Substring search, for databases that predate the FTS5 index.
+async fn search_transcripts_like(
     pool: &SqlitePool,
     query: &str,
     limit: u32,
@@ -1077,5 +1205,86 @@ mod tests {
     #[test]
     fn date_prefix_filter_targets_the_date_only() {
         assert_eq!(date_prefix_filter("m.created_at"), "substr(m.created_at, 1, 10)");
+    }
+
+    #[test]
+    fn fts_match_expression_quotes_and_prefixes() {
+        assert_eq!(fts_match_expression("budget review").as_deref(), Some("\"budget\" \"review\"*"));
+        assert_eq!(fts_match_expression("budget ").as_deref(), Some("\"budget\""));
+        assert_eq!(fts_match_expression("a \"b").as_deref(), Some("\"a\" \"\"\"b\"*"));
+        assert_eq!(fts_match_expression(" * - "), None);
+    }
+
+    /// A pool with the app's real schema (parley-core's migrations), so these
+    /// tests exercise the FTS5 table and triggers the app creates.
+    async fn migrated_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("../parley-core/migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    async fn seed(pool: &SqlitePool) {
+        for (id, title) in [("m1", "Standup"), ("m2", "Planning")] {
+            sqlx::query("INSERT INTO meetings (id, title, created_at, updated_at) VALUES (?, ?, '2026-10-10', '2026-10-10')")
+                .bind(id)
+                .bind(title)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        for (id, meeting, text, start) in [
+            ("t1", "m1", "the budget came up briefly", 5.0),
+            ("t2", "m2", "budget budget: the budget review for the budget", 65.0),
+            ("t3", "m2", "unrelated chatter", 70.0),
+        ] {
+            sqlx::query(
+                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, speaker) VALUES (?, ?, ?, 'ts', ?, 'mic')",
+            )
+            .bind(id)
+            .bind(meeting)
+            .bind(text)
+            .bind(start)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn search_transcripts_is_ranked_with_highlighted_snippets() {
+        let pool = migrated_pool().await;
+        seed(&pool).await;
+
+        let hits = search_transcripts(&pool, "budg", 10).await.unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].meeting_id, "m2", "denser match ranks first");
+        assert_eq!(hits[0].start.as_deref(), Some("00:01:05"));
+        assert!(hits[1].snippet.contains("**budget**"), "{}", hits[1].snippet);
+
+        assert_eq!(search_transcripts(&pool, "review budget", 10).await.unwrap().len(), 1);
+        for hostile in ["\"", "NEAR(", "a OR", "budget*", "transcript:x", "(", "^"] {
+            search_transcripts(&pool, hostile, 10)
+                .await
+                .unwrap_or_else(|e| panic!("{hostile:?} errored: {e}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn search_transcripts_falls_back_without_fts_index() {
+        let pool = migrated_pool().await;
+        seed(&pool).await;
+        // Simulate a database from an app build that predates the index.
+        sqlx::query("DROP TABLE transcripts_fts").execute(&pool).await.unwrap();
+        for trigger in ["transcripts_fts_ai", "transcripts_fts_ad", "transcripts_fts_au"] {
+            sqlx::query(&format!("DROP TRIGGER {trigger}")).execute(&pool).await.unwrap();
+        }
+
+        let hits = search_transcripts(&pool, "chatter", 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].meeting_id, "m2");
     }
 }
