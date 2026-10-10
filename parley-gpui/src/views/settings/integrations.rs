@@ -30,6 +30,7 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
                 )
                 .item(info_item(&view)),
         )
+        .group(super::export_folder::group(&view, cx))
 }
 
 fn info_item(view: &Entity<SettingsView>) -> SettingItem {
