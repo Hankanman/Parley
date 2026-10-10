@@ -48,11 +48,15 @@ pub(crate) fn speakerphone_config() -> Config {
             stream_delay_ms: None,
         }),
         noise_suppression: Some(NoiseSuppression {
-            level: NoiseSuppressionLevel::High,
-            // Only takes effect when AEC3 exports its linear output, which
-            // this wrapper cannot enable (experimental AEC3 config isn't
-            // exposed), so it is currently a no-op; kept for when it is.
-            analyze_linear_aec_output: true,
+            // VeryHigh: on the synthetic -35 dBFS noise scene it takes the
+            // floor down 13.6 dB (High managed 7.2) with near-end speech level
+            // unchanged. The output feeds Whisper, not a listener, so a
+            // slightly more processed voice is the right trade for less
+            // noise to hallucinate on.
+            level: NoiseSuppressionLevel::VeryHigh,
+            // Analysing AEC3's linear output needs it exported, which this
+            // crate's config can't turn on; measured no difference either way.
+            analyze_linear_aec_output: false,
         }),
         gain_controller: Some(GainController::GainController2(GainController2 {
             input_volume_controller_enabled: false,
