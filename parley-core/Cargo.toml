@@ -66,7 +66,6 @@ which = "6.0.1"
 bytemuck = "1.16.1"
 
 # EBU R128 loudness normalization (professional broadcast standard)
-ebur128 = "0.1"
 
 # Speech recognition and async utilities
 # NOTE: whisper-rs is declared in the Linux target-specific section below
