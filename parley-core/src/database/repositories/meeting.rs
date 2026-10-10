@@ -412,9 +412,15 @@ async fn delete_meeting_with_transaction(
         .execute(&mut *transaction)
         .await?;
 
-    // 4b. Delete its follow-up email draft (also ON DELETE CASCADE).
+    // 4b. Delete its follow-up email draft (also ON DELETE CASCADE), and
+    // any cached pre-meeting brief that cites it (briefs quote the meetings
+    // they cite, so one mustn't outlive them).
     sqlx::query("DELETE FROM meeting_followup_drafts WHERE meeting_id = ?")
         .bind(meeting_id)
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::query("DELETE FROM meeting_briefs WHERE instr(sources_json, ?) > 0")
+        .bind(format!("\"meeting_id\":{}", serde_json::Value::from(meeting_id)))
         .execute(&mut *transaction)
         .await?;
 

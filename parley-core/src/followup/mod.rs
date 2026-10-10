@@ -15,6 +15,7 @@
 //! untrusted: the email is plain text, the brief is rendered with the same
 //! escape-then-link approach as "Ask Parley".
 
+pub mod brief;
 pub mod email;
 
 use crate::calendar::models::Attendee;
