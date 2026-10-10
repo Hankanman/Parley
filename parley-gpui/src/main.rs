@@ -83,6 +83,16 @@ fn main() {
 
     let db_for_shutdown = db.clone();
     let io_for_shutdown = io.clone();
+
+    // Core futures should go through `io.spawn`, but anything awaited
+    // directly on GPUI's executor (this thread) that reaches for tokio —
+    // sqlx starts a tokio timer whenever it has to wait for a pooled
+    // connection — would panic with "this functionality requires a Tokio
+    // context" and take the app down. Entering the runtime here makes that
+    // a non-event for the whole run loop: the work itself still happens on
+    // the runtime's worker threads.
+    let runtime_handle = io.handle();
+    let runtime_context = runtime_handle.enter();
     app.run(move |cx| {
         gpui_kit::init(cx);
         zorite_editor::bind_keys(cx);
@@ -119,6 +129,8 @@ fn main() {
         })
         .detach();
     });
+
+    drop(runtime_context);
 
     // The run loop has exited: release the DB, sidecar and Whisper model.
     // Read the slot fresh here (rather than the `db` captured before
