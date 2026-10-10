@@ -249,6 +249,47 @@ pub fn sanitize_meeting_title(raw: &str) -> String {
     s
 }
 
+/// True for titles Parley generates itself when nobody named the meeting:
+/// "Meeting 08_10_26_10_24_37" (recording view), "Meeting 2025-10-03_08-25-23"
+/// (core fallback), or an empty title. Only these may be replaced by the
+/// summary's heading — a title the user typed or a linked calendar event
+/// supplied is never overwritten.
+pub fn is_placeholder_title(title: &str) -> bool {
+    let title = title.trim();
+    if title.is_empty() {
+        return true;
+    }
+    let Some(stamp) = title.strip_prefix("Meeting ") else {
+        return false;
+    };
+    let digits = stamp.chars().filter(|c| c.is_ascii_digit()).count();
+    digits >= 6
+        && stamp
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '_' | '-' | ':' | ' ' | '.'))
+}
+
+#[cfg(test)]
+mod placeholder_title_tests {
+    use super::is_placeholder_title;
+
+    #[test]
+    fn generated_titles_are_placeholders() {
+        assert!(is_placeholder_title("Meeting 08_10_26_10_24_37"));
+        assert!(is_placeholder_title("Meeting 2025-10-03_08-25-23"));
+        assert!(is_placeholder_title("  "));
+    }
+
+    #[test]
+    fn named_titles_are_kept() {
+        assert!(!is_placeholder_title("Kingfisher Catch Up"));
+        assert!(!is_placeholder_title("TMU/ECA - IT AI Use Cases"));
+        assert!(!is_placeholder_title("Meeting with Wez"));
+        assert!(!is_placeholder_title("Meeting 1"));
+        assert!(!is_placeholder_title("Meeting 2025 planning"));
+    }
+}
+
 #[cfg(test)]
 mod sanitize_title_tests {
     use super::sanitize_meeting_title;

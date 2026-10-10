@@ -173,18 +173,26 @@ impl SummaryService {
                     duration
                 );
 
-                // Extract and update meeting name if present
+                // Adopt the summary's heading as the meeting name, but only
+                // over a generated placeholder ("Meeting 08_10_26_…") — a
+                // title the user typed or a calendar event supplied stays.
                 if let Some(name) = extract_meeting_name_from_markdown(&final_markdown) {
                     if !name.is_empty() {
-                        info!(
-                            "Updating meeting name to '{}' for meeting_id: {}",
-                            name, meeting_id
-                        );
-                        if let Err(e) =
-                            MeetingsRepository::update_meeting_title(&pool, &meeting_id, &name)
-                                .await
+                        match MeetingsRepository::update_placeholder_title(
+                            &pool,
+                            &meeting_id,
+                            &name,
+                        )
+                        .await
                         {
-                            error!("Failed to update meeting name for {}: {}", meeting_id, e);
+                            Ok(true) => info!(
+                                "Named meeting {} '{}' from its summary",
+                                meeting_id, name
+                            ),
+                            Ok(false) => {}
+                            Err(e) => {
+                                error!("Failed to update meeting name for {}: {}", meeting_id, e)
+                            }
                         }
 
                         // The title now lives on the meeting row; drop the
