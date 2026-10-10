@@ -28,7 +28,7 @@ use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-pub use context::{parse_citations, AnswerSpan};
+pub use context::{citation_link_seconds, link_citations, parse_citations, AnswerSpan};
 
 /// Streamed answer text: `{ "meeting_id": String, "delta": String }`.
 pub const CHAT_STREAM_EVENT: &str = "meeting-chat-stream";

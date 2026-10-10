@@ -36,6 +36,11 @@ Rules:\n\
 - When asked to draft something (an email, a reply, a list of follow-ups), base it only on what was said in the meeting.\n\
 - Refer to people by the speaker names used in the transcript.";
 
+/// Repeated after the question: small local models weigh the end of a long
+/// prompt most, and without this they tend to drop the citations.
+pub const ANSWER_REMINDER: &str = "Answer concisely. Cite the transcript timestamp for each point, e.g. [12:34]. \
+If the transcript doesn't contain the answer, say so.";
+
 /// One transcript segment, reduced to what the chat context needs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContextSegment {
@@ -316,7 +321,10 @@ pub fn build_prompt(
 ) -> BuiltPrompt {
     let question = question.trim();
     let answer_reserve = (context_tokens / 8).clamp(256, 2_048);
-    let fixed = rough_token_count(SYSTEM_PROMPT) + rough_token_count(question) + SCAFFOLD_TOKENS;
+    let fixed = rough_token_count(SYSTEM_PROMPT)
+        + rough_token_count(ANSWER_REMINDER)
+        + rough_token_count(question)
+        + SCAFFOLD_TOKENS;
     let available = context_tokens.saturating_sub(answer_reserve + fixed);
 
     // -- Conversation so far: newest turns win.
@@ -449,7 +457,7 @@ pub fn build_prompt(
             history_lines.join("\n")
         ));
     }
-    user.push_str(&format!("Question: {question}"));
+    user.push_str(&format!("Question: {question}\n\n{ANSWER_REMINDER}"));
 
     BuiltPrompt {
         system: SYSTEM_PROMPT.to_string(),
@@ -509,6 +517,34 @@ pub fn parse_citations(answer: &str) -> Vec<AnswerSpan> {
         spans.push(AnswerSpan::Text(answer[last..].to_string()));
     }
     spans
+}
+
+/// URL scheme of the links [`link_citations`] produces.
+pub const CITATION_LINK_SCHEME: &str = "parley-time:";
+
+/// Rewrite every `[mm:ss]` citation in a markdown answer as a link
+/// (`[\[12:34\]](parley-time:754)`), so a markdown renderer shows it as a
+/// clickable link the UI can intercept. The visible text is unchanged.
+pub fn link_citations(answer: &str) -> String {
+    parse_citations(answer)
+        .into_iter()
+        .map(|span| match span {
+            AnswerSpan::Text(text) => text,
+            AnswerSpan::Citation { label, seconds } => format!(
+                "[{}]({CITATION_LINK_SCHEME}{})",
+                label.replace('[', "\\[").replace(']', "\\]"),
+                seconds as u64
+            ),
+        })
+        .collect()
+}
+
+/// The time (seconds) a [`link_citations`] link points at, if `url` is one.
+pub fn citation_link_seconds(url: &str) -> Option<f64> {
+    url.strip_prefix(CITATION_LINK_SCHEME)?
+        .parse::<u64>()
+        .ok()
+        .map(|s| s as f64)
 }
 
 #[cfg(test)]
@@ -574,7 +610,7 @@ mod tests {
         assert!(u.contains("[00:05] Alice: Let's review the budget.\n[00:12] Bob: Q3 is approved."));
         assert!(!u.contains("[00:20]"), "blank segments are dropped");
         assert!(u.contains("<conversation>\nUser: Who is Bob?\nAssistant: A participant [00:12].\n</conversation>"));
-        assert!(u.ends_with("Question: What was approved?"));
+        assert!(u.ends_with(&format!("Question: What was approved?\n\n{ANSWER_REMINDER}")));
         // Order: summary, notes, transcript, conversation, question.
         let pos = |s: &str| u.find(s).unwrap();
         assert!(pos("<summary>") < pos("<notes>"));
@@ -759,5 +795,17 @@ mod tests {
             vec![AnswerSpan::Text("no refs [here] or [12:75]".into())]
         );
         assert!(parse_citations("").is_empty());
+    }
+
+    #[test]
+    fn links_citations_for_markdown() {
+        let linked = link_citations("- Ship Friday [12:34].\n- No date [here].");
+        assert_eq!(
+            linked,
+            "- Ship Friday [\\[12:34\\]](parley-time:754).\n- No date [here]."
+        );
+        assert_eq!(citation_link_seconds("parley-time:754"), Some(754.0));
+        assert_eq!(citation_link_seconds("https://example.com"), None);
+        assert_eq!(citation_link_seconds("parley-time:abc"), None);
     }
 }
