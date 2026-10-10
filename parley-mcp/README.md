@@ -132,10 +132,17 @@ will overwrite what was just written when it finishes.
 
 ### A note on search
 
-`search_transcripts` is a literal, case-insensitive **substring** match — not
-fuzzy, not semantic. `"budget"` won't match `"budgets"`, and a multi-word query
-matches only an exact contiguous phrase. Short single keywords work best. `%`
-and `_` are matched literally, not as wildcards.
+`search_transcripts` is ranked full-text keyword search, backed by the app's
+SQLite FTS5 index. Every word in the query must appear in a segment (in any
+order); matching is case- and accent-insensitive, and the last word also
+matches as a prefix (`"budg"` finds `"budget"` and `"budgets"`). Hits come back
+best-first (bm25), each with a snippet that has the matched words in
+`**bold**`. Quotes and FTS5 operators (`AND`, `NEAR`, `*`, `:`…) in the query
+are searched as plain text. It is keyword search, not semantic: synonyms don't
+match.
+
+Against a database from an older Parley build that hasn't created the FTS5
+index yet, it falls back to an unranked case-insensitive substring match.
 
 ## Resources
 
