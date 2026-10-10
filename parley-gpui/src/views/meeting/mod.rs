@@ -773,12 +773,24 @@ impl MeetingView {
         struct Delta {
             meeting_id: String,
             delta: String,
+            /// Discard the preview streamed so far: the core is about to
+            /// re-stream (a structured-summary retry or the Markdown
+            /// fallback).
+            #[serde(default)]
+            reset: bool,
         }
         let Some(payload) = event.decode::<Delta>() else {
             return;
         };
         if self.meeting_id.as_deref() != Some(payload.meeting_id.as_str()) {
             return;
+        }
+        if payload.reset {
+            self.summary_has_content = false;
+            self.summary_markdown.clear();
+            self.summary_reveal_pending.clear();
+            self.summary_state.update(cx, |state, cx| state.set_text("", cx));
+            cx.notify();
         }
         if payload.delta.is_empty() {
             return;
