@@ -331,6 +331,14 @@ RUST_LOG=parley_core::audio=debug ./dev.sh
 RUST_LOG=debug ./dev.sh
 ```
 
+**Log file and crashes**: every run also appends to
+`~/.local/state/parley/logs/parley.log` (previous run kept as `parley.log.1`
+past 10 MB). Panics are logged with a backtrace; a native crash (SIGSEGV etc.)
+writes a `FATAL:` line, then systemd-coredump takes the core — inspect with
+`coredumpctl info parley`. Release binaries keep their symbol table and a
+GNU build-id (`strip = "debuginfo"`, `.cargo/config.toml`) so those stacks
+name functions.
+
 **Developer Tools**:
 - Open DevTools: `Ctrl+Shift+I`
 - Console Toggle: Built into app UI (console icon)

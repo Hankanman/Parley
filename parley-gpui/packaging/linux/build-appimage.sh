@@ -61,7 +61,7 @@ cp "$ICON_SRC" "$APPDIR/usr/share/icons/hicolor/512x512/apps/io.github.hankanman
 # ----- run linuxdeploy -----
 # NO_STRIP (set by build.sh on Linux) works around Fedora 43+'s bundled
 # `strip` choking on SHT_RELR sections — see root Cargo.toml comment and
-# docs/building_in_linux.md. Cargo's own `strip = true` release profile
+# docs/building_in_linux.md. Cargo's own `strip = "debuginfo"` release profile
 # already stripped the binaries, so this only affects linuxdeploy's pass.
 export NO_STRIP="${NO_STRIP:-1}"
 

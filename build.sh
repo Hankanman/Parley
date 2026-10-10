@@ -64,7 +64,7 @@ setup_linux_build_env() {
 
             # linuxdeploy's bundled `strip` chokes on SHT_RELR sections in modern Fedora libs.
             # NOTE: this only disables linuxdeploy's own strip pass during AppImage bundling —
-            # it does not affect cargo's `strip = true` in the workspace [profile.release]
+            # it does not affect cargo's `strip = "debuginfo"` in the workspace [profile.release]
             # (see root Cargo.toml), which still strips every binary during `cargo build --release`.
             export NO_STRIP="${NO_STRIP:-1}"
 
