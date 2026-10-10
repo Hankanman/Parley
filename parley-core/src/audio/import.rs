@@ -620,6 +620,9 @@ async fn run_import(
     // retranscription (see `common::run_batch_transcription`); only the
     // progress-event shape/percentage range differs here.
     let batch_result = if total_segments > 0 {
+        // Custom vocabulary (issue #83). A freshly imported meeting has no
+        // calendar link yet, so only manual terms + voice-profile names apply.
+        let glossary = crate::glossary::prepare(pool.as_ref(), None).await;
         let engine = whisper_engine
             .clone()
             .expect("whisper_engine is Some when total_segments > 0");
@@ -630,6 +633,7 @@ async fn run_import(
             engine,
             diarizer.clone(),
             offline_turns.as_deref(),
+            &glossary,
             &IMPORT_CANCELLED,
             move |i, total, segment_duration_sec| {
                 let progress = 30 + ((i as f32 / total.max(1) as f32) * 50.0) as u32;

@@ -358,6 +358,10 @@ async fn run_retranscription(
     let engine = whisper_engine
         .clone()
         .expect("whisper_engine is always Some at this point");
+    // Custom vocabulary (issue #83): prompt whisper with the glossary, and
+    // the linked calendar event's attendees when enabled.
+    let glossary = crate::glossary::prepare(pool.as_ref(), Some(&meeting_id)).await;
+
     let sink_for_progress = sink.clone();
     let meeting_id_for_progress = meeting_id.clone();
     let batch_result = super::common::run_batch_transcription(
@@ -369,6 +373,7 @@ async fn run_retranscription(
         // run its own offline diarization pass (that's import-specific —
         // see `import.rs`), so there's no hint to feed the diarizer here.
         None,
+        &glossary,
         &RETRANSCRIPTION_CANCELLED,
         move |i, total, segment_duration_sec| {
             // Calculate progress (25% to 80% range for transcription)

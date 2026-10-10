@@ -576,6 +576,7 @@ pub(crate) async fn run_batch_transcription(
     whisper_engine: Arc<WhisperEngine>,
     diarizer: Option<Arc<Diarizer>>,
     offline_turns: Option<&[SpeakerTurn]>,
+    glossary: &crate::glossary::PreparedGlossary,
     cancel_flag: &'static AtomicBool,
     on_segment_progress: impl Fn(usize, usize, f64),
 ) -> Result<Vec<BatchTranscript>> {
@@ -655,11 +656,10 @@ pub(crate) async fn run_batch_transcription(
             continue;
         }
 
-        let prompt = if context_tail.is_empty() {
-            None
-        } else {
-            Some(context_tail.clone())
-        };
+        // Custom-vocabulary glossary (issue #83) leads the prompt; the
+        // rolling context tail fills whatever budget is left. With an empty
+        // glossary this is exactly the old tail-only prompt.
+        let prompt = glossary.compose_prompt(&context_tail);
         let (text, conf, _) = whisper_engine
             .transcribe_audio_with_confidence(segment.samples.clone(), language.clone(), prompt)
             .await
@@ -676,6 +676,12 @@ pub(crate) async fn run_batch_transcription(
             );
             continue;
         }
+
+        // Drop any regurgitated glossary sentence and, if enabled, fix
+        // near-miss spellings of glossary terms. Done before the text joins
+        // the context tail, so later segments are conditioned on the
+        // corrected spelling.
+        let text = glossary.clean_output(&text);
 
         let trimmed = text.trim();
         if !trimmed.is_empty() {
