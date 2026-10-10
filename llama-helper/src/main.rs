@@ -313,7 +313,10 @@ impl ModelState {
             }
 
             let token = sampler.as_mut().sample(&ctx, batch.n_tokens() - 1);
-            sampler.as_mut().accept(token);
+            // No explicit `accept`: `sample` (llama_sampler_sample) already
+            // accepts the token into every sampler in the chain. Accepting
+            // twice advances stateful samplers twice — fatal for the grammar
+            // sampler (GGML_ASSERT(!stacks.empty()) in llama-grammar.cpp).
 
             if model.is_eog_token(token) {
                 eprintln!(
