@@ -9,6 +9,7 @@
 //! returns the full answer at the end. History is stored per meeting in
 //! `meeting_chat_messages` ([`repository`]).
 
+pub mod across;
 pub mod context;
 pub mod repository;
 

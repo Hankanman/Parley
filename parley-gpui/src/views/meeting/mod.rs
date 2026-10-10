@@ -229,6 +229,9 @@ pub struct MeetingView {
     /// Transcript row briefly highlighted after a citation jump.
     highlighted_segment: Option<String>,
     _highlight_task: Option<Task<()>>,
+    /// A moment to show once the transcript has loaded (set when a
+    /// cross-meeting "Ask Parley" citation opens this meeting).
+    pending_jump: Option<f64>,
 
     _subscriptions: Vec<Subscription>,
 }
@@ -342,6 +345,7 @@ impl MeetingView {
             ask_panel,
             highlighted_segment: None,
             _highlight_task: None,
+            pending_jump: None,
             _subscriptions: subscriptions,
         };
         view.load_default_template(cx);
@@ -429,6 +433,7 @@ impl MeetingView {
         self._summary_reveal_task = None;
         self.highlighted_segment = None;
         self._highlight_task = None;
+        self.pending_jump = None;
         self.summary_state.update(cx, |state, cx| state.set_text("", cx));
         self.ask_panel.update(cx, |panel, cx| panel.set_meeting(id.clone(), cx));
         cx.notify();
@@ -511,6 +516,16 @@ impl MeetingView {
         cx.notify();
     }
 
+    /// Show the transcript at `seconds` — now if it's loaded, otherwise as
+    /// soon as it is. Call after [`Self::load`].
+    pub fn jump_when_loaded(&mut self, seconds: f64, cx: &mut Context<Self>) {
+        if self.transcripts_loading || self.transcripts.is_empty() {
+            self.pending_jump = Some(seconds);
+        } else {
+            self.jump_to_time(seconds, cx);
+        }
+    }
+
     fn set_right_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) {
         if self.right_tab != tab {
             self.right_tab = tab;
@@ -518,13 +533,16 @@ impl MeetingView {
         }
     }
 
-    fn apply_meeting_details(&mut self, details: MeetingDetails, _cx: &mut Context<Self>) {
+    fn apply_meeting_details(&mut self, details: MeetingDetails, cx: &mut Context<Self>) {
         self.title = details.title;
         self.created_at = chrono::DateTime::parse_from_rfc3339(&details.created_at)
             .ok()
             .map(|dt| dt.with_timezone(&chrono::Utc));
         self.transcript_list_state.reset(details.transcripts.len());
         self.transcripts = details.transcripts;
+        if let Some(seconds) = self.pending_jump.take() {
+            self.jump_to_time(seconds, cx);
+        }
     }
 
     fn refresh_summary(&mut self, generation: u64, cx: &mut Context<Self>) {
