@@ -190,6 +190,29 @@ pub fn summary_reveal_chars_per_tick(pending_len: usize) -> usize {
     (pending_len.div_ceil(TARGET_TICKS)).max(2).min(pending_len)
 }
 
+/// Index of the transcript row an "Ask Parley" citation at `seconds` points
+/// at: the latest segment starting at or before that second (citations are
+/// floored to whole seconds), else the earliest timed segment. `None` when
+/// no segment has a recording-relative time. Doesn't assume `transcripts`
+/// is sorted.
+pub fn transcript_index_for_time(transcripts: &[MeetingTranscript], seconds: f64) -> Option<usize> {
+    let timed = transcripts
+        .iter()
+        .enumerate()
+        .filter_map(|(ix, t)| t.audio_start_time.filter(|s| s.is_finite()).map(|s| (ix, s)));
+    let mut at_or_before: Option<(usize, f64)> = None;
+    let mut earliest: Option<(usize, f64)> = None;
+    for (ix, start) in timed {
+        if start.floor() <= seconds && at_or_before.is_none_or(|(_, best)| start > best) {
+            at_or_before = Some((ix, start));
+        }
+        if earliest.is_none_or(|(_, best)| start < best) {
+            earliest = Some((ix, start));
+        }
+    }
+    at_or_before.or(earliest).map(|(ix, _)| ix)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,6 +243,23 @@ mod tests {
             source: None,
             confidence: None,
         }
+    }
+
+    #[test]
+    fn finds_transcript_row_for_citation_time() {
+        let transcripts = vec![
+            seg("a", Some(0.0)),
+            seg("b", Some(10.4)),
+            seg("untimed", None),
+            seg("c", Some(754.9)),
+        ];
+        assert_eq!(transcript_index_for_time(&transcripts, 754.0), Some(3));
+        assert_eq!(transcript_index_for_time(&transcripts, 12.0), Some(1));
+        assert_eq!(transcript_index_for_time(&transcripts, 10.0), Some(1));
+        assert_eq!(transcript_index_for_time(&transcripts, 9.0), Some(0));
+        let late_start = vec![seg("x", Some(30.0)), seg("y", Some(20.0))];
+        assert_eq!(transcript_index_for_time(&late_start, 5.0), Some(1));
+        assert_eq!(transcript_index_for_time(&[seg("u", None)], 5.0), None);
     }
 
     #[test]

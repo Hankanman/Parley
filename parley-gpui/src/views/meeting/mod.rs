@@ -1,6 +1,7 @@
 //! Meeting page: editable header (title + delete), a virtualized transcript
-//! panel, and a summary panel with generate/regenerate, WYSIWYG editing,
-//! copy/export and retranscription.
+//! panel, and a right-hand pane with two tabs: the summary (generate/
+//! regenerate, WYSIWYG editing, copy/export, retranscription) and "Ask"
+//! (chat with the meeting, see `ask.rs`).
 //!
 //! Loading, generation and polling are all guarded by a `generation`
 //! counter bumped on every [`MeetingView::load`] — async work started for an
@@ -8,6 +9,7 @@
 //! double-navigation can't clobber the currently-shown meeting with a
 //! stale response (see `cx.spawn` closures below).
 
+mod ask;
 mod calendar_format;
 mod format;
 mod speaker_chip;
@@ -21,6 +23,7 @@ use gpui_kit::component::{
     h_flex,
     input::{Input, InputState},
     notification::Notification,
+    tab::{Tab, TabBar},
     text::{TextView, TextViewState},
     v_flex,
 };
@@ -219,7 +222,22 @@ pub struct MeetingView {
     summary_reveal_pending: String,
     _summary_reveal_task: Option<Task<()>>,
 
+    // -- Right-hand pane: Summary | Ask -----------------------------------------
+    right_tab: RightTab,
+    /// "Ask Parley" chat (see `ask.rs`).
+    ask_panel: Entity<ask::AskPanel>,
+    /// Transcript row briefly highlighted after a citation jump.
+    highlighted_segment: Option<String>,
+    _highlight_task: Option<Task<()>>,
+
     _subscriptions: Vec<Subscription>,
+}
+
+/// Which panel the right-hand pane shows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RightTab {
+    Summary,
+    Ask,
 }
 
 impl MeetingView {
@@ -234,8 +252,9 @@ impl MeetingView {
             editor
         });
 
+        let ask_panel = cx.new(|cx| ask::AskPanel::new(window, cx));
         let core_events = AppServices::global(cx).core_events.clone();
-        let subscriptions = vec![cx.subscribe(&core_events, |this, _, event, cx| {
+        let mut subscriptions = vec![cx.subscribe(&core_events, |this, _, event, cx| {
             match event.name.as_str() {
                 "summary-stream" => this.on_summary_stream(event, cx),
                 "retranscription-progress" => this.on_retranscription_progress(event, cx),
@@ -246,6 +265,10 @@ impl MeetingView {
                 _ => {}
             }
         })];
+        subscriptions.push(cx.subscribe(&ask_panel, |this, _, event: &ask::AskPanelEvent, cx| {
+            let ask::AskPanelEvent::JumpTo(seconds) = event;
+            this.jump_to_time(*seconds, cx);
+        }));
 
         let templates = parley_core::summary::templates::list_templates();
         let template_ids: Vec<String> = templates.iter().map(|(id, _, _)| id.clone()).collect();
@@ -315,6 +338,10 @@ impl MeetingView {
             ai_extracting: false,
             summary_reveal_pending: String::new(),
             _summary_reveal_task: None,
+            right_tab: RightTab::Summary,
+            ask_panel,
+            highlighted_segment: None,
+            _highlight_task: None,
             _subscriptions: subscriptions,
         };
         view.load_default_template(cx);
@@ -400,7 +427,10 @@ impl MeetingView {
         self.ai_extracting = false;
         self.summary_reveal_pending.clear();
         self._summary_reveal_task = None;
+        self.highlighted_segment = None;
+        self._highlight_task = None;
         self.summary_state.update(cx, |state, cx| state.set_text("", cx));
+        self.ask_panel.update(cx, |panel, cx| panel.set_meeting(id.clone(), cx));
         cx.notify();
 
         let Some(pool) = AppServices::global(cx).pool() else {
@@ -455,6 +485,37 @@ impl MeetingView {
         // A clip from the previous meeting shouldn't keep playing once we've
         // navigated away from its transcript.
         parley_core::audio::playback::stop();
+    }
+
+    /// An "Ask Parley" citation was clicked: bring the segment said at
+    /// `seconds` to the top of the transcript and highlight it briefly.
+    fn jump_to_time(&mut self, seconds: f64, cx: &mut Context<Self>) {
+        let Some(ix) = format::transcript_index_for_time(&self.transcripts, seconds) else {
+            return;
+        };
+        self.transcript_list_state.scroll_to(ListOffset {
+            item_ix: ix,
+            offset_in_item: px(0.),
+        });
+        self.highlighted_segment = Some(self.transcripts[ix].id.clone());
+        let generation = self.generation;
+        self._highlight_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(2500)).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.generation == generation {
+                    this.highlighted_segment = None;
+                    cx.notify();
+                }
+            });
+        }));
+        cx.notify();
+    }
+
+    fn set_right_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) {
+        if self.right_tab != tab {
+            self.right_tab = tab;
+            cx.notify();
+        }
     }
 
     fn apply_meeting_details(&mut self, details: MeetingDetails, _cx: &mut Context<Self>) {
@@ -2172,7 +2233,24 @@ impl Render for MeetingView {
                             .border_color(cx.theme().border)
                             .child(self.render_transcript(cx)),
                     )
-                    .child(div().flex_1().min_w_0().h_full().child(self.render_summary(cx))),
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .child(self.render_right_tabs(cx))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .when(self.right_tab == RightTab::Summary, |this| {
+                                        this.child(self.render_summary(cx))
+                                    })
+                                    .when(self.right_tab == RightTab::Ask, |this| {
+                                        this.child(self.ask_panel.clone())
+                                    }),
+                            ),
+                    ),
             )
             .when_some(self.speaker_edit.clone(), |this, state| {
                 let entity = cx.entity();
@@ -2186,6 +2264,30 @@ impl Render for MeetingView {
 }
 
 impl MeetingView {
+    /// "Summary | Ask" switcher above the right-hand pane.
+    fn render_right_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity().downgrade();
+        h_flex()
+            .w_full()
+            .px_2()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(
+                TabBar::new("meeting-right-tabs")
+                    .underline()
+                    .selected_index(match self.right_tab {
+                        RightTab::Summary => 0,
+                        RightTab::Ask => 1,
+                    })
+                    .child(Tab::new().icon(Lucide::FileText).label("Summary"))
+                    .child(Tab::new().icon(Lucide::Sparkles).label("Ask"))
+                    .on_click(move |ix, _, cx| {
+                        let tab = if *ix == 1 { RightTab::Ask } else { RightTab::Summary };
+                        let _ = entity.update(cx, |this, cx| this.set_right_tab(tab, cx));
+                    }),
+            )
+    }
+
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let date = self
             .created_at
@@ -2679,6 +2781,7 @@ impl MeetingView {
         let playing_segment = self.playing_segment.clone();
         let loading_segment = self.loading_segment.clone();
         let show_confidence = self.show_confidence;
+        let highlighted_segment = self.highlighted_segment.clone();
 
         v_flex()
             .size_full()
@@ -2780,6 +2883,9 @@ impl MeetingView {
                         .px_4()
                         .py_2()
                         .when(is_editing_this_row, |this| this.bg(cx.theme().muted.opacity(0.3)))
+                        .when(highlighted_segment.as_deref() == Some(t.id.as_str()), |this| {
+                            this.bg(cx.theme().primary.opacity(0.15))
+                        })
                         .child(header_row)
                         .child(div().text_sm().child(t.text.clone()));
 
