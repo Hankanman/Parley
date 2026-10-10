@@ -1241,6 +1241,19 @@ pub fn current_meeting_id() -> Option<String> {
         .and_then(|m| m.get_meeting_id())
 }
 
+/// The current recording position in seconds (active time, pauses
+/// excluded — the same clock the pipeline stamps `audio_start_time` with,
+/// since no audio flows while paused). `None` when nothing is recording.
+pub fn current_offset_seconds() -> Option<f64> {
+    RECORDING_MANAGER
+        .lock()
+        .unwrap()
+        .as_ref()
+        .filter(|m| m.is_recording())
+        .and_then(|m| m.get_active_recording_duration())
+        .map(|s| s.max(0.0))
+}
+
 /// Get recording statistics
 pub async fn get_transcription_status() -> TranscriptionStatus {
     TranscriptionStatus {
