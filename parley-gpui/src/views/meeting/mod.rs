@@ -1462,8 +1462,9 @@ impl MeetingView {
             return;
         }
 
+        let initial_name = speaker_chip::initial_edit_name(&speaker, voice_profile_id.as_deref());
         let name_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("e.g. Alice Smith").default_value(speaker.clone()));
+            cx.new(|cx| InputState::new(window, cx).placeholder("e.g. Alice Smith").default_value(initial_name));
         let email_input = cx.new(|cx| InputState::new(window, cx).placeholder("Email (optional)"));
         window.focus(&name_input.read(cx).focus_handle(cx), cx);
         let attendees =
@@ -2229,6 +2230,13 @@ fn render_floating_speaker_edit(state: &SpeakerEditState, entity: Entity<Meeting
                 .child(div().text_xs().text_color(ActiveTheme::theme(cx).muted_foreground).child("From this meeting's calendar"))
                 .child(chips);
         }
+    } else if !merging && !is_named_profile {
+        panel = panel.child(
+            div()
+                .text_xs()
+                .text_color(ActiveTheme::theme(cx).muted_foreground)
+                .child("Link this meeting to a calendar event to pick from its attendees."),
+        );
     }
 
     if !is_named_profile && !state.profiles.is_empty() {
