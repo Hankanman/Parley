@@ -105,6 +105,22 @@ impl SpeakerProfileMatcher {
         self.self_profile_id.as_deref()
     }
 
+    /// Whether `profile_id` stands for the local user: the `is_self` profile,
+    /// or another profile with the same name (trimmed, case-insensitive).
+    /// The second case is the duplicate a user ends up with by naming a
+    /// chip after themselves (#102); until they merge it, it must get the
+    /// same "system channel needs a strong match" treatment as the real one.
+    pub fn is_self(&self, profile_id: &str) -> bool {
+        let Some(self_id) = self.self_profile_id.as_deref() else {
+            return false;
+        };
+        if profile_id == self_id {
+            return true;
+        }
+        let key = |id: &str| self.profiles.get(id).map(|n| n.trim().to_lowercase());
+        key(profile_id).is_some() && key(profile_id) == key(self_id)
+    }
+
     /// Cosine similarity of `embedding` to one specific stored profile,
     /// regardless of the match threshold. `None` if the profile isn't loaded
     /// or the dims differ.

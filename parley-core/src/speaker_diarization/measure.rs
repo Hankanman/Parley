@@ -229,6 +229,9 @@ async fn measure_fragmentation() {
     if let Some(v) = env_f32("PARLEY_MEASURE_MERGE") {
         options.merge_similarity = v;
     }
+    if let Some(v) = env_f32("PARLEY_MEASURE_MIC_MERGE") {
+        options.mic_merge_similarity = v;
+    }
     if let Some(v) = env_f32("PARLEY_MEASURE_SHORT") {
         options.short_segment_secs = v;
     }
@@ -449,4 +452,97 @@ fn centroid_similarities(labels: &[String], history: &[EmbeddingRecord], min_sec
             }
         }
     }
+}
+
+/// End-to-end check of the batch path: retranscribe one meeting of a
+/// scratch copy (its DB *and* its recording folder — retranscription writes
+/// transcripts.json/metadata.json next to the audio) and report speakers
+/// and channel tags before and after. Run with `XDG_DATA_HOME` pointing at a
+/// scratch copy of the data dir:
+///
+/// ```text
+/// XDG_DATA_HOME=/scratch/xdg PARLEY_E2E_MEETING=<id> PARLEY_E2E_FOLDER=/scratch/rec \
+/// PARLEY_E2E_MODEL=small \
+/// cargo test -p parley-core --release retranscribe_scratch_copy -- --ignored --nocapture
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "end-to-end on a scratch copy of real data; see doc comment"]
+async fn retranscribe_scratch_copy() {
+    let (Ok(meeting_id), Some(folder)) = (
+        std::env::var("PARLEY_E2E_MEETING"),
+        env_path("PARLEY_E2E_FOLDER"),
+    ) else {
+        eprintln!("set PARLEY_E2E_MEETING / PARLEY_E2E_FOLDER");
+        return;
+    };
+    let data_dir = crate::paths::app_data_dir().unwrap();
+    let real = dirs::home_dir()
+        .unwrap()
+        .join(".local/share/io.github.hankanman.Parley");
+    assert_ne!(data_dir, real, "point XDG_DATA_HOME at a scratch copy");
+
+    crate::speaker_diarization::model::set_models_dir();
+    crate::whisper_engine::models::set_models_directory();
+    crate::whisper_engine::models::whisper_init().await.unwrap();
+
+    let opts = SqliteConnectOptions::from_str(&format!(
+        "sqlite://{}",
+        data_dir.join("meeting_minutes.sqlite").display()
+    ))
+    .unwrap();
+    let pool = SqlitePoolOptions::new()
+        .max_connections(2)
+        .connect_with(opts)
+        .await
+        .unwrap();
+
+    let summary = |pool: sqlx::SqlitePool, id: String| async move {
+        let rows: Vec<(Option<String>, Option<String>, f64)> = sqlx::query_as(
+            "SELECT speaker, source, COALESCE(audio_end_time - audio_start_time, 0)
+             FROM transcripts WHERE meeting_id = ?",
+        )
+        .bind(id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        let mut by: std::collections::BTreeMap<String, (usize, f64)> = Default::default();
+        let (mut mic, mut sys) = (0, 0);
+        for (speaker, source, secs) in &rows {
+            let e = by.entry(speaker.clone().unwrap_or_default()).or_default();
+            e.0 += 1;
+            e.1 += secs;
+            match source.as_deref() {
+                Some("mic") => mic += 1,
+                Some("system") => sys += 1,
+                _ => {}
+            }
+        }
+        eprintln!(
+            "  {} rows, {} speakers, source mic/system/none = {mic}/{sys}/{}",
+            rows.len(),
+            by.len(),
+            rows.len() - mic - sys
+        );
+        for (speaker, (n, secs)) in by {
+            eprintln!("    {speaker:<22} {n:>4} rows {secs:>7.1}s");
+        }
+    };
+
+    eprintln!("before:");
+    summary(pool.clone(), meeting_id.clone()).await;
+    let model = std::env::var("PARLEY_E2E_MODEL").ok();
+    let result = crate::audio::retranscription::start_retranscription_with(
+        std::sync::Arc::new(crate::events::NullSink),
+        Some(pool.clone()),
+        meeting_id.clone(),
+        folder.display().to_string(),
+        None,
+        model,
+        None,
+    )
+    .await
+    .unwrap();
+    eprintln!("retranscribed: {} segments", result.segments_count);
+    eprintln!("after:");
+    summary(pool.clone(), meeting_id).await;
 }

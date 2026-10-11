@@ -9,7 +9,7 @@
 //!
 //! Once the session is over (a live recording stops, or a batch import /
 //! retranscription has embedded every segment) we have every embedding, so
-//! we re-cluster offline in four steps:
+//! we re-cluster offline in five steps:
 //!
 //! 1. **Average-linkage hierarchical agglomerative clustering** (HAC). Every
 //!    pairwise distance is known up front, so the result depends only on the
@@ -17,7 +17,15 @@
 //!    cluster the live pass wrongly merged and merge clusters it wrongly
 //!    split. Speaker count is unknown, so the dendrogram is cut on a
 //!    similarity threshold rather than a fixed k.
-//! 2. **Minor-cluster folding** (#102). Real meetings left the HAC cut with
+//!    With channel sources (see [`SegmentSource`]) each channel is clustered
+//!    on its own: nobody is legitimately both in the user's room and on the
+//!    far end of the call.
+//! 2. **Same-voice merge.** Clusters on one channel whose *centroids* are
+//!    at least [`RefineOptions::merge_similarity`] alike are merged
+//!    (mic-channel pairs at the lower [`RefineOptions::mic_merge_similarity`]).
+//!    Centroids average away per-segment noise that keeps average-linkage
+//!    from joining two halves of one voice.
+//! 3. **Minor-cluster folding** (#102). Real meetings left the HAC cut with
 //!    a long tail of clusters holding a few seconds of speech each — a
 //!    laugh, a one-word reply, crosstalk — that average-linkage can't
 //!    attach to anyone because a single short embedding is noisy. A cluster
@@ -26,11 +34,14 @@
 //!    centroid is at least [`RefineOptions::fold_similarity`] alike. That's a
 //!    much lower bar than the HAC cut, which is safe because it only ever
 //!    moves a few seconds of speech and never merges two substantial voices.
-//! 3. **Speaker cap.** When the caller knows how many people were present
-//!    (calendar attendees), clusters keep merging closest-first down to that
-//!    count — but never below [`RefineOptions::cap_similarity_floor`], so a
-//!    wrong attendee list can't fuse genuinely different voices.
-//! 4. **Naming**, below.
+//!    Clusters made of sub-second fragments, and strays on the mic channel,
+//!    fold into the nearest voice on their channel whatever the score.
+//! 4. **Speaker cap.** When the caller knows how many people were present
+//!    (calendar attendees), unnamed clusters keep merging closest-first
+//!    until the *labels* fit that count — but never below
+//!    [`RefineOptions::cap_similarity_floor`], so a wrong attendee list
+//!    can't fuse genuinely different voices, and never two named people.
+//! 5. **Naming**, below.
 //!
 //! ## Profile handling
 //!
@@ -62,6 +73,10 @@
 //!   [`RefineOptions::mic_self_similarity`], so the user's own voice doesn't
 //!   splinter into parallel "Speaker N" clusters when individual segments
 //!   miss the strict profile threshold.
+//!
+//! A profile with the same name as the self profile counts as the user too
+//! (see [`SpeakerProfileMatcher::is_self`]), scored against the real self
+//! profile.
 
 use crate::speaker_diarization::embedding_math::{cosine_distance, dot, l2_normalize};
 use crate::speaker_diarization::{EmbeddingRecord, SegmentSource, SpeakerProfileMatcher};
@@ -82,6 +97,11 @@ pub struct RefineOptions {
     /// (in #102's data, stored profiles of different people sit at 0.05–0.30
     /// centroid similarity; one person's two profiles at 0.57).
     pub merge_similarity: f32,
+    /// [`Self::merge_similarity`] for two mic-channel clusters. Lower,
+    /// because the mic is the user's own channel: one person's voice there
+    /// drifts with distance to the mic and gain far more than a remote
+    /// codec stream does, while an in-room second voice is the exception.
+    pub mic_merge_similarity: f32,
     /// Clusters holding less speech than this (seconds) are "minor" and get
     /// folded into the nearest substantial cluster. `0.0` disables folding.
     pub min_cluster_secs: f32,
@@ -113,6 +133,7 @@ impl Default for RefineOptions {
         Self {
             threshold: crate::speaker_diarization::REFINE_CLUSTER_THRESHOLD,
             merge_similarity: 0.60,
+            mic_merge_similarity: 0.40,
             min_cluster_secs: 20.0,
             fold_similarity: 0.30,
             max_speakers: None,
@@ -132,6 +153,7 @@ impl RefineOptions {
         Self {
             threshold: crate::speaker_diarization::REFINE_CLUSTER_THRESHOLD,
             merge_similarity: 1.1,
+            mic_merge_similarity: 1.1,
             min_cluster_secs: 0.0,
             fold_similarity: 1.1,
             max_speakers: None,
@@ -248,7 +270,7 @@ pub fn refine(
     if history.is_empty() {
         return Vec::new();
     }
-    let self_id = matcher.and_then(|m| m.self_profile_id());
+    let is_self = |pid: &str| matcher.is_some_and(|m| m.is_self(pid));
 
     // Effective pins: the live pass's profile matches, minus weak self
     // matches heard on the system channel.
@@ -256,10 +278,16 @@ pub fn refine(
         .iter()
         .map(|r| {
             let pid = r.voice_profile_id.as_deref()?;
+            // Scored against the real self profile, not whichever same-named
+            // duplicate matched — a duplicate may have absorbed other voices.
+            let self_score = matcher
+                .and_then(|m| m.self_match(&r.embedding))
+                .map(|m| m.score)
+                .or(r.profile_score);
             let weak_self_on_system = options.use_sources
-                && Some(pid) == self_id
+                && is_self(pid)
                 && r.source == SegmentSource::System
-                && r.profile_score.is_some_and(|s| s < options.self_strong_match);
+                && self_score.is_some_and(|s| s < options.self_strong_match);
             (!weak_self_on_system).then_some(pid)
         })
         .collect();
@@ -304,7 +332,7 @@ pub fn refine(
     let mut clusters = build_clusters(history, &pins, &cluster_of, &group_of_cluster);
 
     // 2. Merge clusters whose centroids say they're the same voice.
-    merge_closest(&mut clusters, options.merge_similarity);
+    merge_closest(&mut clusters, options.merge_similarity, options.mic_merge_similarity);
 
     // 3. Fold minor clusters into the nearest substantial one.
     fold_minor_clusters(&mut clusters, options);
@@ -483,24 +511,29 @@ fn fold_minor_clusters(clusters: &mut Vec<Cluster>, options: &RefineOptions) {
 }
 
 /// Step 2: merge the most similar mergeable pair of clusters (by centroid),
-/// again and again, until the best pair is less alike than `floor`.
-fn merge_closest(clusters: &mut Vec<Cluster>, floor: f32) {
+/// again and again, until no pair clears its floor: `mic_floor` for two
+/// mic-channel clusters, `floor` otherwise.
+fn merge_closest(clusters: &mut Vec<Cluster>, floor: f32, mic_floor: f32) {
     let mut centroids: Vec<Vec<f32>> = clusters.iter().map(Cluster::centroid).collect();
     while clusters.len() > 1 {
+        // (i, j, similarity minus the pair's floor)
         let mut best: Option<(usize, usize, f32)> = None;
         for i in 0..clusters.len() {
             for j in (i + 1)..clusters.len() {
                 if !clusters[i].may_join(&clusters[j]) {
                     continue;
                 }
-                let sim = dot(&centroids[i], &centroids[j]);
-                if best.map_or(true, |(_, _, b)| sim > b) {
-                    best = Some((i, j, sim));
+                let both_mic = clusters[i].group == SegmentSource::Microphone
+                    && clusters[j].group == SegmentSource::Microphone;
+                let pair_floor = if both_mic { mic_floor } else { floor };
+                let margin = dot(&centroids[i], &centroids[j]) - pair_floor;
+                if best.map_or(true, |(_, _, b)| margin > b) {
+                    best = Some((i, j, margin));
                 }
             }
         }
         match best {
-            Some((i, j, sim)) if sim >= floor => {
+            Some((i, j, margin)) if margin >= 0.0 => {
                 let other = clusters.remove(j);
                 centroids.remove(j);
                 clusters[i].absorb(other);
@@ -573,7 +606,7 @@ fn cluster_identity(
     matcher: Option<&SpeakerProfileMatcher>,
     options: &RefineOptions,
 ) -> Option<(String, Option<String>)> {
-    let self_id = matcher.and_then(|m| m.self_profile_id());
+    let is_self = |pid: &str| matcher.is_some_and(|m| m.is_self(pid));
     let centroid = cluster.centroid();
     // A system-dominated cluster is the user only on a strong voice match.
     let self_allowed = !options.use_sources
@@ -589,7 +622,7 @@ fn cluster_identity(
     let mut best: Option<(usize, usize)> = None; // (record index, count)
     for &i in &cluster.members {
         let Some(pid) = pins[i] else { continue };
-        if !self_allowed && Some(pid) == self_id {
+        if !self_allowed && is_self(pid) {
             continue;
         }
         let count = counts.entry(pid).or_insert(0);
@@ -606,7 +639,7 @@ fn cluster_identity(
     // stored profiles.
     let matcher = matcher?;
     if let Some(m) = matcher.search(&centroid) {
-        if self_allowed || Some(m.profile_id.as_str()) != self_id {
+        if self_allowed || !matcher.is_self(&m.profile_id) {
             return Some((m.name, Some(m.profile_id)));
         }
     }
@@ -1130,6 +1163,7 @@ mod tests {
 
         let no_merge = RefineOptions {
             merge_similarity: 1.1,
+            mic_merge_similarity: 1.1,
             ..RefineOptions::default()
         };
         assert_eq!(distinct_speakers(&refine(&history, &no_merge, None)), 2);
@@ -1270,5 +1304,57 @@ mod tests {
         assert_eq!(label_of(&out, 1), "Seb");
         assert_eq!(out[0].voice_profile_id.as_deref(), Some("p-self"));
         assert_eq!(label_of(&out, 3), "Speaker 1");
+    }
+
+    #[test]
+    fn mic_clusters_merge_at_a_lower_floor_than_system_ones() {
+        // Two pairs of substantial clusters, each pair 0.45 alike: above the
+        // mic floor (0.40), below the general one (0.60).
+        let a = v(3, &[(0, 1.0)]);
+        let b = v(3, &[(0, 0.45), (1, 0.893)]);
+        let history = vec![
+            seg(1, a.clone(), SegmentSource::Microphone, 30.0),
+            seg(2, b.clone(), SegmentSource::Microphone, 30.0),
+            seg(3, a, SegmentSource::System, 30.0),
+            seg(4, b, SegmentSource::System, 30.0),
+        ];
+        let out = refine(&history, &RefineOptions::default(), None);
+        assert_eq!(label_of(&out, 1), label_of(&out, 2));
+        assert_ne!(label_of(&out, 3), label_of(&out, 4));
+    }
+
+    /// A duplicate profile named like the user (made by naming a chip after
+    /// themselves) is held to the same system-channel rule as the real self
+    /// profile — scored against the real one, since the duplicate may have
+    /// absorbed other voices.
+    #[test]
+    fn a_same_named_duplicate_of_the_user_counts_as_self() {
+        let self_voice = v(3, &[(0, 1.0)]);
+        let contaminated = v(3, &[(1, 1.0)]);
+        let matcher = match SpeakerProfileMatcher::new(
+            3,
+            vec![
+                ("p-self".to_string(), "Seb".to_string(), self_voice),
+                ("p-dup".to_string(), " seb".to_string(), contaminated.clone()),
+            ],
+            0.60,
+        ) {
+            Ok(m) => m.with_self_profile(Some("p-self".to_string())),
+            Err(e) => {
+                eprintln!("skipping: SpeakerEmbeddingManager unavailable ({})", e);
+                return;
+            }
+        };
+        assert!(matcher.is_self("p-dup"));
+
+        // The far end matched the duplicate strongly (0.95), but sounds
+        // nothing like the real self profile.
+        let mut far_end = seg(1, contaminated, SegmentSource::System, 30.0);
+        far_end.voice_profile_id = Some("p-dup".into());
+        far_end.label = " seb".into();
+        far_end.profile_score = Some(0.95);
+        let out = refine(&[far_end], &RefineOptions::default(), Some(&matcher));
+        assert_eq!(out[0].speaker, "Speaker 1");
+        assert!(out[0].voice_profile_id.is_none());
     }
 }
