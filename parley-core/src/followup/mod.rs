@@ -58,6 +58,29 @@ impl SelfIdentity {
     }
 }
 
+/// Whether a calendar attendee is a person, rather than a calendar, room or
+/// mailbox the invite was sent to: Google lists the calendar an event lives
+/// in (`…@group.calendar.google.com`) and booked rooms
+/// (`…@resource.calendar.google.com`) as attendees, and those would make
+/// every meeting on that calendar look related.
+pub fn is_person(attendee: &Attendee) -> bool {
+    if attendee
+        .role
+        .as_deref()
+        .is_some_and(|r| r.trim().eq_ignore_ascii_case("NON-PARTICIPANT"))
+    {
+        return false;
+    }
+    let Some(email) = attendee.email.as_deref().map(|e| e.trim().to_ascii_lowercase()) else {
+        return true;
+    };
+    let local = email.split('@').next().unwrap_or_default();
+    !(email.ends_with("calendar.google.com")
+        || email.ends_with(".calendar.icloud.com")
+        || local.starts_with("noreply")
+        || local.starts_with("no-reply"))
+}
+
 /// How to refer to an attendee: their name, else their email address.
 pub fn attendee_label(attendee: &Attendee) -> Option<String> {
     attendee
@@ -223,6 +246,22 @@ mod tests {
         let empty = parse_summary_result(r#"{"markdown":"  ","structured":{"overview":""}}"#);
         assert_eq!(empty, StoredSummary::default());
         assert_eq!(parse_summary_result("not json"), StoredSummary::default());
+    }
+
+    #[test]
+    fn calendars_rooms_and_mailboxes_are_not_people() {
+        let a = |email: &str, role: Option<&str>| Attendee {
+            name: Some("X".into()),
+            email: Some(email.into()),
+            role: role.map(str::to_string),
+            ..Default::default()
+        };
+        assert!(is_person(&a("ann@example.com", Some("REQ-PARTICIPANT"))));
+        assert!(!is_person(&a("abc@group.calendar.google.com", None)));
+        assert!(!is_person(&a("room1@resource.calendar.google.com", None)));
+        assert!(!is_person(&a("noreply@example.com", None)));
+        assert!(!is_person(&a("ann@example.com", Some("non-participant"))));
+        assert!(is_person(&Attendee { name: Some("Ann".into()), ..Default::default() }));
     }
 
     #[test]

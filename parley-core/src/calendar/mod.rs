@@ -30,6 +30,9 @@ pub async fn refresh_source(pool: &SqlitePool, source_id: &str) -> Result<usize,
             CalendarRepository::mark_source_fetched(pool, source_id, None)
                 .await
                 .map_err(|e| e.to_string())?;
+            if let Err(e) = service::repair_dangling_links(pool).await {
+                log::warn!("calendar link repair after refresh failed: {}", e);
+            }
             Ok(count)
         }
         Err(e) => {

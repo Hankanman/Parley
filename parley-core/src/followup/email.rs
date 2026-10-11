@@ -809,7 +809,7 @@ pub async fn load_input(pool: &SqlitePool, meeting_id: &str, transcript_tokens: 
             event
                 .attendees
                 .iter()
-                .filter(|a| !me.is(a))
+                .filter(|a| !me.is(a) && super::is_person(a))
                 .filter_map(super::attendee_label)
                 .filter(|l| seen.insert(l.to_lowercase()))
                 .take(MAX_RECIPIENTS)

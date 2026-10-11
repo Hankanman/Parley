@@ -23,7 +23,7 @@
 
 use crate::calendar::models::{Attendee, CalendarEvent};
 use crate::database::repositories::action_item::STATUS_OPEN;
-use crate::followup::{attendee_label, load_summary, SelfIdentity, StoredSummary};
+use crate::followup::{attendee_label, is_person, load_summary, SelfIdentity, StoredSummary};
 use chrono::{DateTime, Utc};
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -76,7 +76,7 @@ pub fn event_people(event: &CalendarEvent, me: &SelfIdentity) -> People {
         });
     }
     let mut people = People::default();
-    for attendee in everyone.iter().filter(|a| !me.is(a)) {
+    for attendee in everyone.iter().filter(|a| !me.is(a) && is_person(a)) {
         let email = attendee.email.as_deref().map(|e| e.trim().to_lowercase()).filter(|e| !e.is_empty());
         let name = attendee.name.as_deref().map(|n| n.trim().to_lowercase()).filter(|n| !n.is_empty());
         let known = email.as_ref().is_some_and(|e| people.emails.contains(e))
@@ -104,7 +104,7 @@ fn label_index(event: &CalendarEvent, me: &SelfIdentity) -> HashMap<String, Stri
         email: event.organizer_email.clone(),
         ..Default::default()
     };
-    for attendee in event.attendees.iter().chain(std::iter::once(&organizer)).filter(|a| !me.is(a)) {
+    for attendee in event.attendees.iter().chain(std::iter::once(&organizer)).filter(|a| !me.is(a) && is_person(a)) {
         let Some(label) = attendee_label(attendee) else { continue };
         for key in [attendee.email.as_deref(), attendee.name.as_deref()].into_iter().flatten() {
             let key = key.trim().to_lowercase();
@@ -144,9 +144,11 @@ pub struct BriefContext {
     pub event_start: DateTime<Utc>,
     /// The other people expected.
     pub people: Vec<String>,
-    /// Selected meetings, most recent first.
+    /// Selected meetings (only ones with a summary or open action items),
+    /// most recent first.
     pub meetings: Vec<RelatedMeeting>,
-    /// How many related meetings there were before selection.
+    /// How many related meetings there were before selection, including
+    /// ones with nothing to brief on.
     pub total_related: usize,
 }
 
@@ -288,7 +290,25 @@ pub async fn gather(pool: &SqlitePool, event: &CalendarEvent) -> Result<BriefCon
     }
     let total_related = related.len();
 
-    let selected = select(related);
+    // Only meetings with something to brief on (a summary or open action
+    // items) take one of the few slots.
+    let mut with_content = Vec::with_capacity(related.len());
+    for r in related {
+        let (has,): (i64,) = sqlx::query_as(
+            "SELECT EXISTS (SELECT 1 FROM summary_processes WHERE meeting_id = ?1
+                              AND result IS NOT NULL AND TRIM(result) != '')
+                 OR EXISTS (SELECT 1 FROM action_items WHERE meeting_id = ?1 AND status = ?2)",
+        )
+        .bind(&r.0)
+        .bind(STATUS_OPEN)
+        .fetch_one(pool)
+        .await?;
+        if has != 0 {
+            with_content.push(r);
+        }
+    }
+
+    let selected = select(with_content);
     let mut meetings = Vec::with_capacity(selected.len());
     for (id, title, created_at, candidate) in selected {
         let summary = load_summary(pool, &id).await?;

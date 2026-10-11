@@ -351,7 +351,17 @@ mod tests {
         .await
         .unwrap();
 
-        let upcoming = add_event(&pool, "e-next", "weekly", day(30), &[me.clone(), ann.clone(), bob.clone()]).await;
+        // The calendar the event lives in is listed as an attendee too
+        // (Google does this); it must not count as a person.
+        let calendar = attendee("Team calendar", "abc123@group.calendar.google.com");
+        let upcoming = add_event(
+            &pool,
+            "e-next",
+            "weekly",
+            day(30),
+            &[me.clone(), ann.clone(), bob.clone(), calendar.clone()],
+        )
+        .await;
 
         // Same series, earlier occurrence.
         add_event(&pool, "e-1", "weekly", day(1), &[me.clone()]).await;
@@ -369,13 +379,24 @@ mod tests {
         // Different event, Ann attending (by email).
         add_event(&pool, "e-other", "other", day(5), &[me.clone(), attendee("Ann", "ANN@example.com")]).await;
         add_meeting(&pool, "m-ann", "Design review", day(5), Some("e-other")).await;
+        add_summary(&pool, "m-ann", "Use the blue theme").await;
 
         // No event, but Bob's voice profile speaks.
         add_meeting(&pool, "m-bob", "Hallway chat", day(7), None).await;
+        add_summary(&pool, "m-bob", "Hire a contractor").await;
         // A segment labelled with Ann's name.
         add_meeting(&pool, "m-label", "Labelled", day(8), None).await;
+        add_summary(&pool, "m-label", "Move the offsite").await;
         // Only the user speaks: unrelated.
         add_meeting(&pool, "m-self", "Solo", day(9), None).await;
+        add_summary(&pool, "m-self", "Nothing").await;
+        // Only shares the calendar "attendee": unrelated.
+        add_event(&pool, "e-cal", "cal", day(10), &[me.clone(), calendar.clone()]).await;
+        add_meeting(&pool, "m-cal", "Same calendar", day(10), Some("e-cal")).await;
+        add_summary(&pool, "m-cal", "Nothing").await;
+        // Related (Ann attends) but nothing to brief on: counted, not selected.
+        add_event(&pool, "e-empty", "empty", day(11), &[ann.clone()]).await;
+        add_meeting(&pool, "m-empty", "No summary yet", day(11), Some("e-empty")).await;
         sqlx::query(
             "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, speaker, voice_profile_id, sequence_id)
              VALUES ('t1', 'm-bob', 'hi', 'x', 'Robert', 'vp-bob', 1),
@@ -393,7 +414,7 @@ mod tests {
         assert_eq!(ctx.people, vec!["Ann Lee".to_string(), "bob@example.com".to_string()]);
         let ids: Vec<&str> = ctx.meetings.iter().map(|m| m.meeting_id.as_str()).collect();
         assert_eq!(ids, vec!["m-label", "m-bob", "m-ann", "m-series"]);
-        assert_eq!(ctx.total_related, 4);
+        assert_eq!(ctx.total_related, 5, "m-empty is related but has nothing to brief on");
 
         let series = &ctx.meetings[3];
         assert!(series.same_series);

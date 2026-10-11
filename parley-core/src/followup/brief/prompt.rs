@@ -121,12 +121,67 @@ fn meeting_block(label: &str, meeting: &RelatedMeeting) -> String {
         push_list(&mut out, "Decisions", s.decisions.iter().map(|d| prompt_text(d, MAX_ITEM_CHARS)));
         push_list(&mut out, "Open questions", s.open_questions.iter().map(|q| prompt_text(q, MAX_ITEM_CHARS)));
     } else if let Some(markdown) = &meeting.summary.markdown {
-        out.push_str(&format!("Summary: {}\n", prompt_text(markdown, MAX_SUMMARY_CHARS)));
+        out.push_str(&markdown_digest(markdown));
     } else {
         out.push_str("(No summary.)\n");
     }
     push_list(&mut out, "Open action items", meeting.open_items.iter().map(item_line));
     out.push_str("</meeting>\n\n");
+    out
+}
+
+/// The parts of a Markdown summary a brief needs, for meetings without a
+/// structured summary (older or edited ones): its opening paragraph as the
+/// overview, and the items under any "…decision…" and "…question…"
+/// headings. Without such headings, the start of the summary instead.
+pub fn markdown_digest(markdown: &str) -> String {
+    let mut sections: Vec<(String, Vec<String>)> = vec![(String::new(), Vec::new())];
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let heading = if trimmed.starts_with('#') {
+            Some(trimmed.trim_start_matches('#').trim())
+        } else if trimmed.len() > 4 && trimmed.starts_with("**") && trimmed.ends_with("**") {
+            Some(trimmed.trim_matches('*').trim())
+        } else {
+            None
+        };
+        match heading {
+            Some(h) => sections.push((h.to_lowercase(), Vec::new())),
+            None => {
+                let item = trimmed
+                    .trim_start_matches(['*', '-', '•'])
+                    .trim_start()
+                    .trim_start_matches(|c: char| c.is_ascii_digit())
+                    .trim_start_matches(['.', ')'])
+                    .trim()
+                    .replace("**", "");
+                if !item.is_empty() {
+                    sections.last_mut().expect("one section").1.push(item);
+                }
+            }
+        }
+    }
+    let find = |needle: &str| -> Vec<String> {
+        sections
+            .iter()
+            .filter(|(h, _)| h.contains(needle))
+            .flat_map(|(_, items)| items.iter().map(|i| prompt_text(i, MAX_ITEM_CHARS)))
+            .collect()
+    };
+    let decisions = find("decision");
+    let questions = find("question");
+    if decisions.is_empty() && questions.is_empty() {
+        return format!("Summary: {}\n", prompt_text(markdown, MAX_SUMMARY_CHARS));
+    }
+    let mut out = String::new();
+    if let Some(first) = sections.iter().flat_map(|(_, items)| items.first()).next() {
+        out.push_str(&format!("Overview: {}\n", prompt_text(first, MAX_OVERVIEW_CHARS)));
+    }
+    push_list(&mut out, "Decisions", decisions);
+    push_list(&mut out, "Open questions", questions);
     out
 }
 
@@ -250,7 +305,7 @@ pub fn link_target(url: &str) -> Option<usize> {
 
 /// What to show instead of a brief when there's no history to brief on.
 pub fn no_history_message(ctx: &BriefContext) -> String {
-    if ctx.meetings.is_empty() {
+    if ctx.meetings.is_empty() && ctx.total_related == 0 {
         if ctx.people.is_empty() {
             "No past meetings found for this event: it isn't part of a series you've recorded, and it lists no \
              other attendees to match."
@@ -344,6 +399,18 @@ mod tests {
     }
 
     #[test]
+    fn digests_markdown_summaries() {
+        let md = "**Summary**\n\nWe reviewed the pipeline.\n\n**Key Decisions**\n\n*   Ship the **Power 25** list.\n\
+                  *   Meet weekly.\n\n**Discussion Highlights**\n\n* Long chat\n\n## Open Questions\n1. Who owns QA?\n";
+        assert_eq!(
+            markdown_digest(md),
+            "Overview: We reviewed the pipeline.\nDecisions:\n- Ship the Power 25 list.\n- Meet weekly.\n\
+             Open questions:\n- Who owns QA?\n"
+        );
+        assert_eq!(markdown_digest("Just a paragraph."), "Summary: Just a paragraph.\n");
+    }
+
+    #[test]
     fn validates_output() {
         assert_eq!(validate_brief("<think>x</think>\n- Point [M1]\n").unwrap(), "- Point [M1]");
         assert!(validate_brief("  <think>only</think> ").is_err());
@@ -381,10 +448,8 @@ mod tests {
         assert!(no_history_message(&c).contains("attendees"));
         c.people.clear();
         assert!(no_history_message(&c).contains("series"));
-        let mut m = meeting("a", "Sync", 1);
-        m.summary = StoredSummary::default();
-        m.open_items.clear();
-        let c = ctx(vec![m]);
+        let mut c = ctx(vec![]);
+        c.total_related = 2;
         assert!(!c.has_substance());
         assert!(no_history_message(&c).contains("none of them has a summary"));
     }
