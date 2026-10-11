@@ -1,7 +1,7 @@
 # System Architecture
 
 Parley is a self-contained desktop application built with
-[GPUI](https://www.gpui.rs/) (the UI framework behind Zed). A Tauri-free
+[GPUI](https://www.gpui.rs/) (the UI framework behind Zed). A UI-independent
 Rust core (`parley-core`) and the GPUI shell (`parley-gpui`) link into a
 single native binary — no webview, no JavaScript, no IPC layer.
 
@@ -13,7 +13,7 @@ graph TD
         A[GPUI Views: recording, meeting, settings, tray]
     end
 
-    subgraph "parley-core (Tauri-free)"
+    subgraph "parley-core (UI-independent)"
         C[Audio Engine]
         D[Transcription Engine]
         E[Database]

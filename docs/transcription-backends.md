@@ -95,7 +95,7 @@ context_prompt, decode_config, options) -> TranscriptionOutcome`. It takes
 hardware-adaptive knobs (`DecodeConfig { beam_size, max_threads,
 temperature }`) as plain arguments rather than reaching for
 `audio::HardwareProfile` itself, so it has zero dependency on Tokio,
-Tauri, or the app crate — a sidecar binary can use it standalone.
+the UI shell, or the app crate — a sidecar binary can use it standalone.
 
 **The in-process `WhisperEngine` is left unmodified for this spike.** The
 extraction is a faithful port (same params, same confidence math, same
@@ -136,8 +136,8 @@ toolchains available here — same constraint noted in the task). See
 It:
 
 1. Enumerates `whisper-helper-{cuda,vulkan,cpu}` next to the running
-   executable (mirrors where `build.sh` stages `llama-helper-<triple>`
-   today, i.e. `frontend/src-tauri/binaries/`).
+   executable (mirrors where `build.sh` stages `llama-helper` today: next
+   to the `parley` binary in the AppImage).
 2. Spawns each, sends a `Probe` request, reads the terminal response.
 3. Picks the first that reports `decode_ok: Some(true)` in priority order
    **cuda → vulkan → cpu**.
@@ -145,9 +145,8 @@ It:
    — `manual_override` is a placeholder field for a persisted user choice;
    actually wiring it to config storage is implementation-phase work (see
    below), not part of this spike.
-5. `get_transcription_backends()` is the shape a future
-   `#[tauri::command]` for a settings UI would take (currently a plain
-   `pub fn`, not registered as a command).
+5. `get_transcription_backends()` is the entry point a future settings
+   UI would call (currently a plain `pub fn` with no caller).
 
 This module type-checks and its unit tests pass in isolation (verified via
 a scratch crate depending only on `whisper-protocol`, `anyhow`, `serde` —
@@ -318,22 +317,22 @@ rough (S ≈ 1-2 days, M ≈ 3-5 days, L ≈ 1-2 weeks).
    into it as the "which binary to spawn" input.
 4. **[M] Build/staging integration.** Extend `build.sh`/`dev.sh` to build
    `whisper-helper` alongside `llama-helper` (same `HELPER_FEATURES` pattern
-   already in `build.sh`) and stage it into `binaries/` under Tauri's
-   `externalBin` naming convention. Decide and implement the
+   already in `build.sh`) and stage it next to the `parley` binary, the
+   way `llama-helper` is. Decide and implement the
    on-demand-fetch-for-GPU-variants distribution model from §5 — this is
    the highest-uncertainty item; depends on real AppImage size numbers from
    milestone 1's CI builds on GPU-capable runners.
 5. **[L] Route the live recording path through the sidecar,** behind the
    `backend_probe`-selected backend, with the in-process engine as the
    fallback described in §5. Includes: settings UI consuming
-   `get_transcription_backends` (registering it as an actual
-   `#[tauri::command]`), the manual-override persistence `backend_probe`
+   `get_transcription_backends` (a GPUI settings page calling it
+   directly), the manual-override persistence `backend_probe`
    currently stubs, and end-to-end testing on real CUDA/Vulkan hardware
    (unavailable in this spike's container).
 6. **[S] Remove compile-time `cuda`/`vulkan`/`hipblas`/`openblas` features
    from the main app crate** once milestone 5 ships and is validated, since
-   the sidecar makes them redundant — cleans up `frontend/src-tauri/
-   Cargo.toml`'s feature list and the per-backend release build matrix in
+   the sidecar makes them redundant — cleans up `parley-core`/
+   `parley-gpui`'s `Cargo.toml` feature lists and the per-backend release build matrix in
    `build.sh`/CI.
 
 Milestones 1–2 are safe to land independently and incrementally de-risk the
