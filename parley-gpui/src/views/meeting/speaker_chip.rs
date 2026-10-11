@@ -51,6 +51,18 @@ pub fn edit_panel_title(is_named_profile: bool) -> &'static str {
     }
 }
 
+/// What the edit panel's name field starts with. A named profile is being
+/// renamed, so it starts with the current name; an unnamed "Speaker N"
+/// cluster starts empty. The calendar attendee chips are filtered by this
+/// field, so pre-filling "Speaker 1" hid every attendee.
+pub fn initial_edit_name(speaker: &str, voice_profile_id: Option<&str>) -> String {
+    if voice_profile_id.is_some() {
+        speaker.to_string()
+    } else {
+        String::new()
+    }
+}
+
 /// One calendar attendee reduced to what the rename/promote form needs —
 /// mirrors `EditableSpeakerChip.tsx`'s `AttendeeSuggestion`.
 #[derive(Clone, Debug, PartialEq)]
@@ -105,6 +117,18 @@ pub fn filter_attendee_suggestions<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unnamed_speaker_edit_starts_empty_so_every_attendee_is_offered() {
+        let attendees = vec![
+            AttendeeSuggestion { label: "Tom Hennell".into(), email: None },
+            AttendeeSuggestion { label: "Matthew Parry".into(), email: None },
+        ];
+        let name = initial_edit_name("Speaker 1", None);
+        assert_eq!(name, "");
+        assert_eq!(filter_attendee_suggestions(&attendees, &name).len(), 2);
+        assert_eq!(initial_edit_name("Alice", Some("profile-1")), "Alice");
+    }
 
     #[test]
     fn recognises_unnamed_speaker_labels() {
