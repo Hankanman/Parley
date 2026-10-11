@@ -175,6 +175,17 @@ impl LlmConfig {
     ) -> Result<Self, String> {
         let provider = LLMProvider::from_str(provider_name)?;
 
+        // A model name left over from another provider (e.g. "gpt-5" after
+        // switching to built-in AI) would otherwise fail every call — and
+        // with no context size to go on, chunk the transcript to dust first.
+        if provider == LLMProvider::BuiltInAI
+            && crate::summary::summary_engine::models::get_model_by_name(model_name).is_none()
+        {
+            return Err(format!(
+                "\"{model_name}\" isn't a built-in model. Choose one in Settings → Summary."
+            ));
+        }
+
         let keyless = matches!(
             provider,
             LLMProvider::Ollama | LLMProvider::BuiltInAI | LLMProvider::CustomOpenAI

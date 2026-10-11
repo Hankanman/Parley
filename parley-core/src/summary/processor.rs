@@ -524,6 +524,14 @@ fn check_cancelled(cancellation_token: Option<&CancellationToken>) -> Result<(),
 
 /// Generates a complete meeting summary with conditional chunking strategy.
 ///
+/// Smallest transcript slice sent per map call, however small the model's
+/// context: below this the "chunks" are a few words each and the summary is
+/// worthless (an unknown model once produced ~4,000 one-token chunks).
+const MIN_CHUNK_TOKENS: usize = 256;
+
+/// Give up on map-reduce after this many failed chunks with no success.
+const MAX_LEADING_CHUNK_FAILURES: usize = 3;
+
 /// Transcripts under `token_threshold` are summarized in a single pass.
 /// Longer ones go through map-reduce: chunk → summarize each → combine —
 /// with the combine step itself batched hierarchically, because joining
@@ -581,7 +589,7 @@ pub async fn generate_meeting_summary<L: SummaryLlm>(
     let call_budget = token_threshold
         .saturating_sub(300)
         .saturating_sub(notes_tokens)
-        .max(1);
+        .max(MIN_CHUNK_TOKENS);
 
     if total_tokens + notes_tokens < token_threshold {
         info!(
@@ -640,6 +648,12 @@ pub async fn generate_meeting_summary<L: SummaryLlm>(
                     }
                     failed_chunks += 1;
                     error!("Failed processing chunk {}/{}: {}", i + 1, num_chunks, e);
+                    // Nothing has worked yet: a misconfigured provider fails
+                    // every chunk the same way, so stop rather than repeat it
+                    // for the whole transcript.
+                    if chunk_summaries.is_empty() && failed_chunks >= MAX_LEADING_CHUNK_FAILURES {
+                        return Err(format!("Summary generation failed: {e}"));
+                    }
                 }
             }
         }

@@ -34,7 +34,10 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
-use parley_core::summary::summary_engine::{model_manager::ModelStatus as BuiltinModelStatus, models::get_available_models};
+use parley_core::summary::summary_engine::{
+    model_manager::ModelStatus as BuiltinModelStatus,
+    models::{self, get_available_models},
+};
 use parley_core::summary::CustomOpenAIConfig;
 
 use super::model_utils::{format_size_mb, merge_with_fallback};
@@ -98,7 +101,10 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
                         {
                             let view = view.clone();
                             move |val: SharedString, cx: &mut App| {
-                                set_summary(cx, &view, |cfg| cfg.provider = val.to_string());
+                                set_summary(cx, &view, |cfg| {
+                                    cfg.model = model_for_provider(&cfg.model, &val);
+                                    cfg.provider = val.to_string();
+                                });
                             }
                         },
                     ),
@@ -268,6 +274,27 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
     );
 
     page
+}
+
+/// The model to keep when switching to `provider`: a model name only means
+/// something to the provider it was picked for, so a built-in model doesn't
+/// carry over to a cloud provider (and vice versa — that is how a built-in
+/// provider ended up asked for "gpt-5"). Switching to built-in AI selects
+/// its default model; switching to anything else clears a built-in name so
+/// that provider's picker starts empty.
+fn model_for_provider(current: &str, provider: &str) -> String {
+    let is_builtin_model = models::get_model_by_name(current).is_some();
+    if provider == "builtin-ai" {
+        if is_builtin_model {
+            current.to_string()
+        } else {
+            models::get_default_model().name
+        }
+    } else if is_builtin_model {
+        String::new()
+    } else {
+        current.to_string()
+    }
 }
 
 fn set_summary(
@@ -808,4 +835,19 @@ fn builtin_manager_group(view: &Entity<SettingsView>) -> SettingGroup {
                 column.into_any_element()
             }
         }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{model_for_provider, models};
+
+    #[test]
+    fn switching_provider_drops_a_model_the_new_provider_does_not_know() {
+        let builtin = models::get_default_model().name;
+        assert_eq!(model_for_provider("gpt-5", "builtin-ai"), builtin);
+        assert_eq!(model_for_provider(&builtin, "builtin-ai"), builtin);
+        assert_eq!(model_for_provider(&builtin, "openai"), "");
+        assert_eq!(model_for_provider("gpt-5", "openai"), "gpt-5");
+        assert_eq!(model_for_provider("llama3.2:3b", "ollama"), "llama3.2:3b");
+    }
 }
