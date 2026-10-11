@@ -12,6 +12,7 @@
 
 mod ask;
 mod calendar_format;
+mod followup;
 mod format;
 mod insights;
 mod speaker_chip;
@@ -3023,6 +3024,18 @@ impl MeetingView {
                                         .tooltip("Copy summary")
                                         .disabled(!has_summary)
                                         .on_click(cx.listener(|this, _, window, cx| this.copy_summary(window, cx))),
+                                )
+                                .child(
+                                    Button::new("draft-followup-email")
+                                        .ghost()
+                                        .icon(Lucide::Mail)
+                                        .tooltip("Draft follow-up email")
+                                        .disabled(!has_summary && self.transcripts.is_empty())
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            if let Some(id) = this.meeting_id.clone() {
+                                                followup::open(id, window, cx);
+                                            }
+                                        })),
                                 )
                                 .child(
                                     Button::new("edit-summary")
