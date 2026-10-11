@@ -118,9 +118,8 @@ pub async fn get_or_init_whisper(
     };
 
     // Which model does the saved config ask for (if any)? Reads the setting
-    // directly from the pool rather than through `api_get_transcript_config`
-    // (a `#[tauri::command]`) — this only needs `provider`/`model`, not the
-    // API key that command also resolves. No pool yet (DB still initialising
+    // directly from the pool via `get_transcript_config` — this only needs
+    // `provider`/`model`, not the API key. No pool yet (DB still initialising
     // on a first-launch cold start) is treated like "no saved config".
     let saved_config = match pool {
         Some(pool) => {

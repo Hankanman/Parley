@@ -1,13 +1,9 @@
 //! "Notifications" settings page: enable/disable and which events.
 //!
-//! Reads/writes the same `app_settings` row (`KEY_NOTIFICATION_SETTINGS`)
-//! as the React app's notification settings and
-//! `frontend/src-tauri/src/notifications/settings.rs`'s
-//! `NotificationSettings`/`NotificationPreferences` — see `state.rs`'s
-//! mirrored struct doc comment for why it's a local copy rather than a
-//! shared type. `parley-gpui/src/notifications.rs` (tray/DBus
-//! notifications) already reads a subset of this exact row, so this page
-//! must keep the JSON field names identical.
+//! Reads/writes the `app_settings` row under `KEY_NOTIFICATION_SETTINGS`
+//! through `state.rs`'s `NotificationSettings`.
+//! `parley-gpui/src/notifications.rs` (tray/DBus notifications) reads a
+//! subset of this exact row, so the JSON field names must stay identical.
 
 use gpui_kit::component::{
     button::Button,

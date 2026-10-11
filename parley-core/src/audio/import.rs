@@ -245,9 +245,8 @@ fn extract_duration_from_metadata(path: &Path) -> Result<f64> {
 }
 
 /// Start import of an audio file. Takes an already-resolved event sink and
-/// DB pool (the Tauri shell's `start_import` in `import_commands.rs`
-/// resolves both from a live `AppHandle`), so this module never depends on
-/// Tauri.
+/// DB pool (the GPUI import view passes `AppServices`' sink and pool), so
+/// this module never depends on the UI shell.
 pub async fn start_import_with(
     sink: SharedEventSink,
     pool: Option<SqlitePool>,
@@ -769,8 +768,7 @@ async fn run_import(
     })
 }
 
-/// Emit progress event. Takes a `&dyn EventSink` rather than an `AppHandle`
-/// since this only ever emits — see `events.rs`.
+/// Emit an `import-progress` event through `sink`.
 fn emit_progress(sink: &dyn EventSink, stage: &str, progress: u32, message: &str) {
     let _ = sink.emit_event(
         "import-progress",

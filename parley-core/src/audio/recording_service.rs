@@ -1,12 +1,12 @@
 // audio/recording_service.rs
 //
-// Tauri-free recording orchestration: start (in its several parameterised
-// forms), stop, pause, resume, and the fatal-error auto-stop path. Extracted
-// from `recording_commands.rs` (Phase 0 WP-F) so this logic depends only on
-// [`RecordingContext`] (an event sink + an optional DB pool) instead of a
-// Tauri `AppHandle`. `recording_commands.rs` now holds only thin
-// `#[tauri::command]` wrappers that build a context (and, for `start`, the
-// two hooks below) from the `AppHandle` and delegate here.
+// UI-independent recording orchestration: start (in its several
+// parameterised forms), stop, pause, resume, and the fatal-error auto-stop
+// path. Depends only on [`RecordingContext`] (an event sink + an optional
+// DB pool), so every caller in the GPUI shell — the recording view, the
+// tray, meeting detection, quit — builds a context (via
+// `AppServices::recording_context()`) plus, for `start`, the two hooks
+// below, and delegates here.
 //
 // Every ordering guarantee documented on the functions in this module was
 // hard-won against real bugs (issues #24, #25, #26, #57 slice 2) — preserve
@@ -35,16 +35,14 @@ use super::transcription::{self, reset_speech_detected_flag, TranscriptUpdate};
 // SHELL-FREE CONTEXT AND HOOKS
 // ============================================================================
 
-/// Everything the service needs from the shell, as plain values. Built once
-/// per command invocation by `recording_commands.rs` from the live
-/// `AppHandle`/`AppState`; a future non-Tauri shell builds one the same way
-/// from whatever it uses instead.
+/// Everything the service needs from the shell, as plain values. The GPUI
+/// shell builds one per call from its `AppServices` global
+/// (`AppServices::recording_context()`).
 #[derive(Clone)]
 pub struct RecordingContext {
     pub sink: SharedEventSink,
-    /// `None` when `AppState` hasn't been managed yet (e.g. a first-launch
-    /// cold start racing a start/stop call before the frontend has created
-    /// the database) — see `db_pool()`'s doc comment on the Tauri side.
+    /// `None` when no database exists yet (e.g. a first-launch cold start
+    /// racing a start/stop call before onboarding has created it).
     /// Every call site here treats a missing pool as "log and continue"
     /// rather than failing the recording.
     pub pool: Option<sqlx::SqlitePool>,
@@ -57,16 +55,14 @@ impl RecordingContext {
 }
 
 /// A one-shot async hook returning `T`, boxed so it can cross an `async fn`
-/// boundary without infecting the service with a generic Tauri `Runtime`
-/// parameter.
+/// boundary without making the service generic over the hook types.
 type StartHook<T> = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send>;
 
 /// Shell-side calls `start()` needs at specific points mid-flow. Both
 /// underlying functions (`transcription::validate_transcription_model_ready`,
-/// `speaker_diarization::service::try_init_for_recording`) are Tauri-free
-/// (`Option<&SqlitePool>`), so `recording_commands::build_start_hooks` builds
-/// these by closing over the pool already resolved into `RecordingContext`
-/// rather than an `AppHandle`. Kept as hooks (rather than called directly
+/// `speaker_diarization::service::try_init_for_recording`) take only an
+/// `Option<&SqlitePool>`, so [`default_start_hooks`] builds these by closing
+/// over the pool already resolved into `RecordingContext`. Kept as hooks (rather than called directly
 /// here) so this module still doesn't need to know how the pool is sourced.
 pub struct StartHooks {
     /// Currently `transcription::validate_transcription_model_ready`.
@@ -77,11 +73,10 @@ pub struct StartHooks {
 
 /// Build the standard [`StartHooks`] every shell wires up: both underlying
 /// functions (`transcription::validate_transcription_model_ready`,
-/// `speaker_diarization::service::try_init_for_recording`) are already
-/// Tauri-free (`Option<&SqlitePool>`), so this just closes over `pool` for
-/// each. Extracted here (rather than duplicated per shell) so the Tauri
-/// command layer and the GPUI shell build byte-for-byte the same hooks; a
-/// shell only needs this when it doesn't want to build custom hooks itself.
+/// `speaker_diarization::service::try_init_for_recording`) take only an
+/// `Option<&SqlitePool>`, so this just closes over `pool` for each. Lives
+/// here so every start path in the shell (recording view, tray, meeting
+/// detection) builds byte-for-byte the same hooks.
 pub fn default_start_hooks(pool: Option<sqlx::SqlitePool>) -> StartHooks {
     let pool_for_validate = pool.clone();
     let pool_for_diarizer = pool;
@@ -312,7 +307,7 @@ static PENDING_SEGMENT_BUFFER: Mutex<Vec<crate::audio::recording_saver::Transcri
 /// `PwStreamEvent` handler) — so this spawns onto `runtime`, a
 /// `tokio::runtime::Handle` captured up front in `start()` while a tokio
 /// context was definitely current, rather than `tokio::spawn` (which
-/// panics off-runtime) or Tauri's own async runtime.
+/// panics off-runtime).
 fn spawn_fatal_error_stop(
     ctx: RecordingContext,
     runtime: &tokio::runtime::Handle,
@@ -327,9 +322,8 @@ fn spawn_fatal_error_stop(
     emit_phase(ctx.sink.as_ref(), RecordingPhase::Error);
 
     // `stop()` doesn't actually use `save_path` for anything beyond ensuring
-    // its parent directory exists (see the Tauri `stop_recording` command,
-    // which is the caller for a user-initiated stop); build one the same way
-    // the tray's stop handlers do.
+    // its parent directory exists; build one the same way the shell's
+    // user-initiated stop paths (recording view, tray) do.
     let save_path = crate::paths::app_data_dir()
         .map(|dir| {
             let timestamp = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S").to_string();
@@ -422,12 +416,9 @@ pub struct TranscriptionStatus {
 /// Parameters for `start()`. `mic_device_name`/`system_device_name` both
 /// `None` selects saved-preference-or-default device resolution (the
 /// "default devices" flow); either being `Some` selects the "specific
-/// devices" flow, which uses the given ids directly. This mirrors the
-/// dispatch the Tauri command layer used to do between
-/// `start_recording_with_meeting_name` and
-/// `start_recording_with_devices_and_meeting` — genuinely the same flow
-/// modulo how devices are resolved, so it's one function parameterised on
-/// that instead of two near-duplicates.
+/// devices" flow, which uses the given ids directly. The two are genuinely
+/// the same flow modulo how devices are resolved, so it's one function
+/// parameterised on that instead of two near-duplicates.
 pub struct StartRequest {
     pub mic_device_name: Option<String>,
     pub system_device_name: Option<String>,
@@ -440,7 +431,7 @@ pub struct StartRequest {
 
 /// Start a recording session. See [`StartRequest`] for the two device
 /// resolution flows this covers, and [`StartHooks`] for the two
-/// still-AppHandle-shaped calls it needs mid-flow.
+/// pool-backed calls it needs mid-flow.
 pub async fn start(
     ctx: RecordingContext,
     hooks: StartHooks,

@@ -94,9 +94,8 @@ pub fn cancel_retranscription() {
 }
 
 /// Start retranscription of a meeting's audio. Takes an already-resolved
-/// event sink and DB pool (the Tauri shell's `start_retranscription` in
-/// `retranscription_commands.rs` resolves both from a live `AppHandle`), so
-/// this module never depends on Tauri.
+/// event sink and DB pool (the GPUI meeting view passes `AppServices`' sink
+/// and pool), so this module never depends on the UI shell.
 pub async fn start_retranscription_with(
     sink: SharedEventSink,
     pool: Option<SqlitePool>,
@@ -528,8 +527,7 @@ async fn run_retranscription(
     })
 }
 
-/// Emit progress event. Takes a `&dyn EventSink` rather than an `AppHandle`
-/// since this only ever emits — see `events.rs`.
+/// Emit a `retranscription-progress` event through `sink`.
 fn emit_progress(sink: &dyn EventSink, meeting_id: &str, stage: &str, progress: u32, message: &str) {
     let _ = sink.emit_event(
         "retranscription-progress",

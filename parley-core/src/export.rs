@@ -1,8 +1,6 @@
-//! Self-contained meeting export, in markdown or JSON. Tauri-free: the
-//! Tauri shell's `export_meeting`/`export_meeting_to_file` commands
-//! (`frontend/src-tauri/src/api/export.rs`) are thin wrappers around
-//! [`build_export`] plus (for the "to file" variant) a save-file dialog;
-//! the GPUI shell calls [`build_export`] directly.
+//! Self-contained meeting export (markdown, JSON, SRT/VTT, DOCX, PDF). The
+//! GPUI meeting view calls [`build_export`] / [`build_export_file`] directly
+//! and handles the save-file dialog itself.
 //!
 //! The point is a single document you can hand to another tool — an LLM, a
 //! ticket tracker, a teammate — without it needing access to this app's

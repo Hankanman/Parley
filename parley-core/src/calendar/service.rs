@@ -1,8 +1,6 @@
-//! Shared core of the `calendar_link_meeting` Tauri command: link (or
-//! unlink) a meeting to a calendar event, then best-effort write/delete the
-//! sidecar `calendar_event.json` snapshot alongside the recording folder.
-//! Extracted so the GPUI shell can call the exact same behaviour without
-//! going through Tauri.
+//! Link (or unlink) a meeting to a calendar event, then best-effort
+//! write/delete the sidecar `calendar_event.json` snapshot alongside the
+//! recording folder.
 
 use std::path::PathBuf;
 
@@ -14,7 +12,7 @@ use super::snapshot::{self, lookup_meeting_folder, CalendarEventSnapshot, SNAPSH
 /// Link `meeting_id` to `event_id` (or unlink when `None`), then best-effort
 /// write or delete the sidecar snapshot file. Returns `false` only when the
 /// meeting row itself wasn't found/updated — snapshot failures are logged,
-/// not surfaced, matching the Tauri command.
+/// not surfaced, since the link itself is what matters.
 pub async fn link_meeting_with_snapshot(
     pool: &SqlitePool,
     meeting_id: &str,

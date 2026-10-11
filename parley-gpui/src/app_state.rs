@@ -26,8 +26,8 @@ pub struct AppServices {
     pub core_events: Entity<CoreEvents>,
     /// `None` on a first launch until onboarding creates the database.
     pub db: DbSlot,
-    /// Shared slot for the built-in-AI (summary) model manager — the same
-    /// `ModelManagerState` the Tauri shell manages via `tauri::State`.
+    /// Shared slot for the built-in-AI (summary) model manager, pre-warmed
+    /// by `bootstrap::spawn_background_init` in `main()`.
     /// Lazily initialized on first use by `service::ensure_manager`.
     pub builtin_manager: ModelManagerState,
 }

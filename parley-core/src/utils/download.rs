@@ -8,8 +8,8 @@
 //! HTTP `Range` resume. This module gives both call sites the same core
 //! loop and lets resume, chunk timeouts, etc. be opted into per call.
 //!
-//! This is intentionally silent about Tauri — `download_file` never emits
-//! an event. Callers own their own event names/payload shapes and translate
+//! This is intentionally UI-agnostic — `download_file` never emits an
+//! event. Callers own their own event names/payload shapes and translate
 //! `on_progress` calls / the returned `Result` into whatever their frontend
 //! expects.
 

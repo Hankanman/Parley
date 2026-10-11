@@ -13,8 +13,8 @@ path = "src/main.rs"
 
 [features]
 default = []
-# GPU backends for whisper.cpp, forwarded to parley-core (same names as the
-# Tauri shell so build scripts can pass `--features cuda` to either app).
+# GPU backends for whisper.cpp, forwarded to parley-core (same names there
+# and on llama-helper, so build scripts pass one `--features cuda` etc.).
 cuda = ["parley-core/cuda"]
 vulkan = ["parley-core/vulkan"]
 hipblas = ["parley-core/hipblas"]
@@ -52,7 +52,8 @@ serde_json = "1"
 tokio = { version = "1.32.0", features = ["full"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono"] }
 chrono = { version = "0.4.31", features = ["serde"] }
-# `_exit` on shutdown, same as the Tauri shell.
+# `_exit` on shutdown (see the end of `main()`), plus the crash-log signal
+# handlers.
 libc = "0.2"
 # GitHub releases update check (same major line as parley-core's own
 # reqwest dep, so Cargo unifies the two into one build).

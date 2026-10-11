@@ -1,8 +1,6 @@
 //! Pure formatting/sorting helpers for the meeting page's calendar-event
-//! panel and picker — mirrors
-//! `frontend/src/components/MeetingDetails/CalendarEventPanel.tsx`'s
-//! `formatTimeRange` and `CalendarEventPicker.tsx`'s `formatOffset` /
-//! proximity sort, in local time.
+//! panel and picker: time ranges, offsets from the meeting, and proximity
+//! sort, in local time.
 
 use chrono::{DateTime, Local, Utc};
 

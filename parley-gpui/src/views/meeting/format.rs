@@ -1,8 +1,7 @@
 //! Pure formatting helpers for the meeting page: transcript timestamps and
-//! the flattened transcript text sent to summary generation. Mirrors
-//! `frontend/src/hooks/meeting-details/useSummaryGeneration.ts`'s
-//! `formatTime`/`fullTranscript` so a generated summary reads the same
-//! whether it was requested from the Tauri UI or this one.
+//! the flattened transcript text sent to summary generation. The
+//! transcript format matches what the retired React frontend sent, so
+//! summaries of old and new meetings read the same.
 
 use chrono::{DateTime, Utc};
 use parley_core::database::models::MeetingTranscript;
@@ -35,9 +34,7 @@ pub fn format_header_date(created_at: DateTime<Utc>) -> String {
     created_at.with_timezone(&chrono::Local).format("%-d %b %Y, %H:%M").to_string()
 }
 
-/// Clipboard text for "Copy transcript". Mirrors
-/// `frontend/src/hooks/meeting-details/useCopyOperations.ts`'s
-/// `handleCopyTranscript`: a `#`/`##` header, then one `[MM:SS] Speaker: text`
+/// Clipboard text for "Copy transcript": a `#`/`##` header, then one `[MM:SS] Speaker: text`
 /// line per segment with a trailing two-space markdown line break.
 pub fn copy_transcript_text(
     meeting_id: &str,
@@ -107,11 +104,11 @@ pub fn has_unsaved_summary_edits(editing: bool, editor_text: &str, saved_markdow
 }
 
 // ---- Confidence indicator -------------------------------------------------
-// Mirrors `frontend/src/components/ConfidenceIndicator.tsx`'s thresholds and
-// labels exactly (including its `>= 0.4` "Medium" cutoff, despite the
-// component's own comment claiming "below 50%").
+// Thresholds and labels carried over unchanged from the retired React
+// frontend (including its `>= 0.4` "Medium" cutoff), so confidence reads
+// the same as it always has.
 
-/// One of the four confidence bands `ConfidenceIndicator.tsx` renders.
+/// One of the four confidence bands shown next to a transcript segment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfidenceLevel {
     High,

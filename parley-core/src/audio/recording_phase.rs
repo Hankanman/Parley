@@ -57,7 +57,7 @@ pub struct RecordingSnapshot {
     pub error: Option<String>,
     /// Monotonically increasing with every emitted snapshot, so a listener
     /// that ends up observing two snapshots out of order (unlikely over a
-    /// single Tauri event channel, but cheap to guard against) can tell
+    /// single event channel, but cheap to guard against) can tell
     /// which one is newer.
     pub seq: u64,
 }

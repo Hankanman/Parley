@@ -1,7 +1,6 @@
 //! Top-level view `main.rs` opens instead of `AppShell` directly: gates on
-//! onboarding status (mirrors `frontend/src/components/layout/AppShell.tsx`
-//! choosing between `OnboardingFlow` and the normal app based on
-//! `OnboardingContext`'s `completed` flag) and, once the shell is shown,
+//! onboarding status (onboarding flow until it's `completed`, then the
+//! normal app shell) and, once the shell is shown,
 //! runs interrupted-meeting recovery (`recovery.rs`).
 //!
 //! Three states:

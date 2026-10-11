@@ -1,11 +1,9 @@
 //! Pure, unit-tested logic for the onboarding flow: the 3-step state
-//! machine (mirrors `frontend/src/contexts/OnboardingContext.tsx`'s
-//! `goNext`/`goPrevious`/`goToStep`) and small formatting/gating helpers the
-//! GPUI view builds on.
+//! machine (next / previous / go-to-step) and small formatting/gating
+//! helpers the GPUI view builds on.
 
 /// The 3-step onboarding flow (system-recommended models, no separate
-/// permissions step on Linux) — same steps as
-/// `frontend/src/components/onboarding/OnboardingFlow.tsx`.
+/// permissions step on Linux).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
     Welcome,
@@ -15,8 +13,8 @@ pub enum Step {
 
 impl Step {
     /// 1-based step number, matching `OnboardingStatus.current_step` as
-    /// persisted by the Tauri flow (so a status saved by one shell can be
-    /// resumed by the other).
+    /// persisted (the numbering predates the GPUI shell, so a status saved
+    /// by the retired Tauri flow still resumes at the right step).
     pub fn number(self) -> u8 {
         match self {
             Step::Welcome => 1,

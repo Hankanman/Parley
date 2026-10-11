@@ -186,8 +186,8 @@ impl VoiceProfilesRepository {
     /// shows both fields together, so the command does too.
     ///
     /// `name` is trimmed and rejected if empty; `email` is trimmed and blank
-    /// values are normalised to `NULL` — every caller (Tauri command, GPUI
-    /// view) gets this for free instead of reimplementing it.
+    /// values are normalised to `NULL` — every caller (GPUI
+    /// views) gets this for free instead of reimplementing it.
     pub async fn update_profile(
         pool: &SqlitePool,
         id: &str,

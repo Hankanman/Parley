@@ -2,11 +2,8 @@
 //! offer to recover any meeting an unclean shutdown left `"recording"`
 //! (marked `"interrupted"` by the startup sweep in
 //! `database::setup::prepare_database_on_startup`, or by a fatal recording
-//! error). Mirrors `frontend/src/components/TranscriptRecovery/**` +
-//! `frontend/src/hooks/useTranscriptRecovery.ts` + the wiring in
-//! `frontend/src/app/page.tsx`, calling the same Tauri-free core functions
-//! the Tauri `list_interrupted_meetings` / `recover_meeting` commands
-//! (`commands/audio/recovery_commands.rs`) wrap directly.
+//! error). Calls the core recovery functions (`list_interrupted_meetings` /
+//! `recover_meeting`) directly.
 
 use gpui_kit::component::{
     ActiveTheme, Disableable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
@@ -144,7 +141,7 @@ impl RecoveryState {
         .detach();
     }
 
-    /// Mirrors the Tauri `recover_meeting` command: merge any leftover
+    /// Merge any leftover
     /// `.checkpoints/` audio into `audio.mp4` (best-effort — transcripts
     /// recover regardless), then mark the row `"completed"`.
     fn recover(&mut self, meeting_id: String, cx: &mut Context<Self>) {

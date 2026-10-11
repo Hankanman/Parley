@@ -1,4 +1,5 @@
-//! Wire protocol between the Tauri app and the `llama-helper` sidecar.
+//! Wire protocol between the Parley app (`parley-core`'s summary engine)
+//! and the `llama-helper` sidecar.
 //!
 //! Newline-delimited JSON over the child process's stdin/stdout: the app
 //! writes one [`Request`] per line, the helper answers with zero or more

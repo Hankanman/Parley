@@ -51,8 +51,8 @@ impl ActionItemsRepository {
     /// [`SOURCE_MANUAL`], [`SOURCE_AGENT`]. New items always start `open`.
     ///
     /// `item.text` is trimmed and rejected if empty — the same rule
-    /// [`Self::update`] enforces — so every caller (Tauri command, GPUI
-    /// view, extractor) gets validation for free instead of reimplementing
+    /// [`Self::update`] enforces — so every caller (GPUI views,
+    /// extractor) gets validation for free instead of reimplementing
     /// it at the call site.
     pub async fn create(
         pool: &SqlitePool,

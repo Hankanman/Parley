@@ -40,8 +40,9 @@ impl Default for OnboardingStatus {
 }
 
 /// One-time, read-only import of onboarding status from the legacy
-/// tauri-plugin-store JSON file (`onboarding-status.json`), written before
-/// this moved to SQLite. Read directly off disk (same `$APPDATA` location
+/// tauri-plugin-store JSON file (`onboarding-status.json`), written by the
+/// retired Tauri shell before this moved to SQLite. Kept so an upgrade
+/// from that era doesn't re-run onboarding. Read directly off disk (same `$APPDATA` location
 /// and flat `{"status": ...}` shape the store plugin used, with its default
 /// serializer) so this module no longer depends on the plugin at all. The
 /// file is left in place afterward.
