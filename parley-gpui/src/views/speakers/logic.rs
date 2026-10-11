@@ -32,10 +32,51 @@ pub fn visible_profiles(profiles: &[VoiceProfile]) -> Vec<&VoiceProfile> {
     visible
 }
 
-/// Everyone `loser_id` could be merged into: every visible profile except
-/// itself.
-pub fn merge_candidates<'a>(visible: &[&'a VoiceProfile], loser_id: &str) -> Vec<&'a VoiceProfile> {
-    visible.iter().copied().filter(|p| p.id != loser_id).collect()
+/// Everyone `loser_id` could be merged into: the user's own (self) profile
+/// first — the usual target for a duplicate of the user — then every other
+/// visible profile, alphabetically, excluding the loser itself.
+pub fn merge_candidates<'a>(profiles: &'a [VoiceProfile], loser_id: &str) -> Vec<&'a VoiceProfile> {
+    let own = profiles.iter().filter(|p| p.is_self && p.id != loser_id);
+    let others = visible_profiles(profiles)
+        .into_iter()
+        .filter(|p| p.id != loser_id);
+    own.chain(others).collect()
+}
+
+/// Label for a merge target button: the self profile is marked "(you)" so
+/// the user can tell it from a same-named duplicate.
+pub fn merge_target_label(profile: &VoiceProfile) -> String {
+    if profile.is_self {
+        format!("{} (you)", profile.name)
+    } else {
+        profile.name.clone()
+    }
+}
+
+/// Ids of profiles whose name (trimmed, case-insensitive) is shared with
+/// another profile — self profile included — so the page can flag them for
+/// merging (#102).
+pub fn duplicate_name_ids(profiles: &[VoiceProfile]) -> std::collections::HashSet<String> {
+    let key = |p: &VoiceProfile| p.name.trim().to_lowercase();
+    profiles
+        .iter()
+        .filter(|p| profiles.iter().any(|o| o.id != p.id && key(o) == key(p)))
+        .map(|p| p.id.clone())
+        .collect()
+}
+
+/// The other profile already called `name` (trimmed, case-insensitive), if
+/// any — renaming onto it would create a duplicate, so the page offers a
+/// merge instead.
+pub fn name_taken_by<'a>(
+    profiles: &'a [VoiceProfile],
+    name: &str,
+    editing_id: &str,
+) -> Option<&'a VoiceProfile> {
+    let name = name.trim().to_lowercase();
+    profiles
+        .iter()
+        .find(|p| p.id != editing_id && p.name.trim().to_lowercase() == name)
 }
 
 /// Best-effort relative date for the "Updated" column, e.g. "11 Sep 2026".
@@ -117,10 +158,46 @@ mod tests {
     #[test]
     fn merge_candidates_excludes_the_loser() {
         let profiles = vec![profile("1", "Alice", false), profile("2", "Bob", false)];
-        let visible = visible_profiles(&profiles);
-        let candidates = merge_candidates(&visible, "1");
+        let candidates = merge_candidates(&profiles, "1");
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].id, "2");
+    }
+
+    #[test]
+    fn merge_candidates_offer_the_self_profile_first() {
+        let profiles = vec![
+            profile("dup", "Seb Burrell", false),
+            profile("zed", "Zoe", false),
+            profile("me", "Seb Burrell", true),
+            profile("al", "Alice", false),
+        ];
+        let ids: Vec<&str> = merge_candidates(&profiles, "dup")
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert_eq!(ids, ["me", "al", "zed"]);
+        assert_eq!(merge_target_label(&profiles[2]), "Seb Burrell (you)");
+        assert_eq!(merge_target_label(&profiles[1]), "Zoe");
+    }
+
+    #[test]
+    fn duplicate_names_are_flagged_including_against_the_self_profile() {
+        let profiles = vec![
+            profile("me", "Seb Burrell", true),
+            profile("dup", " seb burrell", false),
+            profile("al", "Alice", false),
+        ];
+        let dups = duplicate_name_ids(&profiles);
+        assert!(dups.contains("me") && dups.contains("dup"));
+        assert!(!dups.contains("al"));
+    }
+
+    #[test]
+    fn name_taken_by_ignores_the_profile_being_edited() {
+        let profiles = vec![profile("me", "Seb", true), profile("al", "Alice", false)];
+        assert_eq!(name_taken_by(&profiles, " seb ", "al").map(|p| p.id.as_str()), Some("me"));
+        assert!(name_taken_by(&profiles, "Alice", "al").is_none());
+        assert!(name_taken_by(&profiles, "Bob", "al").is_none());
     }
 
     #[test]
