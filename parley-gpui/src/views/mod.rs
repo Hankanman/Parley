@@ -1,5 +1,6 @@
 pub mod action_items;
 pub mod ask;
+pub mod brief;
 pub mod import;
 pub mod meeting;
 pub mod onboarding;

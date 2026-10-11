@@ -377,34 +377,143 @@ fn due_reminders(
 /// de-duplicated per event id for the process lifetime. Dead in the Tauri
 /// app (`show_meeting_reminder` is a command nothing ever calls) — this is
 /// the real implementation. Call once, after the main window opens.
+///
+/// Each reminder offers the event's pre-meeting brief (issue #84): an
+/// "Open brief" action button when the notification server supports
+/// actions, and clicking the notification itself opens it too. Either
+/// raises Parley on the Brief page for that event.
 pub fn start_meeting_reminder_loop(cx: &mut App) {
     let services = AppServices::global(cx);
     let io = services.io.clone();
     let db = services.db.clone();
 
-    io.spawn(async move {
+    cx.spawn(async move |cx| {
         let mut already_notified: HashSet<String> = HashSet::new();
         loop {
             let pool = db.read().unwrap().as_ref().map(|db| db.pool().clone());
             if let Some(pool) = pool {
-                reminder_tick(pool, &mut already_notified).await;
+                let tick = io
+                    .spawn(async move {
+                        let due = reminder_tick(pool, &mut already_notified).await;
+                        (already_notified, due)
+                    })
+                    .await;
+                let due = match tick {
+                    Ok((notified, due)) => {
+                        already_notified = notified;
+                        due
+                    }
+                    Err(e) => {
+                        log::warn!("meeting reminder tick panicked: {}", e);
+                        already_notified = HashSet::new();
+                        Vec::new()
+                    }
+                };
+                for reminder in due {
+                    let io = io.clone();
+                    cx.spawn(async move |cx| {
+                        let event_id = reminder.event_id.clone();
+                        let response = io
+                            .spawn(async move {
+                                tokio::task::spawn_blocking(move || show_reminder_blocking(&reminder))
+                                    .await
+                                    .unwrap_or(ReminderResponse::Dismissed)
+                            })
+                            .await
+                            .unwrap_or(ReminderResponse::Dismissed);
+                        if response == ReminderResponse::OpenBrief {
+                            let _ = cx.update(|cx| {
+                                crate::tray::open_parley(cx);
+                                crate::shell::navigate(crate::shell::Route::Brief(event_id), cx);
+                            });
+                        }
+                    })
+                    .detach();
+                }
             }
-            tokio::time::sleep(Duration::from_secs(45)).await;
+            cx.background_executor().timer(Duration::from_secs(45)).await;
         }
+    })
+    .detach();
+}
+
+/// A reminder that's due now.
+#[derive(Debug, Clone, PartialEq)]
+struct DueReminder {
+    event_id: String,
+    minutes: u64,
+    title: Option<String>,
+}
+
+/// What the user did with a meeting reminder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReminderResponse {
+    /// "Open brief", or a click on the notification body.
+    OpenBrief,
+    Dismissed,
+}
+
+/// How long a reminder stays up (servers may ignore this).
+const REMINDER_TIMEOUT_MS: u32 = 10 * 60 * 1000;
+
+/// Show a reminder and, when the server supports actions, wait for the user
+/// to act on it. Blocking (D-Bus): run on a blocking thread.
+fn show_reminder_blocking(reminder: &DueReminder) -> ReminderResponse {
+    let supports_actions = notify_rust::get_capabilities()
+        .map(|caps| caps.iter().any(|c| c == "actions"))
+        .unwrap_or(false);
+    let (summary, body) = notification_text(&Kind::MeetingReminder {
+        minutes: reminder.minutes,
+        title: reminder.title.clone(),
     });
+
+    let mut notification = notify_rust::Notification::new();
+    notification.appname("Parley").summary(summary);
+    if supports_actions {
+        notification
+            .body(&format!("{body}. Open the brief to catch up on past meetings."))
+            .timeout(notify_rust::Timeout::Milliseconds(REMINDER_TIMEOUT_MS))
+            .action("default", "Open brief")
+            .action("brief", "Open brief");
+    } else {
+        notification.body(&body);
+    }
+    let handle = match notification.show() {
+        Ok(handle) => handle,
+        Err(e) => {
+            log::warn!("failed to show meeting reminder: {}", e);
+            return ReminderResponse::Dismissed;
+        }
+    };
+    if !supports_actions {
+        return ReminderResponse::Dismissed;
+    }
+    let mut response = ReminderResponse::Dismissed;
+    handle.wait_for_action(|action| {
+        response = reminder_response(action);
+    });
+    response
+}
+
+fn reminder_response(action: &str) -> ReminderResponse {
+    match action {
+        "brief" | "default" => ReminderResponse::OpenBrief,
+        _ => ReminderResponse::Dismissed,
+    }
 }
 
 /// Real body of the reminder tick, taking the pool directly (used by
 /// [`start_meeting_reminder_loop`], separated out so it's callable/testable
-/// without a live `App`/`Io`).
-async fn reminder_tick(pool: sqlx::SqlitePool, already_notified: &mut HashSet<String>) {
+/// without a live `App`/`Io`). Returns the reminders to show now; their
+/// event ids are added to `already_notified`.
+async fn reminder_tick(pool: sqlx::SqlitePool, already_notified: &mut HashSet<String>) -> Vec<DueReminder> {
     let settings = load_settings(Some(pool.clone())).await;
     if !settings.notification_preferences.show_meeting_reminders {
-        return;
+        return Vec::new();
     }
     let reminder_minutes = &settings.notification_preferences.meeting_reminder_minutes;
     if reminder_minutes.is_empty() {
-        return;
+        return Vec::new();
     }
     let max_minutes = *reminder_minutes.iter().max().unwrap_or(&0);
 
@@ -414,7 +523,7 @@ async fn reminder_tick(pool: sqlx::SqlitePool, already_notified: &mut HashSet<St
         Ok(events) => events,
         Err(e) => {
             log::warn!("meeting reminder loop: failed to list upcoming events: {}", e);
-            return;
+            return Vec::new();
         }
     };
     let upcoming: Vec<UpcomingEvent> = events
@@ -428,11 +537,12 @@ async fn reminder_tick(pool: sqlx::SqlitePool, already_notified: &mut HashSet<St
         .collect();
 
     let due = due_reminders(&upcoming, now, reminder_minutes, already_notified);
-    for (id, minutes, title) in due {
-        already_notified.insert(id);
-        let (event_title, body) = notification_text(&Kind::MeetingReminder { minutes, title });
-        show(event_title, body).await;
-    }
+    due.into_iter()
+        .map(|(event_id, minutes, title)| {
+            already_notified.insert(event_id.clone());
+            DueReminder { event_id, minutes, title }
+        })
+        .collect()
 }
 
 // ============================================================================
@@ -644,6 +754,13 @@ mod tests {
         already.insert("e1".to_string());
         let due = due_reminders(&events, now, &[15, 5], &already);
         assert!(due.is_empty());
+    }
+
+    #[test]
+    fn reminder_actions_open_the_brief() {
+        assert_eq!(reminder_response("brief"), ReminderResponse::OpenBrief);
+        assert_eq!(reminder_response("default"), ReminderResponse::OpenBrief);
+        assert_eq!(reminder_response("__closed"), ReminderResponse::Dismissed);
     }
 
     #[test]
