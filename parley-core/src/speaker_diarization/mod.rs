@@ -51,6 +51,8 @@ pub(crate) mod embedding_math;
 pub mod enrollment;
 pub mod model;
 pub mod offline;
+#[cfg(test)]
+mod measure;
 mod profile_matcher;
 mod refinement;
 
@@ -60,7 +62,7 @@ pub use clusterer::OnlineSpeakerClusterer;
 pub use embedder::SpeakerEmbedder;
 pub use model::{default_model_path, model_download_url, model_filename, models_dir};
 pub use profile_matcher::{ProfileMatch, SpeakerProfileMatcher};
-pub use refinement::RefinedAssignment;
+pub use refinement::{RefineOptions, RefinedAssignment};
 
 use anyhow::Result;
 
@@ -152,6 +154,69 @@ pub struct Diarizer {
     history: Mutex<Vec<EmbeddingRecord>>,
 }
 
+/// Which capture channel a diarized segment came from.
+///
+/// The live path knows this exactly (mic vs system stream). The batch path
+/// (import / retranscription) reads a stereo recording — mic left, system
+/// right — and infers it per segment from the channel energies (see
+/// [`SegmentSource::from_channel_energy`]); a mono import is `Unknown`.
+///
+/// Refinement uses it for self-attribution: the mic channel is where the
+/// local user's voice lives, and the far end of a call only ever reaches the
+/// mic as echo-cancelled residue, so a system-channel segment is labelled as
+/// the user only on a strong voice match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SegmentSource {
+    #[default]
+    Unknown,
+    Microphone,
+    System,
+}
+
+impl SegmentSource {
+    /// Fraction of a segment's energy that must come from one channel for it
+    /// to be attributed to that channel. 0.8 is a 6 dB margin — comfortably
+    /// above the echo-cancelled far-end residue on the mic, and above the
+    /// local voice leaking into system audio through a call's sidetone.
+    pub const DOMINANCE: f64 = 0.8;
+
+    /// Infer the source of a stereo segment from the mean-square energy of
+    /// its mic (left) and system (right) channels.
+    pub fn from_channel_energy(mic_energy: f64, system_energy: f64) -> Self {
+        let total = mic_energy + system_energy;
+        if !total.is_finite() || total <= 1e-10 {
+            return Self::Unknown;
+        }
+        let mic_share = mic_energy / total;
+        if mic_share >= Self::DOMINANCE {
+            Self::Microphone
+        } else if mic_share <= 1.0 - Self::DOMINANCE {
+            Self::System
+        } else {
+            Self::Unknown
+        }
+    }
+
+    /// The `transcripts.source` tag for this source, matching the live
+    /// worker's `"mic"` / `"system"`.
+    pub fn as_tag(self) -> Option<&'static str> {
+        match self {
+            Self::Unknown => None,
+            Self::Microphone => Some("mic"),
+            Self::System => Some("system"),
+        }
+    }
+}
+
+/// What a caller knows about a segment beyond its audio, recorded in the
+/// history for refinement.
+#[derive(Debug, Clone, Copy, Default)]
+struct Segment {
+    source: SegmentSource,
+    /// Explicit length; `None` = derive it from the samples passed in.
+    duration_secs: Option<f32>,
+}
+
 /// One diarized segment in the session history. `label`/`voice_profile_id`
 /// track what the segment is *currently* called: they start as the live
 /// pass's assignment and are rewritten by [`Diarizer::apply_refinement`]
@@ -165,6 +230,13 @@ pub struct EmbeddingRecord {
     pub embedding: Vec<f32>,
     pub voice_profile_id: Option<String>,
     pub label: String,
+    /// Cosine score of the live profile match behind `voice_profile_id`
+    /// (`None` when unmatched). Lets refinement revisit weak matches.
+    pub profile_score: Option<f32>,
+    /// Length of the segment's audio, so refinement can tell a voice heard
+    /// for 3 s from one heard for 3 minutes.
+    pub duration_secs: f32,
+    pub source: SegmentSource,
 }
 
 impl Diarizer {
@@ -198,7 +270,29 @@ impl Diarizer {
         samples_16k: &[f32],
         precomputed: Option<Vec<f32>>,
     ) -> Result<DiarizationResult> {
-        self.process_inner(sequence_id, samples_16k, precomputed, None)
+        self.process_inner(sequence_id, samples_16k, precomputed, None, Segment::default())
+    }
+
+    /// [`process`] for a caller that knows which capture channel the segment
+    /// came from (see [`SegmentSource`]) and how long it is — with a
+    /// `precomputed` embedding, `samples_16k` may be empty. The label
+    /// decision is identical; source and duration are only recorded for the
+    /// post-session refinement.
+    ///
+    /// [`process`]: Diarizer::process
+    pub fn process_from_source(
+        &self,
+        sequence_id: u64,
+        samples_16k: &[f32],
+        precomputed: Option<Vec<f32>>,
+        source: SegmentSource,
+        duration_secs: f32,
+    ) -> Result<DiarizationResult> {
+        let segment = Segment {
+            source,
+            duration_secs: Some(duration_secs),
+        };
+        self.process_inner(sequence_id, samples_16k, precomputed, None, segment)
     }
 
     /// Like [`process`], but lets a caller who has already run *offline*
@@ -231,8 +325,13 @@ impl Diarizer {
         samples_16k: &[f32],
         precomputed: Option<Vec<f32>>,
         forced_cluster: Option<usize>,
+        source: SegmentSource,
     ) -> Result<DiarizationResult> {
-        self.process_inner(sequence_id, samples_16k, precomputed, forced_cluster)
+        let segment = Segment {
+            source,
+            duration_secs: None,
+        };
+        self.process_inner(sequence_id, samples_16k, precomputed, forced_cluster, segment)
     }
 
     fn process_inner(
@@ -241,6 +340,7 @@ impl Diarizer {
         samples_16k: &[f32],
         precomputed: Option<Vec<f32>>,
         forced_cluster: Option<usize>,
+        segment: Segment,
     ) -> Result<DiarizationResult> {
         let mut embedding = match precomputed {
             Some(e) => e,
@@ -272,6 +372,7 @@ impl Diarizer {
             .as_ref()
             .and_then(|m| m.search(&embedding));
 
+        let profile_score = profile_match.as_ref().map(|m| m.score);
         let (label, voice_profile_id) =
             resolve_label(online_cluster_label, forced_cluster, profile_match);
 
@@ -281,6 +382,11 @@ impl Diarizer {
                 embedding,
                 voice_profile_id: voice_profile_id.clone(),
                 label: label.clone(),
+                profile_score,
+                duration_secs: segment
+                    .duration_secs
+                    .unwrap_or(samples_16k.len() as f32 / 16_000.0),
+                source: segment.source,
             });
         }
 
@@ -374,12 +480,16 @@ impl Diarizer {
     /// stored voice profiles so near-threshold segments of an enrolled voice
     /// fold into the profile instead of surfacing as a parallel "Speaker N".
     pub fn refine(&self) -> Vec<RefinedAssignment> {
+        self.refine_with(&RefineOptions::default())
+    }
+
+    /// [`refine`] with explicit tuning — e.g. a known attendee count as the
+    /// soft speaker cap (see [`RefineOptions::max_speakers`]).
+    ///
+    /// [`refine`]: Diarizer::refine
+    pub fn refine_with(&self, options: &RefineOptions) -> Vec<RefinedAssignment> {
         let history = self.export_history();
-        refinement::refine(
-            &history,
-            REFINE_CLUSTER_THRESHOLD,
-            self.profile_matcher.as_deref(),
-        )
+        refinement::refine(&history, options, self.profile_matcher.as_deref())
     }
 
     /// Write refined labels back into the session history so subsequent

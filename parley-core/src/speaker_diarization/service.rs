@@ -157,11 +157,13 @@ async fn build_profile_matcher(
         return Ok(None);
     }
 
+    let self_profile_id = profiles.iter().find(|p| p.is_self).map(|p| p.id.clone());
     let entries = profiles.into_iter().filter_map(|p| {
         bytes_to_floats(&p.embedding).map(|emb| (p.id, p.name, emb))
     });
 
-    let matcher = SpeakerProfileMatcher::new(dim, entries, PROFILE_MATCH_THRESHOLD)?;
+    let matcher = SpeakerProfileMatcher::new(dim, entries, PROFILE_MATCH_THRESHOLD)?
+        .with_self_profile(self_profile_id);
     if matcher.num_profiles() == 0 {
         Ok(None)
     } else {
@@ -216,6 +218,56 @@ async fn stream_download(
     Ok(())
 }
 
+/// How many people the meeting's linked calendar event says were invited —
+/// organizer plus attendees, de-duplicated, minus anyone who declined — for
+/// use as a soft cap on speaker refinement. `None` when there's no linked
+/// event or it lists fewer than two people (a one-person event is just a
+/// calendar block, not a head count).
+pub async fn expected_speaker_count(pool: &SqlitePool, meeting_id: &str) -> Option<usize> {
+    match crate::calendar::repository::CalendarRepository::get_event_for_meeting(pool, meeting_id)
+        .await
+    {
+        Ok(Some(event)) => head_count(&event),
+        Ok(None) => None,
+        Err(e) => {
+            log::warn!("Failed to load calendar event for meeting {}: {}", meeting_id, e);
+            None
+        }
+    }
+}
+
+fn head_count(event: &crate::calendar::models::CalendarEvent) -> Option<usize> {
+    let key = |name: Option<&str>, email: Option<&str>| {
+        email
+            .or(name)
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+    };
+    let mut people: Vec<String> = Vec::new();
+    let mut add = |k: Option<String>| {
+        if let Some(k) = k {
+            if !people.contains(&k) {
+                people.push(k);
+            }
+        }
+    };
+    // Shared calendars publish events with the calendar itself as organizer
+    // (`…@group.calendar.google.com`); that's not a person in the room.
+    let organizer = key(event.organizer_name.as_deref(), event.organizer_email.as_deref())
+        .filter(|k| !k.ends_with("calendar.google.com"));
+    add(organizer);
+    for a in &event.attendees {
+        let declined = a
+            .status
+            .as_deref()
+            .is_some_and(|s| s.eq_ignore_ascii_case("DECLINED"));
+        if !declined {
+            add(key(a.name.as_deref(), a.email.as_deref()));
+        }
+    }
+    (people.len() >= 2).then_some(people.len())
+}
+
 /// Re-cluster the just-finished recording offline and write the improved
 /// speaker labels into `meeting_id`'s saved transcripts.
 ///
@@ -253,9 +305,11 @@ pub async fn refine_and_persist(
     // Clustering is pure CPU work over the whole session's embeddings; keep
     // it off the async runtime so it can't stall other tasks (same reasoning
     // as whisper/embedding inference elsewhere).
+    let options = crate::speaker_diarization::RefineOptions::default()
+        .with_max_speakers(expected_speaker_count(pool, meeting_id).await);
     let refined = {
         let diarizer = diarizer.clone();
-        tokio::task::spawn_blocking(move || diarizer.refine())
+        tokio::task::spawn_blocking(move || diarizer.refine_with(&options))
             .await
             .map_err(|e| anyhow!("Speaker refinement task panicked: {}", e))?
     };
@@ -328,6 +382,29 @@ pub async fn promote_speaker_to_profile_core(
     normalised_email: Option<&str>,
     meeting_id: &str,
 ) -> Result<(Option<String>, u64), String> {
+    // Naming a chip after someone who already has a profile must not mint a
+    // second profile with the same name (that's how the user ended up with
+    // two "Seb Burrell"s, #102): fold the cluster into the existing one.
+    if let Some(existing) = VoiceProfilesRepository::find_by_name(pool, trimmed_name, None)
+        .await
+        .map_err(|e| format!("Failed to look up voice profiles: {}", e))?
+    {
+        log::info!(
+            "'{}' already has a voice profile ({}) — merging {} into it instead of creating another",
+            trimmed_name,
+            existing.id,
+            old_label,
+        );
+        if existing.email.is_none() && normalised_email.is_some() {
+            VoiceProfilesRepository::update_profile(pool, &existing.id, &existing.name, normalised_email)
+                .await
+                .map_err(|e| format!("Failed to update voice profile: {}", e))?;
+        }
+        let (renamed, _) =
+            merge_cluster_into_profile_core(pool, meeting_id, old_label, &existing.id).await?;
+        return Ok((Some(existing.id), renamed));
+    }
+
     // Try to grab the embeddings. They're reachable only when the diarizer
     // that produced this meeting is still the in-memory singleton (a live
     // recording or its just-finished retranscription). Older meetings
@@ -389,71 +466,36 @@ pub async fn promote_speaker_to_profile_core(
     Ok((profile_id, renamed_count))
 }
 
-/// Shared core of the `merge_voice_profiles` command: fold `loser_id`'s
-/// centroid into `winner_id`'s (weighted by sample count), relink every
-/// transcript referencing the loser, then delete the loser. Returns
-/// `(renamed_count, centroid_updated)`.
+/// Shared core of the `merge_voice_profiles` command: fold `loser_id` into
+/// `winner_id` — sample-count-weighted centroid, transcripts relinked,
+/// `is_self` kept — and delete the loser, atomically (see
+/// [`VoiceProfilesRepository::merge_into`]). Returns
+/// `(relinked_count, centroid_updated)`.
 pub async fn merge_voice_profiles_core(
     pool: &SqlitePool,
     winner_id: &str,
     loser_id: &str,
 ) -> Result<(u64, bool), String> {
-    let winner = VoiceProfilesRepository::get_by_id(pool, winner_id)
+    let outcome = VoiceProfilesRepository::merge_into(pool, winner_id, loser_id)
         .await
-        .map_err(|e| format!("Failed to load winner profile: {}", e))?
-        .ok_or_else(|| format!("Profile not found: {}", winner_id))?;
-    let loser = VoiceProfilesRepository::get_by_id(pool, loser_id)
-        .await
-        .map_err(|e| format!("Failed to load loser profile: {}", e))?
-        .ok_or_else(|| format!("Profile not found: {}", loser_id))?;
-
-    let centroid_updated = if winner.embedding_dim == loser.embedding_dim {
-        let winner_centroid = bytes_to_floats(&winner.embedding)
-            .ok_or_else(|| "Winner profile has corrupt embedding".to_string())?;
-        let loser_centroid = bytes_to_floats(&loser.embedding)
-            .ok_or_else(|| "Loser profile has corrupt embedding".to_string())?;
-        let merged = merge_centroids(
-            &winner_centroid,
-            winner.sample_count.max(0) as usize,
-            &loser_centroid,
-            loser.sample_count.max(0) as usize,
-        );
-        let new_count = winner.sample_count + loser.sample_count;
-        VoiceProfilesRepository::update_centroid(pool, &winner.id, &merged, new_count)
-            .await
-            .map_err(|e| format!("Failed to update winner centroid: {}", e))?;
-        true
-    } else {
+        .map_err(|e| format!("Failed to merge voice profiles: {}", e))?;
+    if !outcome.centroid_updated {
         log::warn!(
-            "Embedding-dim mismatch ({} vs {}) merging {} into {} — relinking transcripts only",
-            winner.embedding_dim,
-            loser.embedding_dim,
-            loser.id,
-            winner.id,
+            "Embedding-dim mismatch merging {} into {} — relinked transcripts only",
+            loser_id,
+            winner_id,
         );
-        false
-    };
-
-    let renamed_count =
-        TranscriptsRepository::relink_transcripts(pool, &loser.id, &winner.id, &winner.name)
-            .await
-            .map_err(|e| format!("Failed to relink transcripts: {}", e))?;
-
-    VoiceProfilesRepository::delete(pool, &loser.id)
-        .await
-        .map_err(|e| format!("Failed to delete loser profile: {}", e))?;
-
+    }
     log::info!(
-        "Merged profile '{}' ({}) into '{}' ({}): {} transcripts relinked, centroid_updated={}",
-        loser.name,
-        loser.id,
-        winner.name,
-        winner.id,
-        renamed_count,
-        centroid_updated
+        "Merged profile {} into {}: {} transcripts relinked, centroid_updated={}, samples={}, is_self={}",
+        loser_id,
+        winner_id,
+        outcome.relinked_transcripts,
+        outcome.centroid_updated,
+        outcome.sample_count,
+        outcome.is_self,
     );
-
-    Ok((renamed_count, centroid_updated))
+    Ok((outcome.relinked_transcripts, outcome.centroid_updated))
 }
 
 /// Shared core of the `merge_cluster_into_profile` command: fold the
@@ -532,4 +574,132 @@ pub async fn merge_cluster_into_profile_core(
     );
 
     Ok((renamed_count, centroid_updated))
+}
+
+#[cfg(test)]
+mod head_count_tests {
+    use super::head_count;
+    use crate::calendar::models::{Attendee, CalendarEvent};
+
+    fn event(organizer: Option<&str>, attendees: &[(&str, Option<&str>)]) -> CalendarEvent {
+        CalendarEvent {
+            id: "e".into(),
+            source_id: "s".into(),
+            ics_uid: "u".into(),
+            recurrence_id: None,
+            summary: None,
+            description: None,
+            location: None,
+            organizer_name: None,
+            organizer_email: organizer.map(str::to_string),
+            start_at: chrono::Utc::now(),
+            end_at: chrono::Utc::now(),
+            is_all_day: false,
+            attendees: attendees
+                .iter()
+                .map(|(email, status)| Attendee {
+                    email: Some(email.to_string()),
+                    status: status.map(str::to_string),
+                    ..Default::default()
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn counts_organizer_and_attendees_once_each() {
+        let e = event(
+            Some("Ann@x.com"),
+            &[("ann@x.com", None), ("bob@x.com", None), ("cat@x.com", None)],
+        );
+        assert_eq!(head_count(&e), Some(3));
+    }
+
+    #[test]
+    fn skips_declines_and_calendar_organizers() {
+        let e = event(
+            Some("team@group.calendar.google.com"),
+            &[("ann@x.com", None), ("bob@x.com", Some("DECLINED")), ("cat@x.com", Some("ACCEPTED"))],
+        );
+        assert_eq!(head_count(&e), Some(2));
+    }
+
+    #[test]
+    fn a_one_person_event_is_no_head_count() {
+        assert_eq!(head_count(&event(Some("ann@x.com"), &[])), None);
+    }
+}
+
+#[cfg(test)]
+mod duplicate_profile_tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    async fn pool_with_meeting() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO meetings (id, title, created_at, updated_at)
+             VALUES ('m1', 'Meeting', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        for (id, speaker) in [("t1", "Speaker 3"), ("t2", "Speaker 3"), ("t3", "Speaker 4")] {
+            sqlx::query(
+                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, speaker)
+                 VALUES (?, 'm1', 'hi', '2026-10-01T00:00:00Z', ?)",
+            )
+            .bind(id)
+            .bind(speaker)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        pool
+    }
+
+    /// Naming a chip after an existing profile folds it into that profile
+    /// instead of minting a second one with the same name.
+    #[tokio::test]
+    async fn promoting_to_an_existing_name_reuses_that_profile() {
+        let pool = pool_with_meeting().await;
+        let me = VoiceProfilesRepository::upsert_self(&pool, "Seb Burrell", &[1.0, 0.0], 4)
+            .await
+            .unwrap();
+
+        let (profile_id, renamed) = promote_speaker_to_profile_core(
+            &pool,
+            "Speaker 3",
+            "seb burrell",
+            Some("seb@example.com"),
+            "m1",
+        )
+        .await
+        .unwrap();
+        assert_eq!(profile_id.as_deref(), Some(me.as_str()));
+        assert_eq!(renamed, 2);
+
+        let profiles = VoiceProfilesRepository::list_all(&pool).await.unwrap();
+        assert_eq!(profiles.len(), 1, "no duplicate profile was created");
+        assert!(profiles[0].is_self);
+        assert_eq!(profiles[0].email.as_deref(), Some("seb@example.com"));
+
+        let rows: Vec<(String, Option<String>, Option<String>)> =
+            sqlx::query_as("SELECT id, speaker, voice_profile_id FROM transcripts ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rows[0], ("t1".into(), Some("Seb Burrell".into()), Some(me.clone())));
+        assert_eq!(rows[1], ("t2".into(), Some("Seb Burrell".into()), Some(me.clone())));
+        assert_eq!(rows[2], ("t3".into(), Some("Speaker 4".into()), None));
+    }
 }

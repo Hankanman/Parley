@@ -255,13 +255,34 @@ async fn run_retranscription(
 
     // Convert to 16kHz mono format (CPU-intensive, run in blocking task).
     // Same cancellation-only callback convention as the decode step above.
-    let audio_samples = tokio::task::spawn_blocking(move || {
-        let cancel_check: ProgressCallback =
-            Box::new(|_progress, _msg| !RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst));
-        decoded.to_whisper_format_with_progress(Some(cancel_check))
+    // A Parley recording keeps the mic and system audio on separate
+    // channels; keep both (as well as the mixdown Whisper hears) so batch
+    // diarization can tell the user's side of the call from the far end's.
+    let split_channels = super::common::has_split_capture_channels(&folder_path);
+    let (audio_samples, channel_audio) = tokio::task::spawn_blocking(move || {
+        let cancel_check = || -> ProgressCallback {
+            Box::new(|_progress, _msg| !RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst))
+        };
+        let mono = decoded.to_whisper_format_with_progress(Some(cancel_check()))?;
+        let channels = if split_channels {
+            decoded
+                .split_channels_to_whisper_format(Some(cancel_check()))?
+                .map(|(mic, system)| super::common::ChannelAudio { mic, system })
+        } else {
+            None
+        };
+        anyhow::Ok((mono, channels))
     })
     .await
     .map_err(|e| anyhow!("Resample task panicked: {}", e))??;
+    info!(
+        "Speaker channels: {}",
+        if channel_audio.is_some() {
+            "split mic/system"
+        } else {
+            "mixdown only"
+        }
+    );
     info!(
         "Converted to 16kHz mono format: {} samples",
         audio_samples.len()
@@ -360,6 +381,13 @@ async fn run_retranscription(
     // Custom vocabulary (issue #83): prompt whisper with the glossary, and
     // the linked calendar event's attendees when enabled.
     let glossary = crate::glossary::prepare(pool.as_ref(), Some(&meeting_id)).await;
+    // The linked calendar event's head count caps speaker refinement.
+    let max_speakers = match pool.as_ref() {
+        Some(pool) => {
+            crate::speaker_diarization::service::expected_speaker_count(pool, &meeting_id).await
+        }
+        None => None,
+    };
 
     let sink_for_progress = sink.clone();
     let meeting_id_for_progress = meeting_id.clone();
@@ -372,6 +400,8 @@ async fn run_retranscription(
         // run its own offline diarization pass (that's import-specific —
         // see `import.rs`), so there's no hint to feed the diarizer here.
         None,
+        channel_audio.as_ref(),
+        max_speakers,
         &glossary,
         &RETRANSCRIPTION_CANCELLED,
         move |i, total, segment_duration_sec| {
@@ -873,6 +903,7 @@ mod tests {
             speaker: None,
             voice_profile_id: None,
             sequence_id: 0,
+            source: Default::default(),
         }
     }
 
@@ -955,6 +986,7 @@ mod tests {
                 speaker: Some("Speaker 1".into()),
                 voice_profile_id: None,
                 sequence_id: 0,
+                source: Default::default(),
             },
             BatchTranscript {
                 text: "Hi".into(),
@@ -963,6 +995,7 @@ mod tests {
                 speaker: Some("Alice".into()),
                 voice_profile_id: Some("profile-abc".into()),
                 sequence_id: 1,
+                source: crate::speaker_diarization::SegmentSource::Microphone,
             },
         ];
         let segments = create_transcript_segments(&transcripts);
@@ -970,6 +1003,9 @@ mod tests {
         assert!(segments[0].voice_profile_id.is_none());
         assert_eq!(segments[1].speaker.as_deref(), Some("Alice"));
         assert_eq!(segments[1].voice_profile_id.as_deref(), Some("profile-abc"));
+        // The channel a segment came from is stored when known (#102).
+        assert!(segments[0].source.is_none());
+        assert_eq!(segments[1].source.as_deref(), Some("mic"));
     }
 
     #[test]

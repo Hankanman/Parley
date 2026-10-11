@@ -255,6 +255,138 @@ impl VoiceProfilesRepository {
         .await?;
         Ok(res.rows_affected() > 0)
     }
+
+    /// The profile already called `name` (trimmed, case-insensitive), other
+    /// than `exclude_id`. Used to stop a second profile being created or
+    /// renamed onto an existing name (#102) — the caller offers a merge
+    /// instead. If several already share the name, the self profile wins,
+    /// then the one with the most samples.
+    pub async fn find_by_name(
+        pool: &SqlitePool,
+        name: &str,
+        exclude_id: Option<&str>,
+    ) -> Result<Option<VoiceProfile>, SqlxError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Ok(None);
+        }
+        sqlx::query_as::<_, VoiceProfile>(&format!(
+            "SELECT {PROFILE_COLUMNS} FROM voice_profiles
+             WHERE lower(trim(name)) = lower(?) AND id != ?
+             ORDER BY is_self DESC, sample_count DESC, created_at
+             LIMIT 1"
+        ))
+        .bind(name)
+        .bind(exclude_id.unwrap_or(""))
+        .fetch_optional(pool)
+        .await
+    }
+
+    /// Fold `loser_id` into `winner_id` in one transaction:
+    ///
+    /// - the winner's centroid becomes the `sample_count`-weighted average
+    ///   of both (skipped, with `centroid_updated = false`, if the embedding
+    ///   dims differ — e.g. one predates a model change);
+    /// - every transcript linked to the loser is re-pointed at the winner
+    ///   and relabelled with the winner's name;
+    /// - `is_self` survives: if the loser was the user's own profile, the
+    ///   winner becomes it;
+    /// - the winner keeps its email, or takes the loser's if it had none;
+    /// - the loser is deleted.
+    pub async fn merge_into(
+        pool: &SqlitePool,
+        winner_id: &str,
+        loser_id: &str,
+    ) -> Result<ProfileMergeOutcome, SqlxError> {
+        if winner_id == loser_id {
+            return Err(SqlxError::Protocol(
+                "cannot merge a voice profile into itself".to_string(),
+            ));
+        }
+        let mut tx = pool.begin().await?;
+        let select = format!("SELECT {PROFILE_COLUMNS} FROM voice_profiles WHERE id = ?");
+        let winner = sqlx::query_as::<_, VoiceProfile>(&select)
+            .bind(winner_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(SqlxError::RowNotFound)?;
+        let loser = sqlx::query_as::<_, VoiceProfile>(&select)
+            .bind(loser_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(SqlxError::RowNotFound)?;
+
+        let now = Utc::now().to_rfc3339();
+        let merged = match (
+            bytes_to_floats(&winner.embedding),
+            bytes_to_floats(&loser.embedding),
+        ) {
+            (Some(w), Some(l)) if winner.embedding_dim == loser.embedding_dim && w.len() == l.len() => {
+                Some(crate::speaker_diarization::embedding_math::merge_centroids(
+                    &w,
+                    winner.sample_count.max(0) as usize,
+                    &l,
+                    loser.sample_count.max(0) as usize,
+                ))
+            }
+            _ => None,
+        };
+        let centroid_updated = merged.is_some();
+        let (embedding, sample_count) = match merged {
+            Some(m) => (floats_to_bytes(&m), winner.sample_count + loser.sample_count),
+            None => (winner.embedding.clone(), winner.sample_count),
+        };
+        let is_self = winner.is_self || loser.is_self;
+        let email = winner.email.clone().or_else(|| loser.email.clone());
+
+        // Drop the loser before flagging the winner, so the "one self
+        // profile" unique index never sees two.
+        sqlx::query("DELETE FROM voice_profiles WHERE id = ?")
+            .bind(&loser.id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "UPDATE voice_profiles
+             SET embedding = ?, sample_count = ?, is_self = ?, email = ?, updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(&embedding)
+        .bind(sample_count)
+        .bind(is_self)
+        .bind(&email)
+        .bind(&now)
+        .bind(&winner.id)
+        .execute(&mut *tx)
+        .await?;
+        let relinked = sqlx::query(
+            "UPDATE transcripts SET voice_profile_id = ?, speaker = ? WHERE voice_profile_id = ?",
+        )
+        .bind(&winner.id)
+        .bind(&winner.name)
+        .bind(&loser.id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+        tx.commit().await?;
+        Ok(ProfileMergeOutcome {
+            relinked_transcripts: relinked,
+            centroid_updated,
+            sample_count,
+            is_self,
+        })
+    }
+}
+
+/// What [`VoiceProfilesRepository::merge_into`] did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProfileMergeOutcome {
+    pub relinked_transcripts: u64,
+    pub centroid_updated: bool,
+    /// The surviving profile's new sample count.
+    pub sample_count: i64,
+    /// Whether the surviving profile is the user's own.
+    pub is_self: bool,
 }
 
 /// Pack `f32` slice as little-endian bytes for BLOB storage. Total bytes = 4 * len.
@@ -299,5 +431,202 @@ mod tests {
     fn corrupt_blob_returns_none() {
         let bytes = vec![0u8; 5]; // not a multiple of 4
         assert!(bytes_to_floats(&bytes).is_none());
+    }
+
+    // ── merge / duplicate names (#102), against a migrated in-memory DB ──
+
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    async fn test_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("in-memory sqlite pool");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("run migrations");
+        sqlx::query(
+            "INSERT INTO meetings (id, title, created_at, updated_at)
+             VALUES ('m1', 'Meeting', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    async fn transcript(pool: &SqlitePool, id: &str, speaker: &str, profile_id: Option<&str>) {
+        sqlx::query(
+            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, speaker, voice_profile_id)
+             VALUES (?, 'm1', 'hello', '2026-10-01T00:00:00Z', ?, ?)",
+        )
+        .bind(id)
+        .bind(speaker)
+        .bind(profile_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn links(pool: &SqlitePool) -> Vec<(String, Option<String>, Option<String>)> {
+        sqlx::query_as("SELECT id, speaker, voice_profile_id FROM transcripts ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn merging_a_duplicate_into_the_self_profile_keeps_it_self() {
+        let pool = test_pool().await;
+        // The user's enrolled voice (4 samples) and a duplicate promoted from
+        // a meeting chip (12 samples), both "Seb Burrell".
+        let me = VoiceProfilesRepository::upsert_self(&pool, "Seb Burrell", &[1.0, 0.0], 4)
+            .await
+            .unwrap();
+        let dup = VoiceProfilesRepository::create(
+            &pool,
+            "Seb Burrell",
+            Some("seb@example.com"),
+            &[0.0, 1.0],
+            12,
+        )
+        .await
+        .unwrap();
+        transcript(&pool, "t1", "Seb Burrell", Some(&dup)).await;
+        transcript(&pool, "t2", "Seb Burrell", Some(&me)).await;
+        transcript(&pool, "t3", "Speaker 1", None).await;
+
+        let outcome = VoiceProfilesRepository::merge_into(&pool, &me, &dup).await.unwrap();
+        assert_eq!(
+            outcome,
+            ProfileMergeOutcome {
+                relinked_transcripts: 1,
+                centroid_updated: true,
+                sample_count: 16,
+                is_self: true,
+            }
+        );
+
+        let profiles = VoiceProfilesRepository::list_all(&pool).await.unwrap();
+        assert_eq!(profiles.len(), 1);
+        let merged = &profiles[0];
+        assert_eq!(merged.id, me);
+        assert!(merged.is_self);
+        assert_eq!(merged.sample_count, 16);
+        // The winner had no email; it takes the loser's.
+        assert_eq!(merged.email.as_deref(), Some("seb@example.com"));
+        // Weighted 4:12 toward the duplicate's axis, then normalized.
+        let c = bytes_to_floats(&merged.embedding).unwrap();
+        let (x, y) = (0.25f32, 0.75f32);
+        let n = (x * x + y * y).sqrt();
+        assert!((c[0] - x / n).abs() < 1e-5 && (c[1] - y / n).abs() < 1e-5, "{c:?}");
+
+        assert_eq!(
+            links(&pool).await,
+            vec![
+                ("t1".into(), Some("Seb Burrell".into()), Some(me.clone())),
+                ("t2".into(), Some("Seb Burrell".into()), Some(me.clone())),
+                ("t3".into(), Some("Speaker 1".into()), None),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn merging_the_self_profile_away_moves_the_flag_to_the_winner() {
+        let pool = test_pool().await;
+        let me = VoiceProfilesRepository::upsert_self(&pool, "Me", &[1.0, 0.0], 4)
+            .await
+            .unwrap();
+        let other = VoiceProfilesRepository::create(&pool, "Seb", None, &[1.0, 0.0], 10)
+            .await
+            .unwrap();
+        transcript(&pool, "t1", "Me", Some(&me)).await;
+
+        let outcome = VoiceProfilesRepository::merge_into(&pool, &other, &me).await.unwrap();
+        assert!(outcome.is_self);
+        let survivor = VoiceProfilesRepository::get_self(&pool).await.unwrap().unwrap();
+        assert_eq!(survivor.id, other);
+        assert_eq!(survivor.name, "Seb");
+        assert_eq!(
+            links(&pool).await,
+            vec![("t1".into(), Some("Seb".into()), Some(other.clone()))]
+        );
+    }
+
+    #[tokio::test]
+    async fn merging_mismatched_dims_relinks_without_touching_the_centroid() {
+        let pool = test_pool().await;
+        let a = VoiceProfilesRepository::create(&pool, "A", None, &[1.0, 0.0], 3)
+            .await
+            .unwrap();
+        let b = VoiceProfilesRepository::create(&pool, "B", None, &[0.0, 0.0, 1.0], 5)
+            .await
+            .unwrap();
+        transcript(&pool, "t1", "B", Some(&b)).await;
+        let outcome = VoiceProfilesRepository::merge_into(&pool, &a, &b).await.unwrap();
+        assert!(!outcome.centroid_updated);
+        assert_eq!(outcome.sample_count, 3);
+        assert_eq!(outcome.relinked_transcripts, 1);
+        let a_row = VoiceProfilesRepository::get_by_id(&pool, &a).await.unwrap().unwrap();
+        assert_eq!(bytes_to_floats(&a_row.embedding).unwrap(), vec![1.0, 0.0]);
+        assert!(VoiceProfilesRepository::get_by_id(&pool, &b).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn merging_into_itself_or_a_missing_profile_fails_cleanly() {
+        let pool = test_pool().await;
+        let a = VoiceProfilesRepository::create(&pool, "A", None, &[1.0], 1)
+            .await
+            .unwrap();
+        assert!(VoiceProfilesRepository::merge_into(&pool, &a, &a).await.is_err());
+        assert!(VoiceProfilesRepository::merge_into(&pool, &a, "nope").await.is_err());
+        assert!(VoiceProfilesRepository::get_by_id(&pool, &a).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn find_by_name_is_trimmed_case_insensitive_and_prefers_self() {
+        let pool = test_pool().await;
+        let other = VoiceProfilesRepository::create(&pool, "Seb Burrell", None, &[1.0], 25)
+            .await
+            .unwrap();
+        assert_eq!(
+            VoiceProfilesRepository::find_by_name(&pool, "  seb burrell ", None)
+                .await
+                .unwrap()
+                .map(|p| p.id),
+            Some(other.clone())
+        );
+        let me = VoiceProfilesRepository::upsert_self(&pool, "Seb Burrell", &[1.0], 4)
+            .await
+            .unwrap();
+        assert_eq!(
+            VoiceProfilesRepository::find_by_name(&pool, "SEB BURRELL", None)
+                .await
+                .unwrap()
+                .map(|p| p.id),
+            Some(me.clone())
+        );
+        // Excluding a profile (e.g. the one being renamed) finds the other.
+        assert_eq!(
+            VoiceProfilesRepository::find_by_name(&pool, "Seb Burrell", Some(&me))
+                .await
+                .unwrap()
+                .map(|p| p.id),
+            Some(other)
+        );
+        assert!(VoiceProfilesRepository::find_by_name(&pool, "Zoe", None)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(VoiceProfilesRepository::find_by_name(&pool, "  ", None)
+            .await
+            .unwrap()
+            .is_none());
     }
 }

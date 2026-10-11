@@ -369,6 +369,18 @@ impl SpeakersView {
         if name.trim().is_empty() {
             return;
         }
+        // Renaming onto another profile's name would create a duplicate
+        // (#102); keep the editor open and point at Merge instead.
+        if let Some(existing) = logic::name_taken_by(&self.profiles, &name, &id) {
+            let message = format!(
+                "There's already a speaker called \"{}\". Use Merge to combine the two.",
+                existing.name
+            );
+            self.editing_id = Some(id);
+            self.toast(NotificationType::Warning, message);
+            cx.notify();
+            return;
+        }
         let email = self.email_input.read(cx).value().to_string();
         let email = if email.trim().is_empty() { None } else { Some(email) };
         cx.notify();
@@ -457,7 +469,8 @@ impl SpeakersView {
                 .title("Merge speaker")
                 .description(format!(
                     "Folds \"{loser_name}\" into \"{winner_name}\". The chosen speaker keeps its \
-                     name and email; samples from both profiles are combined and every \
+                     name (and its email, or takes this one's if it has none); samples from \
+                     both profiles are combined, weighted by how many each has, and every \
                      transcript currently linked to \"{loser_name}\" is re-pointed at \
                      \"{winner_name}\". This profile is then deleted."
                 ))
@@ -801,7 +814,7 @@ impl SpeakersView {
                     .w_full()
                     .gap_2()
                     .p_4()
-                    .children(visible.iter().map(|p| self.render_row(p, &visible, cx))),
+                    .children(visible.iter().map(|p| self.render_row(p, cx))),
             )
             .into_any_element()
     }
@@ -809,7 +822,6 @@ impl SpeakersView {
     fn render_row(
         &self,
         profile: &VoiceProfile,
-        visible: &[&VoiceProfile],
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let id = profile.id.clone();
@@ -847,6 +859,8 @@ impl SpeakersView {
         let id_for_edit = id.clone();
         let id_for_merge = id.clone();
         let id_for_delete = id.clone();
+        let candidates = logic::merge_candidates(&self.profiles, &profile.id);
+        let duplicate = logic::duplicate_name_ids(&self.profiles).contains(&profile.id);
 
         let row = h_flex()
             .w_full()
@@ -862,7 +876,20 @@ impl SpeakersView {
                     .flex_1()
                     .min_w_0()
                     .gap_1()
-                    .child(div().text_sm().font_medium().child(profile.name.clone()))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(div().text_sm().font_medium().child(profile.name.clone()))
+                            .when(duplicate, |this| {
+                                this.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().warning)
+                                        .child("Same name as another profile — merge them"),
+                                )
+                            }),
+                    )
                     .child(
                         h_flex()
                             .gap_3()
@@ -892,8 +919,8 @@ impl SpeakersView {
                 Button::new(format!("merge-speaker-{id}"))
                     .ghost()
                     .icon(AssetIcon::Merge)
-                    .tooltip("Merge into another speaker")
-                    .disabled(visible.len() < 2)
+                    .tooltip("Merge into…")
+                    .disabled(candidates.is_empty())
                     .on_click(cx.listener(move |this, _, _, cx| this.start_merge(id_for_merge.clone(), cx))),
             )
             .child(
@@ -912,7 +939,6 @@ impl SpeakersView {
             return row.into_any_element();
         }
 
-        let candidates = logic::merge_candidates(visible, &profile.id);
         v_flex()
             .w_full()
             .gap_2()
@@ -927,7 +953,7 @@ impl SpeakersView {
                         let loser_id = profile.id.clone();
                         Button::new(format!("merge-into-{}-{}", profile.id, winner.id))
                             .ghost()
-                            .label(winner.name.clone())
+                            .label(logic::merge_target_label(winner))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 let loser = this.profiles.iter().find(|p| p.id == loser_id).cloned();
                                 let winner = this.profiles.iter().find(|p| p.id == winner_id).cloned();
