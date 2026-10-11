@@ -186,6 +186,10 @@ impl SummaryService {
             }
         };
 
+        // Bookmarked moments (issue #87) ride along as emphasis context.
+        let custom_prompt =
+            crate::bookmarks::with_bookmark_context(&pool, &meeting_id, custom_prompt).await;
+
         let result = generate_meeting_summary(
             &config,
             &text,
@@ -336,6 +340,13 @@ impl SummaryService {
                             model_name.clone(),
                         ),
                     }
+
+                    // Best-effort, no-op unless the user turned on export
+                    // folder sync (Settings → Integrations); logs its own
+                    // errors. Runs after the structured action items are
+                    // stored so the note includes them; writes the stored
+                    // (final rendered) Markdown on both paths.
+                    crate::export::folder_sync::sync_after_summary(&pool, &meeting_id).await;
                 }
             }
             Err(e) => {

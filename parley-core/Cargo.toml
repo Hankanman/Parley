@@ -118,6 +118,20 @@ ffmpeg-sidecar = { git = "https://github.com/nathanbabcock/ffmpeg-sidecar", bran
 
 sqlx = { version = "0.8", features = [ "runtime-tokio", "sqlite", "chrono"] }
 
+# Meeting export formats (export/): summary markdown is parsed with
+# pulldown-cmark into a small block model, then rendered to DOCX (docx-rs,
+# MIT) or PDF (krilla, MIT/Apache-2.0 — the PDF backend behind Typst). PDF
+# text uses system fonts found via fontdb (already in the tree through
+# GPUI) and measured for line-wrapping with ttf-parser / rustybuzz (both
+# already in the tree, rustybuzz being krilla's own shaper), so no font is
+# embedded in the binary.
+pulldown-cmark = { version = "0.13", default-features = false }
+docx-rs = { version = "0.4", default-features = false }
+krilla = { version = "0.8", default-features = false, features = ["simple-text"] }
+fontdb = "0.23"
+ttf-parser = "0.25"
+rustybuzz = "0.20"
+
 # Calendar / ICS parsing
 ical = "0.11"
 rrule = "0.13"

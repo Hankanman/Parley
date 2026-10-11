@@ -1,4 +1,5 @@
-//! StatusNotifierItem tray icon: Start/Stop recording, Open Parley (focus
+//! StatusNotifierItem tray icon: Start/Stop recording, Bookmark this
+//! moment, Open Parley (focus
 //! the main window), Quit. Mirrors `frontend/src-tauri/src/tray.rs`'s menu
 //! shape where sensible, built on `gpui-tray` the way
 //! `spikes/gpui-shell/src/tray.rs` proved out.
@@ -29,6 +30,7 @@ actions!(
         TrayStopRecording,
         TrayPauseRecording,
         TrayResumeRecording,
+        TrayBookmark,
         TrayRecordDetectedCall,
         TrayOpenParley,
         TraySettings,
@@ -155,6 +157,10 @@ fn build_menu(cx: &mut App) -> Vec<MenuItem> {
             MenuItem::action("Stop recording", TrayStopRecording),
             !can_stop,
         ),
+        disabled(
+            MenuItem::action("Bookmark this moment", TrayBookmark),
+            !can_stop,
+        ),
         MenuItem::separator(),
         MenuItem::action("Open Parley", TrayOpenParley),
         MenuItem::action("Settings", TraySettings),
@@ -269,6 +275,10 @@ pub fn install(cx: &mut App) -> gpui_tray::Result<()> {
     cx.on_action(|_: &TrayResumeRecording, cx: &mut App| {
         log::info!("tray: resume recording");
         resume_recording_from_tray(cx);
+    });
+    cx.on_action(|_: &TrayBookmark, cx: &mut App| {
+        log::info!("tray: bookmark");
+        crate::bookmark::bookmark_now(cx);
     });
     cx.on_action(|_: &TrayRecordDetectedCall, cx: &mut App| {
         if let Some(call) = crate::meeting_detect::active_call(cx) {

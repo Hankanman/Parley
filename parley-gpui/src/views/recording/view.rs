@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Local;
 use gpui_kit::component::{
-    ActiveTheme, Disableable as _, IconName, IndexPath, StyledExt as _, WindowExt, h_flex, v_flex,
+    ActiveTheme, Icon, Sizable as _, Disableable as _, IconName, IndexPath, StyledExt as _, WindowExt, h_flex, v_flex,
     button::{Button, ButtonVariants as _},
     input::{Input, InputState},
     label::Label,
@@ -21,6 +21,7 @@ use gpui_kit::*;
 use serde::Deserialize;
 
 use parley_core::audio::devices;
+use parley_core::bookmarks::{BookmarksChanged, BOOKMARKS_CHANGED_EVENT};
 use parley_core::audio::recording_phase::{RecordingPhase, RecordingSnapshot};
 use parley_core::audio::recording_preferences::{self, RecordingPreferences};
 use parley_core::audio::recording_service::{self, RecordingArgs, StartRequest};
@@ -39,6 +40,8 @@ use crate::shell::{navigate, Route};
 use super::logic::{self, Levels, RowChange, TranscriptRow};
 
 const DEFAULT_DEVICE_ID: &str = "default";
+
+type Lucide = gpui_kit::assets::IconName;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -181,6 +184,9 @@ pub struct RecordingView {
     /// `meeting_id`) can link the two. Mirrors
     /// `frontend/src/lib/recordingCalendarLink.ts`'s sessionStorage handoff.
     pending_calendar_event_id: Option<String>,
+    /// Offsets (seconds) bookmarked during this recording, newest last —
+    /// from the button, the tray or the shortcut (issue #87).
+    session_bookmarks: Vec<f64>,
 }
 
 impl RecordingView {
@@ -231,6 +237,7 @@ impl RecordingView {
             pending_toasts: Vec::new(),
             live_action_items: Vec::new(),
             pending_calendar_event_id: None,
+            session_bookmarks: Vec::new(),
         };
 
         this.sync_initial_state(window, cx);
@@ -544,6 +551,23 @@ impl RecordingView {
                     }
                 }
             }
+            name if name == BOOKMARKS_CHANGED_EVENT => {
+                if let Some(BookmarksChanged { meeting_id, added: Some(bookmark) }) =
+                    event.decode::<BookmarksChanged>()
+                {
+                    if self.snapshot.meeting_id.as_deref().is_none_or(|id| id == meeting_id) {
+                        self.session_bookmarks.push(bookmark.offset_seconds);
+                        self.toast(
+                            NotificationType::Info,
+                            format!(
+                                "Bookmarked {}",
+                                logic::format_elapsed(bookmark.offset_seconds.max(0.0) as u64)
+                            ),
+                        );
+                        cx.notify();
+                    }
+                }
+            }
             "meeting-refining" => {
                 self.refining = true;
                 cx.notify();
@@ -565,6 +589,7 @@ impl RecordingView {
             && self.snapshot.phase != RecordingPhase::Starting;
         if entering_starting {
             self.clear_transcript(cx);
+            self.session_bookmarks.clear();
         }
 
         let was_active = is_active_phase(self.snapshot.phase);
@@ -924,6 +949,19 @@ impl Render for RecordingView {
                                         this.on_stop_click(cx);
                                     })),
                             )
+                            .child(
+                                Button::new("bookmark-moment")
+                                    .icon(Lucide::BookmarkPlus)
+                                    .label("Bookmark")
+                                    .tooltip(format!(
+                                        "Bookmark this moment ({})",
+                                        crate::bookmark::SHORTCUT_LABEL
+                                    ))
+                                    .disabled(!buttons.can_stop)
+                                    .on_click(cx.listener(|_, _, _, cx| {
+                                        crate::bookmark::bookmark_now(cx);
+                                    })),
+                            )
                             .child(div().flex_1())
                             .child(Label::new(elapsed).text_color(cx.theme().muted_foreground))
                             .when(self.refining, |this| {
@@ -936,6 +974,23 @@ impl Render for RecordingView {
                                 )
                             }),
                     )
+                    .when(!self.session_bookmarks.is_empty(), |this| {
+                        let marks = self
+                            .session_bookmarks
+                            .iter()
+                            .map(|s| logic::format_elapsed(s.max(0.0) as u64))
+                            .collect::<Vec<_>>()
+                            .join(" · ");
+                        this.child(
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(Icon::from(Lucide::Bookmark).xsmall())
+                                .child(format!("Bookmarks: {marks}")),
+                        )
+                    })
                     .child(self.level_bar(cx, "Mic", mic_level))
                     .child(self.level_bar(cx, "System", system_level)),
             )

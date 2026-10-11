@@ -723,7 +723,10 @@ pub fn spawn_auto_refine(
         }
         // Summarise last, whether refine ran, was skipped or failed, so the
         // summary sees the refined transcript when there is one.
-        crate::summary::auto_summary::maybe_auto_summarize(sink, pool, meeting_id).await;
+        crate::summary::auto_summary::maybe_auto_summarize(sink.clone(), pool.clone(), meeting_id.clone())
+            .await;
+        // Then chapters (issue #87), behind the same auto-summary switch.
+        crate::chapters::maybe_auto_chapter(sink, pool, meeting_id).await;
     });
 }
 
