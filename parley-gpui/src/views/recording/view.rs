@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::Local;
+use chrono::{Local, Utc};
 use gpui_kit::component::{
     ActiveTheme, Icon, Sizable as _, Disableable as _, IconName, IndexPath, StyledExt as _, WindowExt, h_flex, v_flex,
     button::{Button, ButtonVariants as _},
@@ -27,7 +27,7 @@ use parley_core::audio::recording_preferences::{self, RecordingPreferences};
 use parley_core::audio::recording_service::{self, RecordingArgs, StartRequest};
 use parley_core::audio::simple_level_monitor;
 use parley_core::audio::transcription::TranscriptUpdate;
-use parley_core::calendar::repository::CalendarRepository;
+use parley_core::calendar::{autolink, service as calendar_service};
 use parley_core::database::repositories::setting::{
     SettingsRepository, KEY_BETA_FEATURES,
 };
@@ -179,11 +179,12 @@ pub struct RecordingView {
     /// Provisional action items from the beta live extractor — see
     /// `restart_live_action_items`/`stop_live_action_items`.
     live_action_items: Vec<String>,
-    /// Calendar event matched at the moment recording started, stashed so
-    /// `stop`'s `recording-stopped` payload (which carries the fresh
-    /// `meeting_id`) can link the two. Mirrors
-    /// `frontend/src/lib/recordingCalendarLink.ts`'s sessionStorage handoff.
-    pending_calendar_event_id: Option<String>,
+    /// Calendar event auto-linked when recording started, as
+    /// `(meeting_id it was linked to, event_id)`. The meeting is linked
+    /// right after start (`None` here when that couldn't happen yet); the
+    /// `recording-stopped` handler then rewrites the snapshot into the final
+    /// folder, unless the user changed the link in the meantime.
+    pending_calendar_link: Option<(Option<String>, String)>,
     /// Offsets (seconds) bookmarked during this recording, newest last —
     /// from the button, the tray or the shortcut (issue #87).
     session_bookmarks: Vec<f64>,
@@ -236,7 +237,7 @@ impl RecordingView {
             refining: false,
             pending_toasts: Vec::new(),
             live_action_items: Vec::new(),
-            pending_calendar_event_id: None,
+            pending_calendar_link: None,
             session_bookmarks: Vec::new(),
         };
 
@@ -520,22 +521,23 @@ impl RecordingView {
                             ));
                         }
 
-                        // Link to the calendar event matched at start time
-                        // (if any), now that a `meeting_id` exists. Mirrors
-                        // `useRecordingStop.ts`'s `consumePendingCalendarEventId`
-                        // + `linkMeetingToCalendarEvent` call — failure is
-                        // non-fatal, matching React's try/catch.
-                        if let Some(event_id) = self.pending_calendar_event_id.take() {
+                        // Finish the calendar auto-link made at start: rewrite
+                        // the snapshot into the final folder if the meeting is
+                        // still linked to that event (a manual unlink/relink
+                        // in the meantime wins), or link now if it couldn't be
+                        // linked at start. Failure is non-fatal.
+                        if let Some((linked_meeting, event_id)) = self.pending_calendar_link.take() {
                             if let Some(pool) = AppServices::global(cx).pool() {
                                 let meeting_id = meeting_id.clone();
                                 AppServices::global(cx).io.spawn(async move {
-                                    if let Err(e) = parley_core::calendar::service::link_meeting_with_snapshot(
-                                        &pool,
-                                        &meeting_id,
-                                        Some(&event_id),
-                                    )
-                                    .await
-                                    {
+                                    let result = match linked_meeting {
+                                        Some(linked) if linked == meeting_id => {
+                                            calendar_service::refresh_link_snapshot(&pool, &meeting_id, &event_id).await
+                                        }
+                                        Some(_) => Ok(false),
+                                        None => calendar_service::auto_link_meeting(&pool, &meeting_id, &event_id).await,
+                                    };
+                                    if let Err(e) = result {
                                         log::warn!(
                                             "failed to link meeting {} to calendar event {}: {}",
                                             meeting_id,
@@ -698,18 +700,18 @@ impl RecordingView {
         let typed_name = self.meeting_name.read(cx).value().to_string();
         let mic = self.mic_selection(cx);
         let system = self.system_selection(cx);
+        let call = crate::meeting_detect::active_call(cx);
 
         cx.spawn(async move |this, cx| {
-            // Find the calendar event happening right now (if any), mirroring
-            // `recordingCalendarLink.ts`'s `prepareRecordingMetadata`: its
-            // summary becomes the meeting title, and its id is stashed so
-            // the `recording-stopped` handler can link the two once a
-            // `meeting_id` exists.
+            // Pick the calendar event this recording belongs to (if any —
+            // blockers like "Lunch", all-day, cancelled and solo events are
+            // skipped; see `calendar::autolink`): its summary becomes the
+            // meeting title, and the meeting is linked to it once started.
             // On `Io`, like every other DB call: sqlx needs a tokio context,
             // and this closure runs on GPUI's executor.
-            let matched_event = match pool {
+            let matched_event = match pool.clone() {
                 Some(pool) => io
-                    .spawn(async move { CalendarRepository::find_event_for_now(&pool).await })
+                    .spawn(async move { autolink::find_event_for_recording(&pool, Utc::now(), call).await })
                     .await
                     .ok()
                     .and_then(|r| r.ok())
@@ -727,7 +729,7 @@ impl RecordingView {
             };
 
             let _ = this.update_in(cx, |this, window, cx| {
-                this.pending_calendar_event_id = event_id;
+                this.pending_calendar_link = event_id.clone().map(|id| (None, id));
                 if let Some(event) = &matched_event {
                     this.meeting_name.update(cx, |state, cx| {
                         state.set_value(meeting_name.clone(), window, cx);
@@ -754,8 +756,42 @@ impl RecordingView {
             let result = handle.await;
             if let Ok(Err(e)) = result {
                 let _ = this.update(cx, |this, _cx| {
+                    this.pending_calendar_link = None;
                     this.toast(NotificationType::Error, format!("Failed to start recording: {e}"));
                 });
+                return;
+            }
+
+            // Link right away, so the meeting page shows the event (and the
+            // user can change it) while recording, and a crash keeps it.
+            if let (Some(pool), Some(event_id)) = (pool, event_id) {
+                let linked = io
+                    .spawn({
+                        let event_id = event_id.clone();
+                        async move {
+                            let meeting_id = recording_service::current_meeting_id()?;
+                            match calendar_service::auto_link_meeting(&pool, &meeting_id, &event_id).await {
+                                Ok(true) => Some(meeting_id),
+                                Ok(false) => None,
+                                Err(e) => {
+                                    log::warn!("failed to link meeting {meeting_id} to calendar event {event_id}: {e}");
+                                    None
+                                }
+                            }
+                        }
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+                if let Some(meeting_id) = linked {
+                    let _ = this.update(cx, |this, _cx| {
+                        if let Some((linked_meeting, pending_event)) = &mut this.pending_calendar_link {
+                            if *pending_event == event_id {
+                                *linked_meeting = Some(meeting_id);
+                            }
+                        }
+                    });
+                }
             }
         })
         .detach();

@@ -213,34 +213,6 @@ impl CalendarRepository {
             .collect())
     }
 
-    pub async fn find_event_for_now(
-        pool: &SqlitePool,
-    ) -> Result<Option<CalendarEvent>, sqlx::Error> {
-        let now = Utc::now();
-        // Tolerate +/- 5 minutes so a slightly-late record-start still picks
-        // up the current event.
-        let from = now - chrono::Duration::minutes(15);
-        let to = now + chrono::Duration::minutes(5);
-
-        let row = sqlx::query_as::<_, CalendarEventRow>(
-            "SELECT id, source_id, ics_uid, recurrence_id, summary, description,
-                    location, organizer_name, organizer_email, start_at, end_at,
-                    is_all_day, attendees_json, raw_ics, fetched_at
-             FROM calendar_events
-             WHERE is_all_day = 0
-               AND start_at <= ?
-               AND end_at >= ?
-             ORDER BY start_at DESC
-             LIMIT 1",
-        )
-        .bind(to.to_rfc3339())
-        .bind(from.to_rfc3339())
-        .fetch_optional(pool)
-        .await?;
-
-        Ok(row.and_then(|r| CalendarEvent::try_from(r).ok()))
-    }
-
     pub async fn get_event(
         pool: &SqlitePool,
         event_id: &str,

@@ -16,7 +16,7 @@
 //! overlapping start). With "stop when the call ends" on, a recording that
 //! was started while a call was detected is stopped when that call ends.
 
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, Utc};
 use gpui_kit::*;
 
 use parley_core::audio::meeting_detect::{MeetingAppEvent, MeetingDetector, EVENT_DETECTED, EVENT_ENDED};
@@ -24,7 +24,7 @@ use parley_core::audio::recording_preferences::{
     load_recording_preferences, MeetingAutoDetect, RecordingPreferences,
 };
 use parley_core::audio::recording_service::{self, StartRequest};
-use parley_core::calendar::repository::CalendarRepository;
+use parley_core::calendar::{autolink, service as calendar_service};
 
 use crate::app_state::AppServices;
 use crate::core_events::CoreEvent;
@@ -40,8 +40,9 @@ struct DetectState {
     /// detection, or started by hand while that call was live) — the one
     /// whose end stops it when "stop when the call ends" is on.
     recording_for_call: Option<String>,
-    /// `(meeting_id, event_id)` linked at auto-start; re-linked on stop so
-    /// the calendar snapshot lands in the (by then final) meeting folder.
+    /// `(meeting_id, event_id)` linked at auto-start; its snapshot is
+    /// rewritten on stop so it lands in the (by then final) meeting folder,
+    /// unless the user changed the link during the call.
     pending_calendar_link: Option<(String, String)>,
 }
 
@@ -245,10 +246,10 @@ fn on_recording_stopped(cx: &mut App, event: &CoreEvent) {
     let services = AppServices::global(cx);
     let Some(pool) = services.pool() else { return };
     services.io.spawn(async move {
-        if let Err(e) =
-            parley_core::calendar::service::link_meeting_with_snapshot(&pool, &meeting_id, Some(&event_id)).await
-        {
-            log::warn!("meeting-detect: failed to re-link meeting {meeting_id} to event {event_id}: {e}");
+        // Only if still linked to that event: an unlink or relink the user
+        // made during the call stands.
+        if let Err(e) = calendar_service::refresh_link_snapshot(&pool, &meeting_id, &event_id).await {
+            log::warn!("meeting-detect: failed to refresh calendar link of meeting {meeting_id}: {e}");
         }
     });
 }
@@ -274,7 +275,10 @@ pub fn record_call(cx: &mut App, app: MeetingAppEvent, announce: bool) {
                     return Err("A recording is already in progress".to_string());
                 }
                 let event = match &pool {
-                    Some(pool) => CalendarRepository::find_event_for_now(pool).await.ok().flatten(),
+                    Some(pool) => autolink::find_event_for_recording(pool, Utc::now(), Some(app.clone()))
+                        .await
+                        .ok()
+                        .flatten(),
                     None => None,
                 };
                 let title = choose_title(event.as_ref().and_then(|e| e.summary.as_deref()), &app, Local::now());
@@ -297,16 +301,14 @@ pub fn record_call(cx: &mut App, app: MeetingAppEvent, announce: bool) {
                 if let (Some(pool), Some(event), Some(meeting_id)) =
                     (&pool, &event, recording_service::current_meeting_id())
                 {
-                    if let Err(e) = parley_core::calendar::service::link_meeting_with_snapshot(
-                        pool,
-                        &meeting_id,
-                        Some(&event.id),
-                    )
-                    .await
-                    {
-                        log::warn!("meeting-detect: failed to link meeting {meeting_id} to event {}: {e}", event.id);
+                    match calendar_service::auto_link_meeting(pool, &meeting_id, &event.id).await {
+                        Ok(true) => link = Some((meeting_id, event.id.clone())),
+                        Ok(false) => {}
+                        Err(e) => log::warn!(
+                            "meeting-detect: failed to link meeting {meeting_id} to event {}: {e}",
+                            event.id
+                        ),
                     }
-                    link = Some((meeting_id, event.id.clone()));
                 }
                 Ok::<_, String>((app, title, link))
             })

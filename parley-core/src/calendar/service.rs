@@ -42,27 +42,49 @@ pub async fn link_meeting_with_snapshot(
     };
 
     if let Some(folder) = folder {
-        if let Some(event_id) = event_id {
-            match CalendarRepository::get_event(pool, event_id).await {
-                Ok(Some(event)) => {
-                    let snapshot_data = CalendarEventSnapshot::from_event(&event);
-                    if let Err(e) = snapshot::write_snapshot(&folder, &snapshot_data) {
-                        log::warn!(
-                            "calendar snapshot: failed to write {} for meeting {}: {}",
-                            SNAPSHOT_FILENAME,
-                            meeting_id,
-                            e
-                        );
-                    }
+        sync_snapshot(pool, meeting_id, &folder, event_id).await;
+    }
+
+    Ok(true)
+}
+
+/// Make the folder's snapshot describe `event_id`, or remove it when
+/// unlinking. A snapshot that can't be brought up to date is removed rather
+/// than left describing the previous link: [`repair_dangling_links`] trusts
+/// whatever snapshot it finds, so a stale one could otherwise re-attach a
+/// meeting to an event the user moved it away from.
+async fn sync_snapshot(pool: &SqlitePool, meeting_id: &str, folder: &std::path::Path, event_id: Option<&str>) {
+    let written = match event_id {
+        None => false,
+        Some(event_id) => match CalendarRepository::get_event(pool, event_id).await {
+            Ok(Some(event)) => match snapshot::write_snapshot(folder, &CalendarEventSnapshot::from_event(&event)) {
+                Ok(()) => true,
+                Err(e) => {
+                    log::warn!(
+                        "calendar snapshot: failed to write {} for meeting {}: {}",
+                        SNAPSHOT_FILENAME,
+                        meeting_id,
+                        e
+                    );
+                    false
                 }
-                Ok(None) => log::warn!(
+            },
+            Ok(None) => {
+                log::warn!(
                     "calendar snapshot: event {} not found when writing snapshot for meeting {}",
                     event_id,
                     meeting_id
-                ),
-                Err(e) => log::warn!("calendar snapshot: get_event {} failed: {}", event_id, e),
+                );
+                false
             }
-        } else if let Err(e) = snapshot::delete_snapshot(&folder) {
+            Err(e) => {
+                log::warn!("calendar snapshot: get_event {} failed: {}", event_id, e);
+                false
+            }
+        },
+    };
+    if !written {
+        if let Err(e) = snapshot::delete_snapshot(folder) {
             log::warn!(
                 "calendar snapshot: failed to delete {} for meeting {}: {}",
                 SNAPSHOT_FILENAME,
@@ -71,8 +93,44 @@ pub async fn link_meeting_with_snapshot(
             );
         }
     }
+}
 
+/// Re-write the snapshot for a link made earlier (an auto-link at recording
+/// start, once the meeting folder is final at stop) — but only if the
+/// meeting is still linked to `event_id`. If the user unlinked or relinked
+/// it in the meantime, their choice stands and nothing changes. Returns
+/// whether the meeting was still linked to `event_id`.
+pub async fn refresh_link_snapshot(pool: &SqlitePool, meeting_id: &str, event_id: &str) -> Result<bool, String> {
+    let current: Option<(Option<String>, Option<String>)> =
+        sqlx::query_as("SELECT calendar_event_id, folder_path FROM meetings WHERE id = ?")
+            .bind(meeting_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+    let Some((linked, folder)) = current else { return Ok(false) };
+    if linked.as_deref() != Some(event_id) {
+        log::info!("calendar link: meeting {} was relinked or unlinked; leaving it", meeting_id);
+        return Ok(false);
+    }
+    if let Some(folder) = folder.filter(|f| !f.trim().is_empty()) {
+        sync_snapshot(pool, meeting_id, &PathBuf::from(folder), Some(event_id)).await;
+    }
     Ok(true)
+}
+
+/// Link a meeting whose recording just started to the event chosen by
+/// [`super::autolink`], unless the meeting is already linked (by the user,
+/// or an earlier auto-link). Returns whether a link was made.
+pub async fn auto_link_meeting(pool: &SqlitePool, meeting_id: &str, event_id: &str) -> Result<bool, String> {
+    let current: Option<(Option<String>,)> = sqlx::query_as("SELECT calendar_event_id FROM meetings WHERE id = ?")
+        .bind(meeting_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    match current {
+        Some((None,)) => link_meeting_with_snapshot(pool, meeting_id, Some(event_id)).await,
+        _ => Ok(false),
+    }
 }
 
 /// Re-attach meetings whose calendar link points at an event row that no
@@ -86,13 +144,19 @@ pub async fn link_meeting_with_snapshot(
 /// attendees. For each dangling link this re-points the meeting at the
 /// stored occurrence with the same source, UID and recurrence id, or, when
 /// the feed no longer lists it, restores the event row from the snapshot.
-/// Meetings whose source was removed, or with no readable snapshot, are
-/// left alone. Snapshot files are only read, never written.
+/// Meetings whose source was removed, with no readable snapshot, or whose
+/// snapshot describes a different event than the dangling link (left over
+/// from an earlier link) are left alone. Snapshot files are only read,
+/// never written.
+///
+/// Unlinked meetings (`calendar_event_id IS NULL`) are never considered,
+/// whatever snapshot their folder holds, so an unlink sticks; unlinking
+/// also deletes the snapshot (see [`link_meeting_with_snapshot`]).
 ///
 /// Returns how many meetings were re-attached. Cheap when nothing dangles.
 pub async fn repair_dangling_links(pool: &SqlitePool) -> Result<usize, String> {
-    let dangling: Vec<(String, Option<String>)> = sqlx::query_as(
-        "SELECT m.id, m.folder_path FROM meetings m
+    let dangling: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT m.id, m.calendar_event_id, m.folder_path FROM meetings m
          WHERE m.calendar_event_id IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM calendar_events ce WHERE ce.id = m.calendar_event_id)",
     )
@@ -101,7 +165,7 @@ pub async fn repair_dangling_links(pool: &SqlitePool) -> Result<usize, String> {
     .map_err(|e| e.to_string())?;
 
     let mut repaired = 0;
-    for (meeting_id, folder) in dangling {
+    for (meeting_id, linked_id, folder) in dangling {
         let Some(folder) = folder.filter(|f| !f.trim().is_empty()) else { continue };
         let path = PathBuf::from(folder).join(SNAPSHOT_FILENAME);
         let Ok(json) = std::fs::read_to_string(&path) else { continue };
@@ -112,6 +176,14 @@ pub async fn repair_dangling_links(pool: &SqlitePool) -> Result<usize, String> {
                 continue;
             }
         };
+        // Linking writes the snapshot with the id it links to, so a
+        // snapshot for some other id is left over from an earlier link
+        // (the user relinked and the rewrite failed): it says nothing about
+        // this one.
+        if snapshot.event.id != linked_id {
+            log::warn!("calendar repair: {} describes another event; skipping", path.display());
+            continue;
+        }
         match relink_from_snapshot(pool, &meeting_id, &snapshot).await {
             Ok(true) => repaired += 1,
             Ok(false) => {}
@@ -274,5 +346,140 @@ mod tests {
         assert_eq!(gone.attendees[0].name.as_deref(), Some("Ann"));
         // Idempotent.
         assert_eq!(repair_dangling_links(&pool).await.unwrap(), 0);
+    }
+
+    async fn pool_with_events(ids: &[&str]) -> SqlitePool {
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query("INSERT INTO calendar_sources (id, url, created_at, updated_at) VALUES ('src', 'https://x', 'x', 'x')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for id in ids {
+            sqlx::query(
+                "INSERT INTO calendar_events (id, source_id, ics_uid, start_at, end_at, attendees_json, fetched_at)
+                 VALUES (?, 'src', ?, '2026-09-01T10:00:00+00:00', '2026-09-01T11:00:00+00:00', '[]', 'x')",
+            )
+            .bind(id)
+            .bind(format!("{id}-uid"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        pool
+    }
+
+    async fn meeting_in(pool: &SqlitePool, dir: &std::path::Path, id: &str) -> PathBuf {
+        let folder = dir.join(id);
+        std::fs::create_dir_all(&folder).unwrap();
+        MeetingsRepository::create_recording_meeting(pool, id, id, Some(folder.to_str().unwrap())).await.unwrap();
+        folder
+    }
+
+    async fn linked_id(pool: &SqlitePool, meeting: &str) -> Option<String> {
+        sqlx::query_scalar("SELECT calendar_event_id FROM meetings WHERE id = ?")
+            .bind(meeting)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    fn snapshot_id(folder: &std::path::Path) -> Option<String> {
+        let json = std::fs::read_to_string(folder.join(SNAPSHOT_FILENAME)).ok()?;
+        Some(serde_json::from_str::<CalendarEventSnapshot>(&json).unwrap().event.id)
+    }
+
+    #[tokio::test]
+    async fn unlink_is_not_undone_by_repair() {
+        let pool = pool_with_events(&["lunch"]).await;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = meeting_in(&pool, dir.path(), "m").await;
+
+        link_meeting_with_snapshot(&pool, "m", Some("lunch")).await.unwrap();
+        assert_eq!(snapshot_id(&folder).as_deref(), Some("lunch"));
+
+        link_meeting_with_snapshot(&pool, "m", None).await.unwrap();
+        assert_eq!(linked_id(&pool, "m").await, None);
+        assert!(snapshot_id(&folder).is_none(), "unlink deletes the snapshot");
+
+        // Even if a snapshot survived the unlink (delete failed, or a
+        // restore from backup), an unlinked meeting is never repaired.
+        let stale = CalendarEventSnapshot::from_event(&CalendarRepository::get_event(&pool, "lunch").await.unwrap().unwrap());
+        snapshot::write_snapshot(&folder, &stale).unwrap();
+        sqlx::query("DELETE FROM calendar_events WHERE id = 'lunch'").execute(&pool).await.unwrap();
+        assert_eq!(repair_dangling_links(&pool).await.unwrap(), 0);
+        assert_eq!(linked_id(&pool, "m").await, None);
+    }
+
+    #[tokio::test]
+    async fn relink_repairs_to_the_new_event_not_the_old_one() {
+        let pool = pool_with_events(&["lunch", "review"]).await;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = meeting_in(&pool, dir.path(), "m").await;
+
+        link_meeting_with_snapshot(&pool, "m", Some("lunch")).await.unwrap();
+        link_meeting_with_snapshot(&pool, "m", Some("review")).await.unwrap();
+        assert_eq!(snapshot_id(&folder).as_deref(), Some("review"));
+
+        // The new event's row goes missing: repair restores it, not lunch.
+        sqlx::query("DELETE FROM calendar_events WHERE id = 'review'").execute(&pool).await.unwrap();
+        assert_eq!(repair_dangling_links(&pool).await.unwrap(), 1);
+        assert_eq!(linked_id(&pool, "m").await.as_deref(), Some("review"));
+        assert_eq!(
+            CalendarRepository::get_event_for_meeting(&pool, "m").await.unwrap().unwrap().ics_uid,
+            "review-uid"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_snapshot_from_an_earlier_link_is_ignored() {
+        let pool = pool_with_events(&["lunch", "review"]).await;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = meeting_in(&pool, dir.path(), "m").await;
+        link_meeting_with_snapshot(&pool, "m", Some("lunch")).await.unwrap();
+
+        // Relinked in the DB, but the snapshot rewrite never happened.
+        CalendarRepository::link_meeting(&pool, "m", Some("review")).await.unwrap();
+        assert_eq!(snapshot_id(&folder).as_deref(), Some("lunch"));
+        sqlx::query("DELETE FROM calendar_events WHERE id = 'review'").execute(&pool).await.unwrap();
+        assert_eq!(repair_dangling_links(&pool).await.unwrap(), 0);
+        assert_eq!(linked_id(&pool, "m").await.as_deref(), Some("review"), "left dangling, not sent back to lunch");
+    }
+
+    #[tokio::test]
+    async fn relink_to_missing_event_drops_old_snapshot() {
+        let pool = pool_with_events(&["lunch"]).await;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = meeting_in(&pool, dir.path(), "m").await;
+        link_meeting_with_snapshot(&pool, "m", Some("lunch")).await.unwrap();
+        link_meeting_with_snapshot(&pool, "m", Some("gone")).await.unwrap();
+        assert!(snapshot_id(&folder).is_none());
+    }
+
+    #[tokio::test]
+    async fn stop_time_refresh_respects_a_manual_unlink_or_relink() {
+        let pool = pool_with_events(&["lunch", "review"]).await;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = meeting_in(&pool, dir.path(), "m").await;
+
+        assert!(auto_link_meeting(&pool, "m", "lunch").await.unwrap());
+        // The user unlinks mid-recording; the stop-time refresh leaves it.
+        link_meeting_with_snapshot(&pool, "m", None).await.unwrap();
+        assert!(!refresh_link_snapshot(&pool, "m", "lunch").await.unwrap());
+        assert_eq!(linked_id(&pool, "m").await, None);
+        assert!(snapshot_id(&folder).is_none());
+
+        // A manual link is never replaced by auto-linking.
+        link_meeting_with_snapshot(&pool, "m", Some("review")).await.unwrap();
+        assert!(!auto_link_meeting(&pool, "m", "lunch").await.unwrap());
+        assert!(!refresh_link_snapshot(&pool, "m", "lunch").await.unwrap());
+        assert_eq!(linked_id(&pool, "m").await.as_deref(), Some("review"));
+        assert_eq!(snapshot_id(&folder).as_deref(), Some("review"));
+
+        // Still linked: the refresh rewrites the snapshot (e.g. into the
+        // final folder).
+        std::fs::remove_file(folder.join(SNAPSHOT_FILENAME)).unwrap();
+        assert!(refresh_link_snapshot(&pool, "m", "review").await.unwrap());
+        assert_eq!(snapshot_id(&folder).as_deref(), Some("review"));
     }
 }
