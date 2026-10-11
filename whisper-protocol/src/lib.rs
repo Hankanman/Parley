@@ -1,4 +1,4 @@
-//! Wire protocol between the Tauri app and a `whisper-helper` sidecar.
+//! Wire protocol between the Parley app and a `whisper-helper` sidecar.
 //!
 //! Modelled on `llama-protocol`: newline-delimited JSON over the child
 //! process's stdin/stdout. The app writes one [`Request`] per line, the

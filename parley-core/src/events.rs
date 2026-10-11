@@ -1,12 +1,14 @@
 //! UI-agnostic event emission.
 //!
 //! Core code (audio pipeline, transcription, summaries, downloads) reports
-//! progress to the UI through [`EventSink`] instead of taking a Tauri
-//! `AppHandle` just to call `emit`. The Tauri shell implements the trait for
-//! `AppHandle<R>`, so call sites that still hold an `AppHandle` can pass
-//! `&app` wherever a `&dyn EventSink` is expected; a future non-webview shell
-//! (GPUI) supplies its own implementation that routes events into its state
-//! entities.
+//! progress to the UI through [`EventSink`] instead of holding a UI handle.
+//! The GPUI shell implements the trait (`parley-gpui`'s
+//! `core_events::GpuiSink`) to route events into its `CoreEvents` entity;
+//! tests use [`NullSink`] / [`RecordingSink`].
+//!
+//! Event names and payload shapes are a long-standing contract, originally
+//! shared with the retired Tauri/React shell; keep them stable when
+//! refactoring, since recovery and other listeners still key off them.
 //!
 //! Event names and payload shapes are the frontend contract — they are the
 //! strings the React side `listen()`s for — so changing a sink must never
@@ -25,8 +27,8 @@ pub trait EventSink: Send + Sync {
 pub type SharedEventSink = Arc<dyn EventSink>;
 
 /// Typed convenience over [`EventSink::emit_value`]. Named `emit_event` rather
-/// than `emit` so it never collides with `tauri::Emitter::emit` when both
-/// traits are in scope.
+/// than `emit` so it doesn't collide with other `emit` methods (e.g. GPUI's
+/// `EventEmitter`) when several traits are in scope.
 pub trait EventSinkExt {
     fn emit_event<T: Serialize + ?Sized>(&self, event: &str, payload: &T) -> Result<(), String>;
 }

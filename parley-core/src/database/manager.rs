@@ -50,9 +50,7 @@ impl DatabaseManager {
     }
 
     /// Open (creating if needed) the database at the app's default data
-    /// directory (`crate::paths::app_data_dir()` — Tauri's `app_data_dir()`
-    /// resolver on Linux resolves to the exact same path, see that module's
-    /// doc comment).
+    /// directory (`crate::paths::app_data_dir()`).
     pub async fn new_default() -> Result<Self> {
         // Resolve the app's data directory
         let app_data_dir = crate::paths::app_data_dir().expect("failed to get app data dir");

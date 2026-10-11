@@ -1135,8 +1135,8 @@ impl WhisperEngine {
         // The shared downloader's progress callback is sync (it can't
         // `.await`), so the in-memory status mirror is updated via
         // `try_write` here — best-effort, since the callback also fires the
-        // caller-supplied `progress_callback` (which drives the Tauri event
-        // the frontend actually renders) on every tick regardless.
+        // caller-supplied `progress_callback` (which drives the event the
+        // UI actually renders) on every tick regardless.
         let models_for_progress = self.available_models.clone();
         let model_name_for_progress = model_name.to_string();
 

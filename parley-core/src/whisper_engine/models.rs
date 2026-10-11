@@ -272,8 +272,7 @@ pub async fn whisper_get_models_directory() -> Result<String, String> {
 
 /// Download `model_name`, reporting progress through `sink` via
 /// `model-download-progress` / `model-download-complete` /
-/// `model-download-error` — the same three events the command previously
-/// emitted directly through the `AppHandle`.
+/// `model-download-error`.
 pub async fn download_model_with_progress(
     sink: SharedEventSink,
     model_name: String,

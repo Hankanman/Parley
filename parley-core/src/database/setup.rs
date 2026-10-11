@@ -3,22 +3,22 @@ use log::{info, warn};
 use super::manager::DatabaseManager;
 use super::repositories::meeting::MeetingsRepository;
 
-/// Outcome of [`prepare_database_on_startup`] for the Tauri shell to act on:
-/// either this is the first launch (nothing to manage yet — the shell
-/// notifies the frontend once its window/listeners are ready) or the
-/// database is open and ready to be registered as app state.
+/// Outcome of [`prepare_database_on_startup`] for the shell to act on:
+/// either this is the first launch (no database yet — the shell runs
+/// onboarding, which creates one) or the database is open and ready to be
+/// stored in app state.
 pub enum StartupOutcome {
     FirstLaunch,
     Initialized(DatabaseManager),
 }
 
-/// Tauri-free core of database startup: first-launch detection and, on a
+/// UI-independent database startup: first-launch detection and, on a
 /// normal launch, opening the database and sweeping any meeting row a
 /// previous run left `"recording"` (crash marker, issue #57 slice 2) to
 /// `"interrupted"` so the recovery dialog can find it via a plain status
-/// query. The Tauri shell (`initialize_database_on_startup` in
-/// `lib.rs`/`setup_commands.rs`) manages the returned `DatabaseManager` as
-/// app state and emits `first-launch-detected` on `StartupOutcome::FirstLaunch`.
+/// query. Called via `bootstrap::prepare_database`; the GPUI shell keeps
+/// the returned `DatabaseManager` in its `AppServices` DB slot and shows
+/// onboarding on `StartupOutcome::FirstLaunch`.
 pub async fn prepare_database_on_startup() -> Result<StartupOutcome, String> {
     // Check if this is the first launch (no database exists yet)
     let is_first_launch = DatabaseManager::is_first_launch()

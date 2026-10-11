@@ -1,7 +1,8 @@
 //! Shared whisper.cpp transcription logic: `FullParams` construction and
 //! decoder-confidence scoring.
 //!
-//! Ported out of `frontend/src-tauri/src/whisper_engine/whisper_engine.rs`
+//! Ported out of the in-process engine (now
+//! `parley-core/src/whisper_engine/whisper_engine.rs`)
 //! (`transcribe_audio_with_confidence_opts`) for the issue #56 sidecar spike.
 //! The in-process engine is left unmodified for this spike (see
 //! `docs/transcription-backends.md` for the follow-up that would switch it
@@ -9,7 +10,7 @@
 //! parameter choices and confidence formula exactly so the two paths behave
 //! identically once wired together.
 //!
-//! Deliberately has no knowledge of Tokio, Tauri, or hardware detection —
+//! Deliberately has no knowledge of Tokio, the UI shell, or hardware detection —
 //! callers (the in-process engine, or `whisper-helper`) supply thread count
 //! and beam size via [`DecodeConfig`] rather than this crate reaching for
 //! `audio::HardwareProfile` itself, so it stays usable from a plain sidecar

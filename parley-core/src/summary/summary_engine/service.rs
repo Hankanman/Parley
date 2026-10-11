@@ -1,6 +1,6 @@
-//! Tauri-free core of built-in AI model management: the shared
-//! `ModelManager` slot, its initialization, and download/recommendation
-//! logic. See `commands.rs` for the thin `#[tauri::command]` wrappers.
+//! Built-in AI model management: the shared `ModelManager` slot, its
+//! initialization, and download/recommendation logic. The GPUI settings
+//! view calls these directly.
 
 use std::sync::Arc;
 
@@ -10,7 +10,7 @@ use crate::events::{EventSinkExt, SharedEventSink};
 
 use super::model_manager::{DownloadProgress, ModelInfo, ModelManager, ModelStatus};
 
-/// Global model manager instance (managed as Tauri state by the shell).
+/// Global model manager instance (held in the GPUI shell's `AppServices`).
 pub struct ModelManagerState(pub Arc<Mutex<Option<Arc<ModelManager>>>>);
 
 /// Initialize the model manager, writing the result into `manager_state`
@@ -68,8 +68,7 @@ pub async fn ensure_manager(
 
 /// Download `model_name` into `manager`, reporting progress through `sink`
 /// via `builtin-ai-download-progress` (status `downloading` while running,
-/// then a final `completed` or `error` event) — the same events the command
-/// previously emitted directly through the `AppHandle`.
+/// then a final `completed` or `error` event).
 pub async fn download_builtin_ai_model(
     manager: Arc<ModelManager>,
     model_name: String,

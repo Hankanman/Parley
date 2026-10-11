@@ -17,8 +17,8 @@ pub struct RecordingPreferences {
     pub preferred_system_device: Option<String>,
     /// Show the "inform participants" toast when a recording starts.
     /// Previously its own tauri-plugin-store file (`preferences.json`,
-    /// written by the frontend directly); folded in here so all recording
-    /// settings live in one place.
+    /// written directly by the retired Tauri/React frontend); folded in
+    /// here so all recording settings live in one place.
     #[serde(default = "default_true")]
     pub show_recording_notification: bool,
     /// After a recording stops and its audio is finalized, automatically
@@ -279,8 +279,9 @@ pub fn generate_recording_filename(format: &str) -> String {
 }
 
 /// One-time, read-only import of recording preferences from the legacy
-/// tauri-plugin-store JSON file (`recording_preferences.json`), written
-/// before this moved to SQLite. Read directly off disk (same `$APPDATA`
+/// tauri-plugin-store JSON file (`recording_preferences.json`), written by
+/// the retired Tauri shell before this moved to SQLite. Kept so an upgrade
+/// from that era doesn't lose the user's settings. Read directly off disk (same `$APPDATA`
 /// location and flat `{"preferences": ...}` shape the store plugin used,
 /// with its default serializer) so this module no longer depends on the
 /// plugin at all. The file is left in place afterward.
@@ -301,8 +302,7 @@ fn import_legacy_recording_preferences() -> Option<RecordingPreferences> {
 /// One-time, read-only import of the "show recording notification" toggle
 /// from the legacy tauri-plugin-store JSON file (`preferences.json`) — a
 /// *different* file from `recording_preferences.json`, written directly by
-/// the frontend's JS-side `Store` API (`RecordingSettings.tsx` /
-/// `recordingNotification.tsx`). Folded into `RecordingPreferences` on
+/// the retired React frontend's JS-side `Store` API. Folded into `RecordingPreferences` on
 /// import so it lives in the same SQLite row going forward. The file is
 /// left in place afterward.
 fn import_legacy_show_recording_notification() -> Option<bool> {
@@ -312,10 +312,10 @@ fn import_legacy_show_recording_notification() -> Option<bool> {
     root.get("show_recording_notification")?.as_bool()
 }
 
-/// Load recording preferences from the database. `pool` is `None` when
-/// `AppState` hasn't been managed yet (e.g. a first-launch cold start) — the
-/// caller resolves it once (typically via `AppState`'s Tauri-managed pool)
-/// and passes it in, so this module itself never depends on Tauri.
+/// Load recording preferences from the database. `pool` is `None` when no
+/// database exists yet (e.g. a first-launch cold start before onboarding)
+/// — the caller resolves it once (typically `AppServices::pool()` in the
+/// GPUI shell) and passes it in, so this module never depends on the UI.
 pub async fn load_recording_preferences(
     pool: Option<sqlx::SqlitePool>,
 ) -> Result<RecordingPreferences> {
@@ -375,8 +375,8 @@ pub async fn load_recording_preferences(
 }
 
 /// Save recording preferences to the database. `pool` is resolved by the
-/// caller (typically via `AppState`'s Tauri-managed pool), so this module
-/// itself never depends on Tauri.
+/// caller (typically `AppServices::pool()` in the GPUI shell), so this
+/// module never depends on the UI.
 pub async fn save_recording_preferences(
     pool: Option<sqlx::SqlitePool>,
     preferences: &RecordingPreferences,

@@ -11,8 +11,9 @@ use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel};
-// Protocol messages (JSON over stdin/stdout) are shared with the Tauri app
-// via the llama-protocol crate so the two ends can't drift apart.
+// Protocol messages (JSON over stdin/stdout) are shared with the app's
+// summary engine (`parley-core`'s `summary_engine::sidecar`) via the
+// llama-protocol crate so the two ends can't drift apart.
 use llama_protocol::{Request, Response};
 
 // ============================================================================
@@ -429,7 +430,7 @@ fn send_response(response: &Response) -> Result<()> {
 
 fn main() -> Result<()> {
     // Rust starts with SIGPIPE ignored, so writing our JSON response to a
-    // stdout whose reader (the Tauri app) has gone away returns EPIPE and
+    // stdout whose reader (the Parley app) has gone away returns EPIPE and
     // `println!` panics with "failed printing to stdout: Broken pipe". Restore
     // the default disposition so a vanished parent just terminates us quietly —
     // the idiomatic behavior for a pipe-writing helper. Safe: this is the first

@@ -1,4 +1,4 @@
-//! Tauri-free core of the Parley desktop app: audio
+//! UI-independent core of the Parley desktop app: audio
 //! capture/mixing/VAD, transcription, speaker diarization, summary
 //! generation, and SQLite persistence. Depends on no UI framework;
 //! the GPUI desktop shell (`parley-gpui`) sits on top of this.

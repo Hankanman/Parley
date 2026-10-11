@@ -1,7 +1,7 @@
 [package]
 name = "parley-core"
 version = "0.4.0"
-description = "Tauri-free core: audio capture/mixing/VAD, transcription, diarization, summaries, persistence"
+description = "UI-independent core: audio capture/mixing/VAD, transcription, diarization, summaries, persistence"
 edition.workspace = true
 rust-version.workspace = true
 
@@ -10,9 +10,9 @@ rust-version.workspace = true
 [lib]
 name = "parley_core"
 
-# Hardware acceleration features for whisper-rs (Linux-only build). Mirrors
-# the shell crate's features of the same name, which simply forward here —
-# see frontend/src-tauri/Cargo.toml.
+# Hardware acceleration features for whisper-rs (Linux-only build).
+# `parley-gpui` and `llama-helper` expose features of the same name, which
+# simply forward here — see parley-gpui/Cargo.toml.
 [features]
 default = ["platform-default"]
 platform-default = []
@@ -24,7 +24,7 @@ openmp = ["whisper-rs/openmp"]
 
 # Issue #56 spike only: compiles audio::transcription::backend_probe, which
 # probes whisper-helper-{cuda,vulkan,cpu} sidecar binaries next to the exe.
-# Off by default — not wired into the live recording path or invoke_handler.
+# Off by default — not wired into the live recording path or the UI.
 # See docs/transcription-backends.md.
 backend_probe = ["dep:whisper-protocol"]
 

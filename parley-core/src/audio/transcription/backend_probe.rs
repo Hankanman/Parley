@@ -18,9 +18,9 @@
 //!
 //! # What this does not do (yet)
 //!
-//! - No caller in `lib.rs` invokes this at startup or exposes it as a Tauri
-//!   command; registering `get_transcription_backends` in
-//!   `invoke_handler![]` is a follow-up once a settings UI exists for it.
+//! - Nothing invokes this at startup or surfaces it in the UI; wiring
+//!   `get_transcription_backends` into the GPUI settings is a follow-up
+//!   once a settings page exists for it.
 //! - No sidecar binaries actually ship next to the app yet — `whisper-helper`
 //!   is a standalone workspace crate today (`cargo build -p whisper-helper`).
 //! - Persistence of the manual override piggybacks on
@@ -61,8 +61,8 @@ pub struct BackendSelection {
 }
 
 /// Build the expected path for a given backend's sidecar binary, sitting
-/// next to `exe_dir` (mirrors how `llama-helper` is located relative to the
-/// Tauri app's resource/exe directory today).
+/// next to `exe_dir` (mirrors how `llama-helper` is located next to the
+/// app's executable).
 fn candidate_path(exe_dir: &Path, backend: &str) -> PathBuf {
     exe_dir.join(format!("whisper-helper-{backend}"))
 }
@@ -172,8 +172,8 @@ pub fn scan_backends(exe_dir: &Path, model_path: Option<&str>, _timeout: Duratio
     }
 }
 
-/// Tauri-command-shaped entry point for a future settings UI. Not currently
-/// registered in `invoke_handler![]` — see module doc comment.
+/// Entry point for a future settings UI. Not currently called from the
+/// shell — see module doc comment.
 ///
 /// `model_path` should be the tiny/base model's path if one is downloaded
 /// (gives a real decode_ok signal); `None` degrades to ping-only probing.

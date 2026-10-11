@@ -137,8 +137,10 @@ impl SidecarManager {
             }
         }
 
-        // In production, Tauri bundles the binary with target triple suffix
-        // 2. Check relative to current executable (most reliable for AppImage/bundled apps)
+        // 2. Check relative to current executable (most reliable for AppImage/bundled apps).
+        //    `build.sh` ships it as plain `llama-helper`, caught by the fuzzy
+        //    match below; the exact target-triple-suffixed name is the
+        //    Tauri-era `externalBin` naming, still accepted for compatibility.
         if let Ok(exe_path) = std::env::current_exe() {
             if let Some(exe_dir) = exe_path.parent() {
                 log::info!(
@@ -242,8 +244,7 @@ impl SidecarManager {
 
         // 3. Fallback for dev: the workspace target dir (no target triple in
         //    dev builds). Walk up from the running crate's manifest dir, since
-        //    the app crate may sit one level below the workspace root
-        //    (parley-gpui/) or two (frontend/src-tauri/).
+        //    the app crate sits below the workspace root (parley-gpui/).
         if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
             for dir in PathBuf::from(&manifest_dir).ancestors() {
                 for profile in ["release", "debug"] {

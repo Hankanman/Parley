@@ -13,10 +13,8 @@ use sqlx::SqlitePool;
 /// record the outcome (`last_fetched_at`/`last_error`) on the source row.
 /// Returns the number of events stored on success.
 ///
-/// Shared by the Tauri `calendar_refresh_source` command
-/// (`frontend/src-tauri/src/commands/calendar/commands.rs`) and the GPUI
-/// Settings → Calendar page (`parley-gpui/src/views/settings/calendar.rs`)
-/// so both surfaces refresh a source the same way.
+/// Called by the Settings → Calendar page
+/// (`parley-gpui/src/views/settings/calendar.rs`).
 pub async fn refresh_source(pool: &SqlitePool, source_id: &str) -> Result<usize, String> {
     let source = CalendarRepository::get_source(pool, source_id)
         .await
@@ -51,10 +49,8 @@ pub async fn refresh_source(pool: &SqlitePool, source_id: &str) -> Result<usize,
 /// `https://` (the scheme calendar publishers use to mean "open in your
 /// calendar app", which just maps to an https fetch here).
 ///
-/// Shared by the Tauri `calendar_add_source` command
-/// (`frontend/src-tauri/src/commands/calendar/commands.rs`) and the GPUI
-/// Settings → Calendar page (`parley-gpui/src/views/settings/calendar.rs`)
-/// so both surfaces accept/reject the same URLs.
+/// Called by the Settings → Calendar page
+/// (`parley-gpui/src/views/settings/calendar.rs`) before a source is saved.
 pub fn normalize_calendar_url(url: &str) -> Result<String, String> {
     let trimmed = url.trim();
     if trimmed.is_empty() {

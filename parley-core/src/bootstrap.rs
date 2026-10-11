@@ -1,20 +1,17 @@
-//! Shared, Tauri-free application startup and shutdown.
+//! UI-independent application startup and shutdown.
 //!
-//! Every UI shell (the Tauri app under `frontend/src-tauri`, and the
-//! upcoming GPUI app in `parley-gpui`) needs the same sequence at launch —
+//! The UI shell (`parley-gpui`) needs this sequence at launch —
 //! resolve model/template directories, open (or defer) the database, warm up
 //! the whisper engine / speaker diarizer / summary model manager, fetch any
 //! missing built-in models — and the same sequence at exit — finish a
 //! recording in flight, checkpoint the database, tear down the summary
 //! sidecar, and unload the whisper model. This module is that sequence,
-//! written once against `SharedEventSink` / `SqlitePool` instead of an
-//! `AppHandle` so both shells can call it directly.
+//! written against `SharedEventSink` / `SqlitePool` so it has no UI
+//! dependency.
 //!
-//! Shell-specific concerns (creating a system tray, initializing OS
-//! notifications, scheduling the delayed `first-launch-detected` event once
-//! a webview is ready) stay in the shell — see
-//! `frontend/src-tauri/src/lib.rs`'s `run()` for how the Tauri shell wires
-//! this module in.
+//! Shell-specific concerns (creating a system tray, initializing desktop
+//! notifications, showing onboarding on first launch) stay in the shell — see `parley-gpui/src/main.rs` for
+//! how the shell wires this module in.
 
 use std::sync::Arc;
 
@@ -32,8 +29,7 @@ use crate::whisper_engine;
 /// Shared slot the summary engine's `ModelManager` lives in once
 /// initialized — the same `Arc<Mutex<Option<Arc<ModelManager>>>>` shape as
 /// `summary::summary_engine::ModelManagerState`'s inner field, kept as a bare
-/// type here so this module doesn't need to depend on the Tauri-managed
-/// wrapper struct.
+/// type here so this module doesn't need to depend on the wrapper struct.
 pub type ModelManagerSlot = Arc<Mutex<Option<Arc<ModelManager>>>>;
 
 /// Synchronous, call first: resolves and creates the whisper models
@@ -71,8 +67,8 @@ pub fn init_paths() {
 ///
 /// `FirstLaunch` means there's no database yet — the shell's onboarding flow
 /// creates one later. `Initialized(DatabaseManager)` is a ready-to-use
-/// database; the caller is responsible for keeping it alive (as Tauri app
-/// state, or in whatever the GPUI shell's equivalent is) and for cloning its
+/// database; the caller is responsible for keeping it alive (the GPUI
+/// shell's `AppServices` DB slot) and for cloning its
 /// pool to pass to `spawn_background_init`.
 pub async fn prepare_database() -> Result<database::setup::StartupOutcome, String> {
     let outcome = database::setup::prepare_database_on_startup().await?;
@@ -100,10 +96,8 @@ pub async fn prepare_database() -> Result<database::setup::StartupOutcome, Strin
 /// Must be called from within a running tokio runtime (this function calls
 /// `tokio::spawn`, which panics outside one — see
 /// `tokio::runtime::Handle::try_current()` to check before calling if the
-/// caller isn't certain). The Tauri shell satisfies this by invoking it from
-/// inside a `tauri::async_runtime::spawn(async move { ... })` block in its
-/// `setup()` closure, since `setup()` itself isn't guaranteed to run inside
-/// the tokio runtime tauri manages.
+/// caller isn't certain). The GPUI shell satisfies this by entering its
+/// `Io` runtime handle around the call in `main()`.
 pub fn spawn_background_init(
     sink: SharedEventSink,
     pool: Option<sqlx::SqlitePool>,
@@ -376,15 +370,13 @@ async fn ensure_required_models_downloaded(sink: SharedEventSink, pool: Option<&
 }
 
 /// If a recording is active or a stop is already draining one, run the full
-/// `recording_service::stop` flow (the same `save_path` construction the
-/// Tauri shell's `begin_shutdown_stop` used before this moved here) and emit
+/// `recording_service::stop` flow (the same `save_path` construction a
+/// user-initiated stop uses) and emit
 /// `recording-shutdown-progress` first so the UI can show "finishing
 /// recording" while the app closes. A no-op when idle.
 ///
-/// `ctx` should be built the same way a live recording command builds it
-/// (event sink + DB pool) — see `commands::audio::recording_commands::build_context`
-/// in the Tauri shell for the reference construction, which additionally
-/// wraps the sink so it keeps refreshing the tray during shutdown.
+/// `ctx` should be built the same way a live recording builds it (event
+/// sink + DB pool) — the GPUI shell uses `AppServices::recording_context()`.
 pub async fn finish_recording_for_exit(ctx: audio::recording_service::RecordingContext) {
     use audio::recording_service::{self, RecordingArgs};
 
@@ -428,9 +420,8 @@ pub async fn finish_recording_for_exit(ctx: audio::recording_service::RecordingC
 /// destructors so ggml's CUDA/Vulkan/HIP finalizers don't race the GPU
 /// driver's own atexit teardown and abort()) is shell-process-lifecycle
 /// policy, not shutdown-sequencing logic, so it stays with each shell's exit
-/// handler right after it calls this function. See the Tauri shell's
-/// `RunEvent::Exit` handler in `lib.rs` for the full rationale and the
-/// `unsafe { libc::_exit(0) }` call itself.
+/// handler right after it calls this function. See the end of `main()` in
+/// `parley-gpui/src/main.rs` for the `unsafe { libc::_exit(0) }` call.
 pub async fn shutdown(db: Option<&DatabaseManager>) {
     // Clean up database connection and checkpoint WAL.
     if let Some(db_manager) = db {

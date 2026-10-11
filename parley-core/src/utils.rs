@@ -11,20 +11,20 @@ pub fn format_timestamp(seconds: f64) -> String {
 }
 
 // Global transcription language preference (default to "auto-translate" for
-// automatic translation to English). Read by the transcription workers;
-// written by the shell's `set_language_preference` Tauri command via
-// `set_language_preference_internal`.
+// automatic translation to English). Read by the transcription workers.
+// Nothing calls `set_language_preference_internal` today (its only caller
+// was a Tauri command), so live recording always uses this default — the
+// Settings → Summary "Transcription language" field (`ui_config`
+// `primaryLanguage`) is saved but not yet wired through to here.
 static LANGUAGE_PREFERENCE: std::sync::LazyLock<StdMutex<String>> =
     std::sync::LazyLock::new(|| StdMutex::new("auto-translate".to_string()));
 
-/// Internal helper to get the current language preference (for use within
-/// Rust code, not a Tauri command).
+/// Get the current transcription language preference.
 pub fn get_language_preference_internal() -> Option<String> {
     LANGUAGE_PREFERENCE.lock().ok().map(|lang| lang.clone())
 }
 
-/// Internal helper to set the current language preference. The shell's
-/// `set_language_preference` command delegates to this.
+/// Set the current transcription language preference.
 pub fn set_language_preference_internal(language: String) {
     if let Ok(mut lang_pref) = LANGUAGE_PREFERENCE.lock() {
         *lang_pref = language;
