@@ -157,11 +157,13 @@ async fn build_profile_matcher(
         return Ok(None);
     }
 
+    let self_profile_id = profiles.iter().find(|p| p.is_self).map(|p| p.id.clone());
     let entries = profiles.into_iter().filter_map(|p| {
         bytes_to_floats(&p.embedding).map(|emb| (p.id, p.name, emb))
     });
 
-    let matcher = SpeakerProfileMatcher::new(dim, entries, PROFILE_MATCH_THRESHOLD)?;
+    let matcher = SpeakerProfileMatcher::new(dim, entries, PROFILE_MATCH_THRESHOLD)?
+        .with_self_profile(self_profile_id);
     if matcher.num_profiles() == 0 {
         Ok(None)
     } else {
@@ -216,6 +218,56 @@ async fn stream_download(
     Ok(())
 }
 
+/// How many people the meeting's linked calendar event says were invited —
+/// organizer plus attendees, de-duplicated, minus anyone who declined — for
+/// use as a soft cap on speaker refinement. `None` when there's no linked
+/// event or it lists fewer than two people (a one-person event is just a
+/// calendar block, not a head count).
+pub async fn expected_speaker_count(pool: &SqlitePool, meeting_id: &str) -> Option<usize> {
+    match crate::calendar::repository::CalendarRepository::get_event_for_meeting(pool, meeting_id)
+        .await
+    {
+        Ok(Some(event)) => head_count(&event),
+        Ok(None) => None,
+        Err(e) => {
+            log::warn!("Failed to load calendar event for meeting {}: {}", meeting_id, e);
+            None
+        }
+    }
+}
+
+fn head_count(event: &crate::calendar::models::CalendarEvent) -> Option<usize> {
+    let key = |name: Option<&str>, email: Option<&str>| {
+        email
+            .or(name)
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+    };
+    let mut people: Vec<String> = Vec::new();
+    let mut add = |k: Option<String>| {
+        if let Some(k) = k {
+            if !people.contains(&k) {
+                people.push(k);
+            }
+        }
+    };
+    // Shared calendars publish events with the calendar itself as organizer
+    // (`…@group.calendar.google.com`); that's not a person in the room.
+    let organizer = key(event.organizer_name.as_deref(), event.organizer_email.as_deref())
+        .filter(|k| !k.ends_with("calendar.google.com"));
+    add(organizer);
+    for a in &event.attendees {
+        let declined = a
+            .status
+            .as_deref()
+            .is_some_and(|s| s.eq_ignore_ascii_case("DECLINED"));
+        if !declined {
+            add(key(a.name.as_deref(), a.email.as_deref()));
+        }
+    }
+    (people.len() >= 2).then_some(people.len())
+}
+
 /// Re-cluster the just-finished recording offline and write the improved
 /// speaker labels into `meeting_id`'s saved transcripts.
 ///
@@ -253,9 +305,11 @@ pub async fn refine_and_persist(
     // Clustering is pure CPU work over the whole session's embeddings; keep
     // it off the async runtime so it can't stall other tasks (same reasoning
     // as whisper/embedding inference elsewhere).
+    let options = crate::speaker_diarization::RefineOptions::default()
+        .with_max_speakers(expected_speaker_count(pool, meeting_id).await);
     let refined = {
         let diarizer = diarizer.clone();
-        tokio::task::spawn_blocking(move || diarizer.refine())
+        tokio::task::spawn_blocking(move || diarizer.refine_with(&options))
             .await
             .map_err(|e| anyhow!("Speaker refinement task panicked: {}", e))?
     };
@@ -532,4 +586,58 @@ pub async fn merge_cluster_into_profile_core(
     );
 
     Ok((renamed_count, centroid_updated))
+}
+
+#[cfg(test)]
+mod head_count_tests {
+    use super::head_count;
+    use crate::calendar::models::{Attendee, CalendarEvent};
+
+    fn event(organizer: Option<&str>, attendees: &[(&str, Option<&str>)]) -> CalendarEvent {
+        CalendarEvent {
+            id: "e".into(),
+            source_id: "s".into(),
+            ics_uid: "u".into(),
+            recurrence_id: None,
+            summary: None,
+            description: None,
+            location: None,
+            organizer_name: None,
+            organizer_email: organizer.map(str::to_string),
+            start_at: chrono::Utc::now(),
+            end_at: chrono::Utc::now(),
+            is_all_day: false,
+            attendees: attendees
+                .iter()
+                .map(|(email, status)| Attendee {
+                    email: Some(email.to_string()),
+                    status: status.map(str::to_string),
+                    ..Default::default()
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn counts_organizer_and_attendees_once_each() {
+        let e = event(
+            Some("Ann@x.com"),
+            &[("ann@x.com", None), ("bob@x.com", None), ("cat@x.com", None)],
+        );
+        assert_eq!(head_count(&e), Some(3));
+    }
+
+    #[test]
+    fn skips_declines_and_calendar_organizers() {
+        let e = event(
+            Some("team@group.calendar.google.com"),
+            &[("ann@x.com", None), ("bob@x.com", Some("DECLINED")), ("cat@x.com", Some("ACCEPTED"))],
+        );
+        assert_eq!(head_count(&e), Some(2));
+    }
+
+    #[test]
+    fn a_one_person_event_is_no_head_count() {
+        assert_eq!(head_count(&event(Some("ann@x.com"), &[])), None);
+    }
 }

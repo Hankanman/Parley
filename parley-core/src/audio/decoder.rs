@@ -121,6 +121,31 @@ impl DecodedAudio {
             Ok(mono_samples)
         }
     }
+
+    /// The first two channels as separate 16 kHz mono tracks (same
+    /// conversion as [`Self::to_whisper_format`]), or `None` for mono audio.
+    ///
+    /// For a Parley recording these are the microphone (left) and system
+    /// audio (right) — see `audio::pipeline` — which batch diarization uses
+    /// to tell the user's side of a call from the far end's (#102).
+    pub fn split_channels_to_whisper_format(
+        &self,
+        progress_callback: Option<ProgressCallback>,
+    ) -> Result<Option<(Vec<f32>, Vec<f32>)>> {
+        if self.channels < 2 {
+            return Ok(None);
+        }
+        let stride = self.channels as usize;
+        let channel = |c: usize| DecodedAudio {
+            samples: self.samples.iter().skip(c).step_by(stride).copied().collect(),
+            sample_rate: self.sample_rate,
+            channels: 1,
+            duration_seconds: self.duration_seconds,
+        };
+        let left = channel(0).to_whisper_format_with_progress(progress_callback)?;
+        let right = channel(1).to_whisper_format();
+        Ok(Some((left, right)))
+    }
 }
 
 /// Resample large audio files in fixed-size chunks through the sinc resampler.

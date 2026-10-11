@@ -633,6 +633,11 @@ async fn run_import(
             engine,
             diarizer.clone(),
             offline_turns.as_deref(),
+            // An imported file's channels aren't Parley's mic/system split.
+            None,
+            // The user's speaker count caps refinement when the offline
+            // pass didn't run (it already honours the count when it did).
+            usize::try_from(num_speakers).ok().filter(|&n| n > 0),
             &glossary,
             &IMPORT_CANCELLED,
             move |i, total, segment_duration_sec| {
@@ -917,6 +922,7 @@ mod tests {
             speaker: None,
             voice_profile_id: None,
             sequence_id: 0,
+            source: Default::default(),
         }
     }
 

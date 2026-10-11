@@ -8,7 +8,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::speaker_diarization::offline::SpeakerTurn;
-use crate::speaker_diarization::Diarizer;
+use crate::speaker_diarization::{Diarizer, RefineOptions, SegmentSource};
 use crate::whisper_engine::WhisperEngine;
 
 /// Unload the Whisper model after a batch job (import or retranscription).
@@ -74,6 +74,57 @@ pub(crate) struct BatchTranscript {
     /// saved row can always be matched back to the embedding that labelled
     /// it (promote/refine rely on this being consistent).
     pub sequence_id: u64,
+    /// Capture channel, when the batch had split mic/system audio to infer
+    /// it from (see [`ChannelAudio`]).
+    pub source: SegmentSource,
+}
+
+/// The two capture channels of a Parley recording — microphone (left) and
+/// system audio (right) — each as 16 kHz mono, aligned sample-for-sample
+/// with the mixdown the batch transcribes.
+///
+/// Batch diarization uses them per segment (#102): the channel carrying most
+/// of the segment's energy says whose side of the call it came from
+/// ([`SegmentSource`]), and that channel alone is embedded, because a CAM++
+/// embedding of the mixdown blends the user's voice with whatever the far
+/// end was saying underneath it.
+pub(crate) struct ChannelAudio {
+    pub mic: Vec<f32>,
+    pub system: Vec<f32>,
+}
+
+/// Whether `folder`'s audio is a Parley recording with the mic on the left
+/// channel and system audio on the right — i.e. its metadata.json lists the
+/// capture devices. Imports never write `devices`, and retranscription
+/// merges into metadata without touching it, so this survives re-runs.
+pub(crate) fn has_split_capture_channels(folder: &Path) -> bool {
+    std::fs::read_to_string(folder.join("metadata.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<MeetingMetadata>(&s).ok())
+        .and_then(|m| m.devices)
+        .is_some_and(|d| d.microphone.is_some() || d.system_audio.is_some())
+}
+
+impl ChannelAudio {
+    /// The segment's source and the samples to embed for it: the dominant
+    /// channel's audio, or `None` (embed the mixdown) when neither channel
+    /// dominates.
+    fn for_segment(&self, start_ms: f64, end_ms: f64) -> (SegmentSource, Option<&[f32]>) {
+        let range = |track: &[f32]| {
+            let a = ((start_ms / 1000.0 * 16_000.0).max(0.0) as usize).min(track.len());
+            let b = ((end_ms / 1000.0 * 16_000.0).max(0.0) as usize).min(track.len());
+            a..b.max(a)
+        };
+        let (mic, system) = (&self.mic[range(&self.mic)], &self.system[range(&self.system)]);
+        let energy = |x: &[f32]| x.iter().map(|s| (*s as f64) * (*s as f64)).sum::<f64>();
+        let source = SegmentSource::from_channel_energy(energy(mic), energy(system));
+        let samples = match source {
+            SegmentSource::Microphone => Some(mic),
+            SegmentSource::System => Some(system),
+            SegmentSource::Unknown => None,
+        };
+        (source, samples)
+    }
 }
 
 /// Canonical transcript segment type, shared by the live-recording path, the
@@ -158,9 +209,8 @@ pub(crate) fn create_transcript_segments(
                 sequence_id: Some(t.sequence_id),
                 speaker: t.speaker.clone(),
                 voice_profile_id: t.voice_profile_id.clone(),
-                // Batch/retranscription reads the mixed-down audio, so there's
-                // no meaningful per-stream source to attribute here.
-                source: None,
+                // Known only when the batch had split mic/system channels.
+                source: t.source.as_tag().map(str::to_string),
             }
         })
         .collect()
@@ -570,12 +620,20 @@ pub(crate) fn log_vad_diagnostics(speech_segments: &[crate::audio::vad::SpeechSe
 /// voice profile still wins and the embedding history stays complete for
 /// promote/refine, while the offline pass's more-accurate global clustering
 /// decides the "Speaker N" fallback instead of the online greedy clusterer.
+///
+/// Without `offline_turns`, the diarizer's whole history is re-clustered
+/// once every segment is in (see `speaker_diarization::refinement`), with
+/// `max_speakers` (e.g. the calendar head count) as a soft cap. `channels`
+/// supplies a Parley recording's split mic/system audio so each segment is
+/// tagged with its source and embedded from its own channel.
 pub(crate) async fn run_batch_transcription(
     speech_segments: &[crate::audio::vad::SpeechSegment],
     language: Option<String>,
     whisper_engine: Arc<WhisperEngine>,
     diarizer: Option<Arc<Diarizer>>,
     offline_turns: Option<&[SpeakerTurn]>,
+    channels: Option<&ChannelAudio>,
+    max_speakers: Option<usize>,
     glossary: &crate::glossary::PreparedGlossary,
     cancel_flag: &'static AtomicBool,
     on_segment_progress: impl Fn(usize, usize, f64),
@@ -720,9 +778,21 @@ pub(crate) async fn run_batch_transcription(
             // same id the saved row will carry.
             let sequence_id = all_transcripts.len() as u64;
             let forced_cluster = offline_hints.get(&(i as u64)).copied();
+            let (source, channel_samples) = match channels {
+                Some(c) => c.for_segment(segment.start_timestamp_ms, segment.end_timestamp_ms),
+                None => (SegmentSource::Unknown, None),
+            };
+            let diarize_samples = channel_samples
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&segment.samples);
             let (speaker, voice_profile_id) = match diarizer.as_ref() {
-                Some(d) => match d.process_with_hint(sequence_id, &segment.samples, None, forced_cluster)
-                {
+                Some(d) => match d.process_with_hint(
+                    sequence_id,
+                    diarize_samples,
+                    None,
+                    forced_cluster,
+                    source,
+                ) {
                     Ok(result) => (Some(result.label), result.voice_profile_id),
                     Err(e) => {
                         debug!("Diarization fallback for batch segment {}: {}", i, e);
@@ -739,6 +809,7 @@ pub(crate) async fn run_batch_transcription(
                 speaker,
                 voice_profile_id,
                 sequence_id,
+                source,
             });
             total_confidence += conf;
         } else {
@@ -766,7 +837,60 @@ pub(crate) async fn run_batch_transcription(
         return Err(anyhow!("Cancelled"));
     }
 
+    // Offline refinement (#102). The per-segment pass above clusters
+    // greedily and left real meetings with 14–28 "speakers"; with every
+    // embedding in hand, re-cluster the whole session. Skipped when a
+    // whole-file offline diarization already decided the clusters (import).
+    if let (Some(d), None) = (diarizer.as_ref(), offline_turns) {
+        let d = d.clone();
+        let options = RefineOptions::default().with_max_speakers(max_speakers);
+        match tokio::task::spawn_blocking(move || {
+            let refined = d.refine_with(&options);
+            d.apply_refinement(&refined);
+            refined
+        })
+        .await
+        {
+            Ok(refined) => {
+                let changed = apply_refinement_to_batch(&mut all_transcripts, &refined);
+                info!(
+                    "Batch speaker refinement: {} segments relabeled, {} distinct speakers",
+                    changed,
+                    distinct_speakers(&all_transcripts)
+                );
+            }
+            Err(e) => warn!("Batch speaker refinement task failed: {}", e),
+        }
+    }
+
     Ok(all_transcripts)
+}
+
+/// Write refined speaker labels onto the batch output, matching by sequence
+/// id. Returns how many transcripts changed.
+fn apply_refinement_to_batch(
+    transcripts: &mut [BatchTranscript],
+    refined: &[crate::speaker_diarization::RefinedAssignment],
+) -> usize {
+    let by_sequence: HashMap<u64, &crate::speaker_diarization::RefinedAssignment> =
+        refined.iter().map(|a| (a.sequence_id, a)).collect();
+    let mut changed = 0;
+    for t in transcripts.iter_mut() {
+        if let Some(a) = by_sequence.get(&t.sequence_id).filter(|a| a.changed) {
+            t.speaker = Some(a.speaker.clone());
+            t.voice_profile_id = a.voice_profile_id.clone();
+            changed += 1;
+        }
+    }
+    changed
+}
+
+fn distinct_speakers(transcripts: &[BatchTranscript]) -> usize {
+    transcripts
+        .iter()
+        .filter_map(|t| t.speaker.as_deref())
+        .collect::<std::collections::HashSet<_>>()
+        .len()
 }
 
 /// Split a long speech segment at the lowest-energy (silence) point near the target size.
@@ -989,5 +1113,90 @@ mod journal_tests {
         let tmp = tempfile::tempdir().unwrap();
         let loaded = load_transcripts_from_folder(tmp.path()).unwrap();
         assert!(loaded.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod channel_tests {
+    use super::*;
+
+    fn tone(len: usize, amp: f32) -> Vec<f32> {
+        (0..len).map(|i| amp * ((i as f32) * 0.3).sin()).collect()
+    }
+
+    #[test]
+    fn segment_source_follows_the_dominant_channel() {
+        // 0–1 s: user on the mic; 1–2 s: far end on system; 2–3 s: both.
+        let mut mic = tone(16_000, 0.5);
+        mic.extend(tone(16_000, 0.01));
+        mic.extend(tone(16_000, 0.5));
+        let mut system = tone(16_000, 0.01);
+        system.extend(tone(16_000, 0.5));
+        system.extend(tone(16_000, 0.5));
+        let channels = ChannelAudio { mic, system };
+
+        let (source, samples) = channels.for_segment(0.0, 1000.0);
+        assert_eq!(source, SegmentSource::Microphone);
+        assert_eq!(samples.map(<[f32]>::len), Some(16_000));
+
+        let (source, samples) = channels.for_segment(1000.0, 2000.0);
+        assert_eq!(source, SegmentSource::System);
+        assert!(samples.is_some());
+
+        let (source, samples) = channels.for_segment(2000.0, 3000.0);
+        assert_eq!(source, SegmentSource::Unknown);
+        assert!(samples.is_none(), "crosstalk embeds the mixdown");
+
+        // Out-of-range segments degrade to Unknown rather than panicking.
+        assert_eq!(channels.for_segment(9000.0, 9500.0).0, SegmentSource::Unknown);
+    }
+
+    #[test]
+    fn refinement_is_written_back_by_sequence_id() {
+        let t = |seq: u64, speaker: &str| BatchTranscript {
+            text: "x".into(),
+            start_ms: 0.0,
+            end_ms: 1.0,
+            speaker: Some(speaker.into()),
+            voice_profile_id: None,
+            sequence_id: seq,
+            source: SegmentSource::Unknown,
+        };
+        let mut transcripts = vec![t(0, "Speaker 1"), t(1, "Speaker 7"), t(2, "Speaker 2")];
+        let a = |seq: u64, speaker: &str, changed: bool| {
+            crate::speaker_diarization::RefinedAssignment {
+                sequence_id: seq,
+                speaker: speaker.into(),
+                voice_profile_id: None,
+                changed,
+                previous_speaker: String::new(),
+            }
+        };
+        let refined = vec![
+            a(2, "Speaker 2", false),
+            a(1, "Speaker 1", true),
+            a(0, "Speaker 1", false),
+        ];
+        assert_eq!(apply_refinement_to_batch(&mut transcripts, &refined), 1);
+        assert_eq!(transcripts[1].speaker.as_deref(), Some("Speaker 1"));
+        assert_eq!(distinct_speakers(&transcripts), 2);
+    }
+
+    #[test]
+    fn split_channels_come_from_recording_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!has_split_capture_channels(dir.path()), "no metadata");
+        std::fs::write(
+            dir.path().join("metadata.json"),
+            r#"{"origin":"import","audio_file":"audio.mp4"}"#,
+        )
+        .unwrap();
+        assert!(!has_split_capture_channels(dir.path()), "imports have no devices");
+        std::fs::write(
+            dir.path().join("metadata.json"),
+            r#"{"origin":"retranscription","devices":{"microphone":"default","system_audio":"default"}}"#,
+        )
+        .unwrap();
+        assert!(has_split_capture_channels(dir.path()));
     }
 }
