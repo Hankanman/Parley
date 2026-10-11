@@ -371,6 +371,53 @@ pub async fn refine_and_persist(
     Ok(changed_count as usize)
 }
 
+/// Assign a single segment to someone, without touching the rest of its
+/// cluster — the fix when the diarizer folded two voices into one
+/// "Speaker N". `profile_id` picks an existing voice profile; otherwise
+/// `name` is used, linked to the profile already called that (if any) so
+/// the segment counts as that person everywhere. No embedding is enrolled:
+/// one short segment would only blur the profile's voice. Returns the label
+/// written.
+pub async fn assign_segment_speaker_core(
+    pool: &SqlitePool,
+    meeting_id: &str,
+    segment_id: &str,
+    name: &str,
+    profile_id: Option<&str>,
+) -> Result<String, String> {
+    let profile = match profile_id {
+        Some(id) => Some(
+            VoiceProfilesRepository::get_by_id(pool, id)
+                .await
+                .map_err(|e| format!("Failed to look up voice profile: {}", e))?
+                .ok_or_else(|| "That voice profile no longer exists.".to_string())?,
+        ),
+        None => VoiceProfilesRepository::find_by_name(pool, name, None)
+            .await
+            .map_err(|e| format!("Failed to look up voice profiles: {}", e))?,
+    };
+    let label = match &profile {
+        Some(p) => p.name.clone(),
+        None => name.trim().to_string(),
+    };
+    if label.is_empty() {
+        return Err("Enter a name for this segment.".to_string());
+    }
+    let updated = TranscriptsRepository::set_segment_speaker(
+        pool,
+        meeting_id,
+        segment_id,
+        &label,
+        profile.as_ref().map(|p| p.id.as_str()),
+    )
+    .await
+    .map_err(|e| format!("Failed to update segment: {}", e))?;
+    if updated == 0 {
+        return Err("That segment no longer exists.".to_string());
+    }
+    Ok(label)
+}
+
 /// Shared core of the `promote_speaker_to_profile` command: pull the
 /// diarizer's embeddings for `old_label`, average+save as a voice profile,
 /// and rewrite the label across `meeting_id`'s transcripts. Returns
@@ -701,5 +748,77 @@ mod duplicate_profile_tests {
         assert_eq!(rows[0], ("t1".into(), Some("Seb Burrell".into()), Some(me.clone())));
         assert_eq!(rows[1], ("t2".into(), Some("Seb Burrell".into()), Some(me.clone())));
         assert_eq!(rows[2], ("t3".into(), Some("Speaker 4".into()), None));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn pool_with_two_speaker_3_segments() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite pool");
+        sqlx::migrate!("./migrations").run(&pool).await.expect("run migrations");
+        sqlx::query(
+            "INSERT INTO meetings (id, title, created_at, updated_at)
+             VALUES ('m1', 'Meeting', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, speaker)
+             VALUES ('t1', 'm1', 'first voice', '00:01', 'Speaker 3'),
+                    ('t2', 'm1', 'second voice', '00:02', 'Speaker 3')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    async fn speaker_of(pool: &SqlitePool, id: &str) -> (Option<String>, Option<String>) {
+        sqlx::query_as("SELECT speaker, voice_profile_id FROM transcripts WHERE id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn assigning_one_segment_leaves_the_rest_of_its_cluster() {
+        let pool = pool_with_two_speaker_3_segments().await;
+
+        let label = assign_segment_speaker_core(&pool, "m1", "t2", "  Tom Hennell ", None).await.unwrap();
+
+        assert_eq!(label, "Tom Hennell");
+        assert_eq!(speaker_of(&pool, "t2").await, (Some("Tom Hennell".into()), None));
+        assert_eq!(speaker_of(&pool, "t1").await, (Some("Speaker 3".into()), None));
+    }
+
+    #[tokio::test]
+    async fn assigning_by_name_links_the_existing_profile() {
+        let pool = pool_with_two_speaker_3_segments().await;
+        let id = VoiceProfilesRepository::create(&pool, "Tom Hennell", None, &[1.0, 0.0], 5).await.unwrap();
+
+        let label = assign_segment_speaker_core(&pool, "m1", "t1", "tom hennell", None).await.unwrap();
+        assert_eq!(label, "Tom Hennell");
+        assert_eq!(speaker_of(&pool, "t1").await, (Some("Tom Hennell".into()), Some(id.clone())));
+
+        // Picking the profile directly works the same way.
+        assign_segment_speaker_core(&pool, "m1", "t2", "", Some(&id)).await.unwrap();
+        assert_eq!(speaker_of(&pool, "t2").await, (Some("Tom Hennell".into()), Some(id)));
+    }
+
+    #[tokio::test]
+    async fn assigning_rejects_blank_names_and_missing_segments() {
+        let pool = pool_with_two_speaker_3_segments().await;
+        assert!(assign_segment_speaker_core(&pool, "m1", "t1", "  ", None).await.is_err());
+        assert!(assign_segment_speaker_core(&pool, "m1", "nope", "Tom", None).await.is_err());
+        assert_eq!(speaker_of(&pool, "t1").await, (Some("Speaker 3".into()), None));
     }
 }

@@ -23,16 +23,12 @@ pub fn is_unnamed_speaker_label(label: &str) -> bool {
 /// The local user's fixed, non-editable label (never a stored profile).
 pub const ME_LABEL: &str = "Me";
 
-/// Whether clicking this chip should open the edit panel at all — mirrors
-/// `EditableSpeakerChip`'s branching: "Me" and anything that's neither a
-/// named profile nor an unnamed "Speaker N" cluster render as static spans.
-pub fn can_edit_speaker(speaker: &str, voice_profile_id: Option<&str>) -> bool {
-    if speaker == ME_LABEL {
-        return false;
-    }
-    let is_named_profile = voice_profile_id.is_some();
-    let is_unnamed_cluster = voice_profile_id.is_none() && is_unnamed_speaker_label(speaker);
-    is_named_profile || is_unnamed_cluster
+/// Whether clicking this chip should open the edit panel at all. Every
+/// label but "Me" can be edited: besides named profiles and unnamed
+/// "Speaker N" clusters, that includes a name given to a single line (no
+/// profile behind it), which must stay correctable.
+pub fn can_edit_speaker(speaker: &str, _voice_profile_id: Option<&str>) -> bool {
+    speaker != ME_LABEL
 }
 
 /// Mirrors `canSave` in the React component: merging into an existing
@@ -165,8 +161,8 @@ mod tests {
     }
 
     #[test]
-    fn stray_label_is_not_editable() {
-        assert!(!can_edit_speaker("Unknown", None));
+    fn a_line_named_without_a_profile_stays_editable() {
+        assert!(can_edit_speaker("Tom Hennell", None));
     }
 
     #[test]

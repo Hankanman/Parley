@@ -49,7 +49,9 @@ use parley_core::database::repositories::meeting_note::{MeetingNotesRepository, 
 use parley_core::database::repositories::setting::{SettingsRepository, KEY_UI_CONFIG};
 use parley_core::database::repositories::summary::SummaryProcessesRepository;
 use parley_core::database::repositories::voice_profile::VoiceProfilesRepository;
-use parley_core::speaker_diarization::service::{merge_cluster_into_profile_core, promote_speaker_to_profile_core};
+use parley_core::speaker_diarization::service::{
+    assign_segment_speaker_core, merge_cluster_into_profile_core, promote_speaker_to_profile_core,
+};
 use parley_core::summary::markdown_export;
 use parley_core::summary::service::SummaryService;
 use zorite_editor::{EditorState, SyntaxStyle};
@@ -99,6 +101,14 @@ struct SpeakerEditState {
     /// [`MeetingView::calendar_event`], which is already loaded for the
     /// calendar row.
     attendees: Vec<speaker_chip::AttendeeSuggestion>,
+    /// The clicked segment, for an "only this segment" save.
+    segment_id: String,
+    /// How many of this meeting's segments carry `speaker` — the scope
+    /// switch is only offered when there's more than one.
+    cluster_size: usize,
+    /// `true` = relabel just `segment_id` (a cluster holding two voices);
+    /// `false` = the whole cluster, as before.
+    single_segment: bool,
 }
 
 /// The full Lucide catalog (as opposed to `gpui_kit::component::IconName`,
@@ -1469,7 +1479,11 @@ impl MeetingView {
         window.focus(&name_input.read(cx).focus_handle(cx), cx);
         let attendees =
             self.calendar_event.as_ref().map(|e| speaker_chip::attendee_suggestions(&e.attendees)).unwrap_or_default();
+        let cluster_size = self.transcripts.iter().filter(|t| t.speaker.as_deref() == Some(speaker.as_str())).count();
         self.speaker_edit = Some(SpeakerEditState {
+            segment_id: segment_id.clone(),
+            cluster_size,
+            single_segment: false,
             key: key.clone(),
             speaker: speaker.clone(),
             voice_profile_id: voice_profile_id.clone(),
@@ -1558,6 +1572,31 @@ impl MeetingView {
         cx.notify();
     }
 
+    /// Switch the panel between relabelling the whole cluster and just the
+    /// clicked segment. The name field restarts for the new scope.
+    fn set_speaker_edit_scope(&mut self, single_segment: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.speaker_edit.as_mut() else {
+            return;
+        };
+        if state.single_segment == single_segment {
+            return;
+        }
+        state.single_segment = single_segment;
+        state.merge_target = None;
+        state.error = None;
+        let name = if single_segment {
+            String::new()
+        } else {
+            speaker_chip::initial_edit_name(&state.speaker, state.voice_profile_id.as_deref())
+        };
+        let name_input = state.name_input.clone();
+        name_input.update(cx, |s, cx| {
+            s.set_value(name, window, cx);
+            s.focus(window, cx);
+        });
+        cx.notify();
+    }
+
     fn save_speaker_edit(&mut self, cx: &mut Context<Self>) {
         let Some(state) = self.speaker_edit.as_ref() else {
             return;
@@ -1580,6 +1619,7 @@ impl MeetingView {
             return;
         }
         let key = state.key.clone();
+        let single_segment = state.single_segment.then(|| state.segment_id.clone());
 
         {
             let state = self.speaker_edit.as_mut().unwrap();
@@ -1591,7 +1631,18 @@ impl MeetingView {
         let io = Io::global(cx);
         let generation = self.generation;
         cx.spawn(async move |this, cx| {
-            let outcome: Result<(), String> = if let Some(profile_id) = merge_target {
+            let outcome: Result<(), String> = if let Some(segment_id) = single_segment {
+                match io
+                    .spawn(async move {
+                        assign_segment_speaker_core(&pool, &meeting_id, &segment_id, &name, merge_target.as_deref()).await
+                    })
+                    .await
+                {
+                    Ok(Ok(_)) => Ok(()),
+                    Ok(Err(e)) => Err(e),
+                    Err(e) => Err(format!("Assign task panicked: {e}")),
+                }
+            } else if let Some(profile_id) = merge_target {
                 match io
                     .spawn(async move { merge_cluster_into_profile_core(&pool, &meeting_id, &speaker, &profile_id).await })
                     .await
@@ -2173,7 +2224,10 @@ fn notify(cx: &mut App, notification: Notification) {
 /// only has an `Entity<MeetingView>` for the closures it hands out, not a
 /// second `&mut Context<Self>` borrow.
 fn render_floating_speaker_edit(state: &SpeakerEditState, entity: Entity<MeetingView>, cx: &mut App) -> AnyElement {
-    let is_named_profile = state.voice_profile_id.is_some();
+    let single = state.single_segment;
+    // In single-segment mode the panel picks a person for one line, so it
+    // behaves like naming an unnamed cluster whatever the chip is now.
+    let is_named_profile = state.voice_profile_id.is_some() && !single;
     let merging = state.merge_target.is_some();
     let merge_target_profile = state.merge_target.as_ref().and_then(|id| state.profiles.iter().find(|p| &p.id == id));
     let name = state.name_input.read(cx).value().trim().to_string();
@@ -2202,7 +2256,42 @@ fn render_floating_speaker_edit(state: &SpeakerEditState, entity: Entity<Meeting
                 }
             }
         })
-        .child(div().text_sm().font_semibold().child(speaker_chip::edit_panel_title(is_named_profile)));
+        .child(div().text_sm().font_semibold().child(if single {
+            "Who said this?"
+        } else {
+            speaker_chip::edit_panel_title(is_named_profile)
+        }));
+
+    if state.cluster_size > 1 {
+        let entity_all = entity.clone();
+        let entity_one = entity.clone();
+        panel = panel.child(
+            h_flex()
+                .gap_1()
+                .flex_wrap()
+                .child(
+                    Button::new("speaker-scope-all")
+                        .xsmall()
+                        .when(!single, |b| b.primary())
+                        .when(single, |b| b.outline())
+                        .label(format!("All {} \u{201c}{}\u{201d} lines", state.cluster_size, state.speaker))
+                        .on_click(move |_, window, cx| {
+                            entity_all.update(cx, |this, cx| this.set_speaker_edit_scope(false, window, cx));
+                        }),
+                )
+                .child(
+                    Button::new("speaker-scope-one")
+                        .xsmall()
+                        .when(single, |b| b.primary())
+                        .when(!single, |b| b.outline())
+                        .label("Only this line")
+                        .tooltip("Use when this speaker is really two people")
+                        .on_click(move |_, window, cx| {
+                            entity_one.update(cx, |this, cx| this.set_speaker_edit_scope(true, window, cx));
+                        }),
+                ),
+        );
+    }
 
     if !merging && !state.attendees.is_empty() {
         let suggestions = speaker_chip::filter_attendee_suggestions(&state.attendees, &name);
@@ -2258,7 +2347,16 @@ fn render_floating_speaker_edit(state: &SpeakerEditState, entity: Entity<Meeting
         );
     }
 
-    if merging {
+    if merging && single {
+        if let Some(target) = merge_target_profile {
+            panel = panel.child(
+                div()
+                    .text_xs()
+                    .text_color(ActiveTheme::theme(cx).muted_foreground)
+                    .child(format!("Only this line will be attributed to {}.", target.name)),
+            );
+        }
+    } else if merging {
         if let Some(target) = merge_target_profile {
             panel = panel.child(
                 div()
@@ -2275,7 +2373,7 @@ fn render_floating_speaker_edit(state: &SpeakerEditState, entity: Entity<Meeting
     } else {
         panel = panel
             .child(div().w_full().child(Input::new(&state.name_input)))
-            .child(div().w_full().child(Input::new(&state.email_input)));
+            .when(!single, |p| p.child(div().w_full().child(Input::new(&state.email_input))));
     }
 
     if let Some(err) = &state.error {
@@ -2290,7 +2388,7 @@ fn render_floating_speaker_edit(state: &SpeakerEditState, entity: Entity<Meeting
             .child(
                 Button::new("save-speaker-edit")
                     .primary()
-                    .label(if state.saving { "Saving…" } else if merging { "Merge" } else { "Save" })
+                    .label(if state.saving { "Saving…" } else if merging && !single { "Merge" } else { "Save" })
                     .loading(state.saving)
                     .disabled(!can_save)
                     .on_click(move |_, _, cx| {
