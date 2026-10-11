@@ -10,14 +10,13 @@ pub fn format_timestamp(seconds: f64) -> String {
     format!("{:02}:{:02}:{:02}", hours, minutes, secs)
 }
 
-// Global transcription language preference (default to "auto-translate" for
-// automatic translation to English). Read by the transcription workers.
-// Nothing calls `set_language_preference_internal` today (its only caller
-// was a Tauri command), so live recording always uses this default — the
-// Settings → Summary "Transcription language" field (`ui_config`
-// `primaryLanguage`) is saved but not yet wired through to here.
+// Live transcription language, read by the transcription workers. Values:
+// "auto" (detect), "auto-translate" (detect, translate to English) or an ISO
+// code. Set from the Settings "Transcription language" field (`ui_config`
+// `primaryLanguage`) at startup and whenever it changes — see
+// `apply_language_preference`. Defaults to detection until then.
 static LANGUAGE_PREFERENCE: std::sync::LazyLock<StdMutex<String>> =
-    std::sync::LazyLock::new(|| StdMutex::new("auto-translate".to_string()));
+    std::sync::LazyLock::new(|| StdMutex::new("auto".to_string()));
 
 /// Get the current transcription language preference.
 pub fn get_language_preference_internal() -> Option<String> {
@@ -29,6 +28,46 @@ pub fn set_language_preference_internal(language: String) {
     if let Ok(mut lang_pref) = LANGUAGE_PREFERENCE.lock() {
         *lang_pref = language;
     }
+}
+
+/// Map the Settings field to a Whisper language preference: blank means
+/// detect; "auto"/"auto-translate" pass through; a 2–3 letter code is used
+/// as-is (lower-cased). Anything else would make whisper.cpp reject every
+/// segment ("unknown language"), so it falls back to detection.
+pub fn language_preference_from_setting(primary_language: Option<&str>) -> String {
+    let value = primary_language.unwrap_or("").trim().to_ascii_lowercase();
+    match value.as_str() {
+        "" | "auto" => "auto".to_string(),
+        "auto-translate" => value,
+        code if (2..=3).contains(&code.len()) && code.chars().all(|c| c.is_ascii_lowercase()) => {
+            value
+        }
+        _ => {
+            log::warn!("Ignoring transcription language {:?}; using auto-detect", value);
+            "auto".to_string()
+        }
+    }
+}
+
+/// Apply a `primaryLanguage` value to live transcription.
+pub fn apply_language_preference(primary_language: Option<&str>) {
+    let language = language_preference_from_setting(primary_language);
+    log::info!("Live transcription language: {}", language);
+    set_language_preference_internal(language);
+}
+
+/// Read `ui_config.primaryLanguage` from the DB and apply it (startup).
+pub async fn load_language_preference(pool: &sqlx::SqlitePool) {
+    use crate::database::repositories::setting::{SettingsRepository, KEY_UI_CONFIG};
+    let ui_config = SettingsRepository::get_setting::<serde_json::Value>(pool, KEY_UI_CONFIG)
+        .await
+        .ok()
+        .flatten();
+    let primary = ui_config
+        .as_ref()
+        .and_then(|v| v.get("primaryLanguage"))
+        .and_then(|v| v.as_str());
+    apply_language_preference(primary);
 }
 
 /// Plain HTTP-streaming download to a destination path. Used for built-in
@@ -68,4 +107,21 @@ pub async fn download_file_to(url: &str, dest: &std::path::Path) -> anyhow::Resu
         return Err(anyhow!("Flush error: {}", e));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod language_preference_tests {
+    use super::language_preference_from_setting as map;
+
+    #[test]
+    fn maps_settings_field_to_whisper_preference() {
+        assert_eq!(map(None), "auto");
+        assert_eq!(map(Some("  ")), "auto");
+        assert_eq!(map(Some("en")), "en");
+        assert_eq!(map(Some(" FR ")), "fr");
+        assert_eq!(map(Some("yue")), "yue");
+        assert_eq!(map(Some("auto-translate")), "auto-translate");
+        assert_eq!(map(Some("English")), "auto");
+        assert_eq!(map(Some("en-GB")), "auto");
+    }
 }

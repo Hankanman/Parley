@@ -113,6 +113,11 @@ pub fn spawn_background_init(
         });
     }
 
+    // Live transcription language from Settings (`ui_config.primaryLanguage`).
+    if let Some(pool) = pool.clone() {
+        tokio::spawn(async move { crate::utils::load_language_preference(&pool).await });
+    }
+
     // Initialize Whisper engine on startup.
     tokio::spawn(async {
         if let Err(e) = whisper_engine::models::whisper_init().await {
