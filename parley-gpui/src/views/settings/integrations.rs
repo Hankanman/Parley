@@ -1,6 +1,5 @@
 //! "Integrations" settings page: MCP server info and a ready-to-paste
-//! client config snippet, mirroring `frontend/src/components/McpSettings.tsx`
-//! against the same Tauri-free core (`parley_core::mcp_config`).
+//! client config snippet, backed by `parley_core::mcp_config`.
 
 use gpui_kit::component::{
     button::Button,

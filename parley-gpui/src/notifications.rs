@@ -1,21 +1,18 @@
 //! Desktop notifications for the recording lifecycle, transcription
-//! completion, system errors and meeting reminders, gated by the same
-//! notification settings the Tauri app stores (`notification_settings` in
-//! SQLite, via `SettingsRepository`/`KEY_NOTIFICATION_SETTINGS` —
-//! Tauri-free, already in `parley-core`).
+//! completion, system errors and meeting reminders, gated by the
+//! notification settings stored in SQLite (`app_settings` under
+//! `KEY_NOTIFICATION_SETTINGS`, via `SettingsRepository`).
 //!
-//! The full `NotificationSettings`/`NotificationPreferences` shape lives in
-//! `frontend/src-tauri/src/notifications/settings.rs`, which — being built
-//! around an `AppHandle`-based `ConsentManager` — isn't something this
-//! shell can reuse directly without pulling in Tauri. Deserializing only
-//! the handful of fields this needs (`serde` ignores the rest) reads the
-//! same row without moving that module into core. If no row exists yet
-//! (nobody has ever opened the Tauri app's notification settings), this
-//! defaults to on, per the phase 1 tray spec.
+//! The full `NotificationSettings` shape lives in
+//! `views/settings/state.rs`, which owns the settings page. Deserializing
+//! only the handful of fields this needs (`serde` ignores the rest) reads
+//! the same row without depending on the settings view. If no row exists
+//! yet (notification settings never saved), this defaults to on, per the
+//! phase 1 tray spec.
 //!
 //! Also owns the meeting-reminder background loop and the GitHub-releases
-//! update check — both dead code paths in the Tauri app (see module docs
-//! on [`start_meeting_reminder_loop`] and [`check_for_updates`]).
+//! update check (see [`start_meeting_reminder_loop`] and
+//! [`check_for_updates`]).
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -81,7 +78,7 @@ struct PreferencesMini {
 
 impl Default for PreferencesMini {
     fn default() -> Self {
-        // Matches the Tauri shell's `NotificationPreferences::default()`.
+        // Matches `views::settings::state::NotificationPreferences::default()`.
         Self {
             show_recording_started: false,
             show_recording_stopped: false,
@@ -119,10 +116,9 @@ impl Default for SettingsMini {
 // ============================================================================
 
 /// Whether `kind` should be shown given `settings` — consent, system
-/// permission, manual DND, and the per-event-type toggle, mirroring
-/// `NotificationManager::should_show_notification` (minus the system DND
-/// check, which needs a live D-Bus query and stays in [`maybe_notify`]).
-/// `Kind::Test` always shows, matching the Tauri manager.
+/// permission, manual DND, and the per-event-type toggle (the system DND
+/// check needs a live D-Bus query and stays in [`maybe_notify`]).
+/// `Kind::Test` always shows.
 fn should_notify(settings: &SettingsMini, kind: &Kind) -> bool {
     if matches!(kind, Kind::Test) {
         return true;
@@ -144,9 +140,7 @@ fn should_notify(settings: &SettingsMini, kind: &Kind) -> bool {
     }
 }
 
-/// Title/body pair for a notification kind, mirroring
-/// `frontend/src-tauri/src/notifications/types.rs`'s `Notification::*`
-/// constructors.
+/// Title/body pair for a notification kind.
 fn notification_text(kind: &Kind) -> (&'static str, String) {
     match kind {
         Kind::Started => (
@@ -374,9 +368,8 @@ fn due_reminders(
 
 /// Background loop that reads upcoming calendar events every ~45s and fires
 /// one reminder per event, `meeting_reminder_minutes` before its start,
-/// de-duplicated per event id for the process lifetime. Dead in the Tauri
-/// app (`show_meeting_reminder` is a command nothing ever calls) — this is
-/// the real implementation. Call once, after the main window opens.
+/// de-duplicated per event id for the process lifetime. Call once, after
+/// the main window opens.
 ///
 /// Each reminder offers the event's pre-meeting brief (issue #84): an
 /// "Open brief" action button when the notification server supports
@@ -571,9 +564,8 @@ fn is_newer(current: &str, latest_tag: &str) -> Result<bool, String> {
 }
 
 /// Check GitHub for the latest release and show a notification: "Parley
-/// X.Y.Z is available", "You're up to date", or a friendly error. Dead in
-/// the Tauri app (the "Check for updates" tray item dispatches a JS event
-/// nothing listens to) — this is the real implementation. No auto-install.
+/// X.Y.Z is available", "You're up to date", or a friendly error. No
+/// auto-install.
 pub fn check_for_updates(cx: &mut App) {
     let io = AppServices::global(cx).io.clone();
     io.spawn(async move {
@@ -701,7 +693,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_the_tauri_shell_defaults() {
+    fn defaults_match_the_settings_page_defaults() {
         let settings = SettingsMini::default();
         let p = &settings.notification_preferences;
         assert!(!p.show_recording_started);

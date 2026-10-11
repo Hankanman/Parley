@@ -154,7 +154,7 @@ pub struct MeetingView {
     _poll_task: Option<Task<()>>,
 
     /// Available summary templates (id, name, description), loaded once at
-    /// startup — same list `list_templates` returns for the Tauri UI.
+    /// startup via `summary::templates::list_templates`.
     templates: Vec<(String, String, String)>,
     selected_template: String,
     /// Set once the user manually cycles the template picker, so the async
@@ -468,7 +468,7 @@ impl MeetingView {
         cx.notify();
 
         let Some(pool) = AppServices::global(cx).pool() else {
-            self.load_error = Some("No database — complete onboarding in the Tauri app first.".into());
+            self.load_error = Some("No database yet — finish onboarding first.".into());
             self.transcripts_loading = false;
             return;
         };
@@ -509,7 +509,7 @@ impl MeetingView {
         }
 
         // Existing summary (if any), and resume polling if one is already
-        // in flight (e.g. started from the Tauri UI).
+        // in flight (e.g. started before navigating away and back).
         self.refresh_summary(generation, cx);
         self.load_calendar_event(generation, cx);
         self.load_notes(generation, cx);
@@ -955,8 +955,8 @@ impl MeetingView {
             let saved = io
                 .spawn(async move { SummaryProcessesRepository::update_meeting_summary(&pool, &id, &value).await })
                 .await;
-            // Best-effort sidecar write, same as the Tauri save command —
-            // failures here don't fail the save, the DB is the source of truth.
+            // Best-effort `summary.md` sidecar write — failures here don't
+            // fail the save, the DB is the source of truth.
             let _ = io
                 .spawn(async move {
                     let _ = markdown_export::write_summary_md(&pool_for_md, &id_for_md, &value_for_md).await;
@@ -1303,9 +1303,8 @@ impl MeetingView {
     }
 
     // ---- Calendar event link -------------------------------------------
-    // Mirrors `CalendarEventPanel.tsx` / `CalendarEventPicker.tsx`, calling
-    // the same core fns the Tauri `calendar_get_event_for_meeting` /
-    // `calendar_list_events` / `calendar_link_meeting` commands wrap.
+    // Show the linked calendar event and let the user pick or clear one,
+    // via `CalendarRepository` and `calendar::service::link_meeting_with_snapshot`.
 
     fn load_calendar_event(&mut self, generation: u64, cx: &mut Context<Self>) {
         let Some(pool) = AppServices::global(cx).pool() else {
@@ -1635,10 +1634,8 @@ impl MeetingView {
     }
 
     // ---- Per-segment audio playback --------------------------------------
-    // Mirrors `SegmentAudioContext.tsx`: only one clip plays at a time,
-    // played natively (not in-webview — moot here, there is no webview) via
-    // the same core fns the Tauri `play_meeting_audio_clip` /
-    // `stop_meeting_audio_clip` commands wrap.
+    // Only one clip plays at a time, played natively through
+    // `parley_core::audio::playback`.
 
     fn toggle_segment_playback(
         &mut self,
@@ -2055,8 +2052,7 @@ impl MeetingView {
         .detach();
     }
 
-    /// "Extract from summary" / "Re-extract" — mirrors the Tauri
-    /// `extract_action_items` command: try the transcript-grounded
+    /// "Extract from summary" / "Re-extract": try the transcript-grounded
     /// extractor first, falling back to the summary-markdown extractor if
     /// it errors (e.g. no transcript rows to window over).
     fn extract_action_items(&mut self, cx: &mut Context<Self>) {

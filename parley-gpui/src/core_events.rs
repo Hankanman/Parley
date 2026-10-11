@@ -6,7 +6,8 @@
 //! the [`CoreEvents`] entity drains the channel and re-emits each one as a
 //! GPUI event, so views subscribe with `cx.subscribe(&core_events, ...)` and
 //! decode the payloads they care about with [`CoreEvent::decode`]. Event
-//! names/payloads are the same contract the Tauri frontend listens to.
+//! names/payloads are a long-standing contract (originally shared with the
+//! retired Tauri/React shell) — keep them stable, see `parley_core::events`.
 
 use gpui_kit::{Context, EventEmitter};
 use parley_core::events::EventSink;

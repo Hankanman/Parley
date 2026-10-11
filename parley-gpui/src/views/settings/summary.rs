@@ -1,30 +1,25 @@
 //! "Summary" settings page: provider + model, API keys, the custom
 //! OpenAI-compatible endpoint, default summary template, and the
-//! language/auto-summary preferences the React app keeps in `ConfigContext`.
+//! language/auto-summary preferences.
 //!
-//! Reads/writes the same `settings` row the Tauri app's
-//! `api_save_model_config`/`api_get_model_config` commands use (via
-//! `SettingsRepository`, already Tauri-free in core). Built-in AI models
-//! come from `summary::summary_engine::models::get_available_models`, the
-//! same catalog the sidecar downloads from.
+//! Reads/writes the `settings` row via `SettingsRepository`. Built-in AI
+//! models come from `summary::summary_engine::models::get_available_models`,
+//! the same catalog the sidecar downloads from.
 //!
-//! - API keys: same `settings`/`transcript_settings` columns as
-//!   `SettingsRepository::save_api_key`/`get_api_key`/`delete_api_key`
-//!   (the core logic behind `api_save_model_config`'s key-saving branch and
-//!   `api_delete_api_key`), keyed by the same provider ids React's
-//!   `ModelConfig.provider` uses (`openai`/`claude`/`groq`/`openrouter`) —
-//!   note this page previously used `"anthropic"` for Claude's provider id,
-//!   which doesn't match any `save_api_key` column and silently failed key
-//!   lookups; fixed to `"claude"` here since API-key wiring depends on it.
-//! - Custom OpenAI-compatible endpoint: same `settings.customOpenAIConfig`
-//!   JSON blob as `ModelSettingsModal`'s `CustomOpenAISection`
-//!   (`SettingsRepository::save_custom_openai_config`/`get_custom_openai_config`).
-//! - Default summary template: `KEY_DEFAULT_SUMMARY_TEMPLATE` — NEW, since
-//!   React's `useTemplates` keeps template selection as per-meeting-session
-//!   local state only (see that key's doc comment in `parley-core`).
-//! - Language / confidence indicator / auto-summary: the same `ui_config`
-//!   JSON blob (`KEY_UI_CONFIG`) React's `ConfigContext.persistUiConfig`
-//!   writes (`primaryLanguage`/`showConfidenceIndicator`/`isAutoSummary`).
+//! - API keys: `settings`/`transcript_settings` columns via
+//!   `SettingsRepository::save_api_key`/`get_api_key`/`delete_api_key`,
+//!   keyed by provider id (`openai`/`claude`/`groq`/`openrouter`). Claude's
+//!   id is `"claude"`, not `"anthropic"` — the latter matches no
+//!   `save_api_key` column and silently fails key lookups.
+//! - Custom OpenAI-compatible endpoint: the `settings.customOpenAIConfig`
+//!   JSON blob (`SettingsRepository::save_custom_openai_config`/
+//!   `get_custom_openai_config`).
+//! - Default summary template: `KEY_DEFAULT_SUMMARY_TEMPLATE` (see that
+//!   key's doc comment in `parley-core`).
+//! - Language / confidence indicator / auto-summary: the `ui_config` JSON
+//!   blob (`KEY_UI_CONFIG`), keys `primaryLanguage`/
+//!   `showConfidenceIndicator`/`isAutoSummary` — camelCase because the
+//!   retired React frontend wrote the same blob, kept for compatibility.
 
 use gpui_kit::component::{
     button::Button,
@@ -191,7 +186,7 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
     page = page.group(
         SettingGroup::new()
             .title("API keys")
-            .description("Stored locally in SQLite (plaintext), same as the Tauri app. Leave blank to clear.")
+            .description("Stored locally in SQLite (plaintext). Leave blank to clear.")
             .items(key_items),
     );
 
@@ -238,7 +233,7 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
                 )
                 .default_value(SharedString::from("en")),
             )
-            .description("ISO language code, or blank for auto-detect. Same `ui_config` row the React app uses."),
+            .description("ISO language code, or blank for auto-detect."),
             SettingItem::new(
                 "Show transcription confidence",
                 SettingField::switch(

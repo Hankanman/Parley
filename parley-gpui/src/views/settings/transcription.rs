@@ -1,11 +1,9 @@
 //! "Transcription" settings page: the Whisper model catalog (with
 //! download), which model is active, and language preference.
 //!
-//! Reads/writes the same `transcript_settings` row the Tauri app's
-//! `api_save_transcript_config`/`api_get_transcript_config` commands use
-//! (via `SettingsRepository`, already Tauri-free in core), and drives model
-//! downloads through `whisper_engine::download_model_with_progress`, the
-//! same core function those commands call — progress arrives back as the
+//! Reads/writes the `transcript_settings` row via `SettingsRepository`, and
+//! drives model downloads through
+//! `whisper_engine::download_model_with_progress` — progress arrives back as the
 //! `model-download-progress`/`-complete`/`-error` core events, which
 //! `SettingsView` subscribes to and mirrors into `SettingsCache`.
 

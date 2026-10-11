@@ -1,7 +1,6 @@
 //! The Recording page: device pickers, start/pause/resume/stop controls,
-//! live level meters, and the live transcript. Behaviour mirrors the React
-//! recording home (`frontend/src/app/page.tsx` and friends) — see the
-//! module doc on `super` for the mapping.
+//! live level meters, and the live transcript. See the module doc on
+//! `super` for how it's split.
 
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -509,9 +508,9 @@ impl RecordingView {
             "recording-stopped" => {
                 if let Some(payload) = event.decode::<RecordingStoppedPayload>() {
                     if let Some(meeting_id) = payload.meeting_id {
-                        // Same background refine the Tauri frontend kicks off
-                        // after its post-stop save (speaker refinement, then
-                        // auto re-transcription if a better model exists).
+                        // Background refine after the post-stop save (speaker
+                        // refinement, then auto re-transcription if a better
+                        // model exists).
                         if let Some(folder_path) = payload.folder_path {
                             let services = AppServices::global(cx);
                             services.io.spawn(recording_service::post_meeting_refine(

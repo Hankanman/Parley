@@ -6,9 +6,7 @@
 //! managers. Kept free of `gpui`/`tokio` so it's plainly unit-testable.
 
 /// Fallback model ids shown when OpenAI's `get_openai_models` fails or no
-/// API key is configured yet — mirrors
-/// `frontend/src/components/ModelSettings/constants.ts`'s
-/// `OPENAI_FALLBACK_MODELS`.
+/// API key is configured yet.
 pub const OPENAI_FALLBACK_MODELS: &[&str] = &[
     "gpt-4o",
     "gpt-4o-mini",

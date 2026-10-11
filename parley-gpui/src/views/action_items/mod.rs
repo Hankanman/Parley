@@ -1,10 +1,9 @@
 //! Action Items page: every open (or done, or all) action item across every
-//! meeting, grouped by meeting — mirrors the frontend's
-//! `app/action-items/page.tsx`. Lets the user check items off, edit their
+//! meeting, grouped by meeting. Lets the user check items off, edit their
 //! text, delete them, add new ones, or jump to the owning meeting.
 //!
-//! Data comes straight from `ActionItemsRepository` / `MeetingsRepository`
-//! (no Tauri command layer to go through); it refreshes on load and again
+//! Data comes straight from `ActionItemsRepository` / `MeetingsRepository`;
+//! it refreshes on load and again
 //! whenever the background extractor emits `action-items-extracted` or
 //! `live-action-items`.
 
@@ -82,7 +81,7 @@ impl ActionItemsView {
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let Some(pool) = AppServices::global(cx).pool() else {
-            self.error = Some("No database — complete onboarding in the Tauri app first.".into());
+            self.error = Some("No database yet — finish onboarding first.".into());
             self.loading = false;
             return;
         };

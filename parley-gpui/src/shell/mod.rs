@@ -643,8 +643,7 @@ impl Render for AppShell {
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            // Drag-and-drop an audio file onto the window to import it —
-            // mirrors `frontend/src/components/bridges/FileDropBridge.tsx`.
+            // Drag-and-drop an audio file onto the window to import it.
             .on_drop(move |paths: &ExternalPaths, window, cx| {
                 if let Some(path) = import::pick_dropped_audio_file(paths.paths()) {
                     import::open_with_file(window, cx, path.clone());
