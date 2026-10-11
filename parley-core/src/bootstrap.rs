@@ -21,6 +21,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::audio;
+use crate::calendar;
 use crate::database::{self, manager::DatabaseManager};
 use crate::events::{EventSinkExt, SharedEventSink};
 use crate::speaker_diarization;
@@ -108,6 +109,16 @@ pub fn spawn_background_init(
     pool: Option<sqlx::SqlitePool>,
     model_manager: ModelManagerSlot,
 ) {
+    // Re-attach meetings to calendar events that earlier calendar refreshes
+    // orphaned (see `calendar::service::repair_dangling_links`).
+    if let Some(pool) = pool.clone() {
+        tokio::spawn(async move {
+            if let Err(e) = calendar::service::repair_dangling_links(&pool).await {
+                log::warn!("calendar link repair failed: {}", e);
+            }
+        });
+    }
+
     // Initialize Whisper engine on startup.
     tokio::spawn(async {
         if let Err(e) = whisper_engine::models::whisper_init().await {
