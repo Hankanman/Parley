@@ -8,11 +8,26 @@
 //! natively (see [`crate::audio::playback`]) rather than in the webview.
 
 use crate::audio::ffmpeg::find_ffmpeg_path;
-use crate::database::models::MeetingModel;
 
 /// Upper bound on clip length, guarding against a bogus range producing a huge
 /// extraction. Real transcript segments are seconds long.
 const MAX_CLIP_SECS: f64 = 120.0;
+
+/// The meeting's recording folder. Selects just that column rather than a
+/// whole `MeetingModel`: a hand-picked column list decoded into the model
+/// broke playback ("no column found for name: status") once the model grew.
+async fn recording_folder(pool: &sqlx::SqlitePool, meeting_id: &str) -> Result<String, String> {
+    let folder: Option<Option<String>> =
+        sqlx::query_scalar("SELECT folder_path FROM meetings WHERE id = ?")
+            .bind(meeting_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("Database error: {}", e))?;
+    folder
+        .flatten()
+        .filter(|f| !f.is_empty())
+        .ok_or_else(|| "This meeting has no saved recording.".to_string())
+}
 
 /// Extract `[start_secs, end_secs]` of a meeting's recording as WAV bytes
 /// (mono 16 kHz PCM s16le). Shared by the native-playback command and the
@@ -25,17 +40,7 @@ pub async fn extract_clip_wav(
     end_secs: f64,
     source: Option<&str>,
 ) -> Result<Vec<u8>, String> {
-    let meeting: Option<MeetingModel> = sqlx::query_as(
-        "SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = ?",
-    )
-    .bind(meeting_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Database error: {}", e))?;
-
-    let folder_path = meeting
-        .and_then(|m| m.folder_path)
-        .ok_or_else(|| "This meeting has no saved recording.".to_string())?;
+    let folder_path = recording_folder(pool, meeting_id).await?;
 
     let audio_path = std::path::Path::new(&folder_path).join("audio.mp4");
     if !audio_path.is_file() {
@@ -177,4 +182,43 @@ pub fn parse_wav_pcm16(bytes: &[u8]) -> Result<(Vec<i16>, u32, u16), String> {
         .map(|c| i16::from_le_bytes([c[0], c[1]]))
         .collect();
     Ok((samples, sample_rate, channels))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn test_pool() -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite pool");
+        sqlx::migrate!("./migrations").run(&pool).await.expect("run migrations");
+        pool
+    }
+
+    #[tokio::test]
+    async fn recording_folder_reads_the_current_schema() {
+        let pool = test_pool().await;
+        sqlx::query(
+            "INSERT INTO meetings (id, title, created_at, updated_at, folder_path) \
+             VALUES ('m1', 'With audio', datetime('now'), datetime('now'), '/rec/m1'), \
+                    ('m2', 'No audio', datetime('now'), datetime('now'), NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(recording_folder(&pool, "m1").await.unwrap(), "/rec/m1");
+        assert_eq!(
+            recording_folder(&pool, "m2").await.unwrap_err(),
+            "This meeting has no saved recording."
+        );
+        assert_eq!(
+            recording_folder(&pool, "missing").await.unwrap_err(),
+            "This meeting has no saved recording."
+        );
+    }
 }
