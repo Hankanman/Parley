@@ -69,17 +69,9 @@ fn maybe_warn_backlog(depth: usize) {
 /// Saturating: never underflows even if called more times than segments
 /// were enqueued (shouldn't happen, but a metric must never panic).
 pub fn dequeued() {
-    // A plain CAS loop: `fetch_update` is deprecated on current toolchains
-    // and its replacement `try_update` is newer than our rust-version.
-    let mut depth = QUEUE_DEPTH.load(Ordering::SeqCst);
-    while let Err(actual) = QUEUE_DEPTH.compare_exchange_weak(
-        depth,
-        depth.saturating_sub(1),
-        Ordering::SeqCst,
-        Ordering::SeqCst,
-    ) {
-        depth = actual;
-    }
+    let _ = QUEUE_DEPTH.try_update(Ordering::SeqCst, Ordering::SeqCst, |d| {
+        Some(d.saturating_sub(1))
+    });
 }
 
 /// Spawn the counting forwarder described above. `raw_rx` is the receiver
