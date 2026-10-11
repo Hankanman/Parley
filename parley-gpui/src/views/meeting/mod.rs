@@ -607,15 +607,25 @@ impl MeetingView {
                             .as_deref()
                             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
                             .and_then(|v| v.get("markdown").and_then(|m| m.as_str()).map(str::to_string));
-                        if let Some(markdown) = markdown {
+                        let in_progress =
+                            matches!(process.status.to_lowercase().as_str(), "processing" | "pending" | "summarizing");
+                        // While a (re)generation runs, the row still holds the
+                        // previous summary (kept so a failed run doesn't lose
+                        // it). Don't paint it back over the new one streaming
+                        // in — the pane shows only the live preview until the
+                        // run finishes.
+                        if let Some(markdown) = markdown.filter(|_| !in_progress) {
                             this.summary_has_content = !markdown.is_empty();
                             this.summary_markdown = markdown.clone();
+                            this.summary_reveal_pending.clear();
                             this.summary_state.update(cx, |state, cx| state.set_text(&markdown, cx));
                         }
                         match process.status.to_lowercase().as_str() {
-                            "processing" | "pending" | "summarizing" => {
-                                this.summary_phase = SummaryPhase::Generating;
-                                this.start_poll(generation, cx);
+                            _ if in_progress => {
+                                if !matches!(this.summary_phase, SummaryPhase::Generating) {
+                                    this.summary_phase = SummaryPhase::Generating;
+                                    this.start_poll(generation, cx);
+                                }
                             }
                             "failed" | "error" => {
                                 this.summary_phase =
@@ -739,6 +749,7 @@ impl MeetingView {
         self.summary_phase = SummaryPhase::Generating;
         self.summary_has_content = false;
         self.summary_markdown = String::new();
+        self.summary_reveal_pending.clear();
         self.summary_state.update(cx, |state, cx| state.set_text("", cx));
         cx.notify();
 

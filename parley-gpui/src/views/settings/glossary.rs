@@ -164,14 +164,35 @@ fn add_term_item(view: &Entity<SettingsView>) -> SettingItem {
         struct AddState {
             term: Entity<InputState>,
             sounds_like: Entity<InputState>,
+            _subscriptions: [Subscription; 2],
         }
 
-        let state = window.use_keyed_state(SharedString::from("glossary-add-term"), cx, |window, cx| {
-            AddState {
-                term: cx.new(|cx| InputState::new(window, cx).placeholder("Term, e.g. Kubernetes")),
-                sounds_like: cx.new(|cx| {
+        // Enter in either field adds the term, so Tab / Enter is enough to
+        // enter a run of terms without reaching for the mouse.
+        let state = window.use_keyed_state(SharedString::from("glossary-add-term"), cx, {
+            let view = view.clone();
+            move |window, cx| {
+                let term = cx.new(|cx| InputState::new(window, cx).placeholder("Term, e.g. Kubernetes"));
+                let sounds_like = cx.new(|cx| {
                     InputState::new(window, cx).placeholder("Sounds like (optional), e.g. cooper netties")
-                }),
+                });
+                let subscribe = |input: &Entity<InputState>, window: &mut Window, cx: &mut Context<AddState>| {
+                    let view = view.clone();
+                    let term = term.clone();
+                    let sounds_like = sounds_like.clone();
+                    cx.subscribe_in(input, window, move |_, _, event: &InputEvent, window, cx| {
+                        if let InputEvent::PressEnter { .. } = event {
+                            add_term(&view, &term, &sounds_like, window, cx);
+                        }
+                    })
+                };
+                let term_sub = subscribe(&term, window, cx);
+                let sounds_sub = subscribe(&sounds_like, window, cx);
+                AddState {
+                    term,
+                    sounds_like,
+                    _subscriptions: [term_sub, sounds_sub],
+                }
             }
         });
         let term_input = state.read(cx).term.clone();
@@ -189,24 +210,39 @@ fn add_term_item(view: &Entity<SettingsView>) -> SettingItem {
             .child(Input::new(&sounds_input).small().flex_1())
             .child(Button::new("glossary-add").outline().small().label("Add").on_click(
                 move |_, window, cx| {
-                    let term = term_for_click.read(cx).value().trim().to_string();
-                    let sounds_like = sounds_for_click.read(cx).value().trim().to_string();
-                    if term.is_empty() {
-                        return;
-                    }
-                    term_for_click.update(cx, |input, cx| input.set_value("", window, cx));
-                    sounds_for_click.update(cx, |input, cx| input.set_value("", window, cx));
-                    update(cx, &view_for_click, |g| {
-                        let exists = g.terms.iter().any(|t| t.term.eq_ignore_ascii_case(&term));
-                        if !exists {
-                            g.terms.push(GlossaryTerm::new(term, sounds_like));
-                        }
-                    });
+                    add_term(&view_for_click, &term_for_click, &sounds_for_click, window, cx);
                 },
             ))
             .into_any_element()
     })
     .keywords(["glossary", "vocabulary", "custom words", "add term"])
+}
+
+/// Add the term typed in the "add" row (ignoring a blank or duplicate
+/// term), clear both fields and put the cursor back in the term field.
+fn add_term(
+    view: &Entity<SettingsView>,
+    term_input: &Entity<InputState>,
+    sounds_input: &Entity<InputState>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let term = term_input.read(cx).value().trim().to_string();
+    let sounds_like = sounds_input.read(cx).value().trim().to_string();
+    if term.is_empty() {
+        return;
+    }
+    term_input.update(cx, |input, cx| {
+        input.set_value("", window, cx);
+        input.focus(window, cx);
+    });
+    sounds_input.update(cx, |input, cx| input.set_value("", window, cx));
+    update(cx, view, |g| {
+        let exists = g.terms.iter().any(|t| t.term.eq_ignore_ascii_case(&term));
+        if !exists {
+            g.terms.push(GlossaryTerm::new(term, sounds_like));
+        }
+    });
 }
 
 /// One editable term row: term + "sounds like" inputs (saved as you type)
