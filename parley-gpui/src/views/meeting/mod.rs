@@ -2661,10 +2661,27 @@ impl MeetingView {
                     .justify_between()
                     .child(div().text_sm().font_semibold().child("Link calendar event"))
                     .child(
-                        Button::new("close-calendar-picker")
-                            .ghost()
-                            .icon(Lucide::X)
-                            .on_click(cx.listener(|this, _, _, cx| this.close_calendar_picker(cx))),
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            // Unlinking from the picker too, so a wrong
+                            // auto-link can be undone wherever the user goes.
+                            .when(current_id.is_some(), |el| {
+                                el.child(
+                                    Button::new("picker-unlink-calendar-event")
+                                        .ghost()
+                                        .icon(Lucide::Link2Off)
+                                        .label("Unlink")
+                                        .disabled(self.calendar_mutating)
+                                        .on_click(cx.listener(|this, _, _, cx| this.unlink_calendar_event(cx))),
+                                )
+                            })
+                            .child(
+                                Button::new("close-calendar-picker")
+                                    .ghost()
+                                    .icon(Lucide::X)
+                                    .on_click(cx.listener(|this, _, _, cx| this.close_calendar_picker(cx))),
+                            ),
                     ),
             );
 
