@@ -286,6 +286,30 @@ impl TranscriptsRepository {
         Ok(res.rows_affected())
     }
 
+    /// Relabel one transcript segment of `meeting_id`, leaving the rest of
+    /// its cluster alone — for a cluster that turned out to hold more than
+    /// one voice. Returns the number of rows updated (0 or 1).
+    pub async fn set_segment_speaker(
+        pool: &SqlitePool,
+        meeting_id: &str,
+        segment_id: &str,
+        label: &str,
+        profile_id: Option<&str>,
+    ) -> Result<u64, SqlxError> {
+        let res = sqlx::query(
+            "UPDATE transcripts
+             SET speaker = ?, voice_profile_id = ?
+             WHERE meeting_id = ? AND id = ?",
+        )
+        .bind(label)
+        .bind(profile_id)
+        .bind(meeting_id)
+        .bind(segment_id)
+        .execute(pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// Apply post-meeting speaker refinement to `meeting_id`'s transcripts.
     ///
     /// `updates` is `(sequence_id, expected_current_speaker, new_speaker,
