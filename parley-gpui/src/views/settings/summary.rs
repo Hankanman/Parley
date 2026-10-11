@@ -222,6 +222,7 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
                     {
                         let view = view.clone();
                         move |val: SharedString, cx: &mut App| {
+                            parley_core::utils::apply_language_preference(Some(val.as_ref()));
                             super::state::save_ui_field(
                                 cx,
                                 &view,
@@ -233,7 +234,7 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
                 )
                 .default_value(SharedString::from("en")),
             )
-            .description("ISO language code, or blank for auto-detect."),
+            .description("Language for live transcription: an ISO code such as en or fr, or blank to auto-detect."),
             SettingItem::new(
                 "Show transcription confidence",
                 SettingField::switch(
