@@ -1,12 +1,8 @@
 //! Import Audio dialog: pick/drop an audio file, validate it, choose a
 //! title/language/model/speaker-count, then run
 //! `parley_core::audio::import::start_import_with` and track its progress.
-//! Mirrors `frontend/src/components/ImportAudio/ImportAudioDialog.tsx` +
-//! `frontend/src/hooks/useImportAudio.ts` — same core entry points, same
-//! `import-progress`/`import-complete`/`import-error`/`import-warning`
-//! events (already Tauri-free; the Tauri commands in
-//! `commands/audio/import_commands.rs` are thin wrappers over the same
-//! `parley_core::audio::import` functions this view calls directly).
+//! Progress arrives as the `import-progress`/`import-complete`/
+//! `import-error`/`import-warning` core events.
 
 mod logic;
 

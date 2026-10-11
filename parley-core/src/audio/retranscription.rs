@@ -94,9 +94,8 @@ pub fn cancel_retranscription() {
 }
 
 /// Start retranscription of a meeting's audio. Takes an already-resolved
-/// event sink and DB pool (the Tauri shell's `start_retranscription` in
-/// `retranscription_commands.rs` resolves both from a live `AppHandle`), so
-/// this module never depends on Tauri.
+/// event sink and DB pool (the GPUI meeting view passes `AppServices`' sink
+/// and pool), so this module never depends on the UI shell.
 pub async fn start_retranscription_with(
     sink: SharedEventSink,
     pool: Option<SqlitePool>,
@@ -558,8 +557,7 @@ async fn run_retranscription(
     })
 }
 
-/// Emit progress event. Takes a `&dyn EventSink` rather than an `AppHandle`
-/// since this only ever emits — see `events.rs`.
+/// Emit a `retranscription-progress` event through `sink`.
 fn emit_progress(sink: &dyn EventSink, meeting_id: &str, stage: &str, progress: u32, message: &str) {
     let _ = sink.emit_event(
         "retranscription-progress",
@@ -753,7 +751,10 @@ pub fn spawn_auto_refine(
         }
         // Summarise last, whether refine ran, was skipped or failed, so the
         // summary sees the refined transcript when there is one.
-        crate::summary::auto_summary::maybe_auto_summarize(sink, pool, meeting_id).await;
+        crate::summary::auto_summary::maybe_auto_summarize(sink.clone(), pool.clone(), meeting_id.clone())
+            .await;
+        // Then chapters (issue #87), behind the same auto-summary switch.
+        crate::chapters::maybe_auto_chapter(sink, pool, meeting_id).await;
     });
 }
 

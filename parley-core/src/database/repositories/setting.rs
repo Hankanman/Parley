@@ -6,7 +6,8 @@ use sqlx::SqlitePool;
 //
 // Keys for the generic `app_settings` key-value store (see the "GENERIC
 // KEY-VALUE SETTINGS" section below). Each backs a JSON blob previously
-// persisted via tauri-plugin-store or hand-rolled file I/O:
+// persisted via the retired Tauri shell's tauri-plugin-store or hand-rolled
+// file I/O (see the per-module legacy importers):
 
 /// Onboarding status (see `onboarding::OnboardingStatus`).
 pub const KEY_ONBOARDING_STATUS: &str = "onboarding_status";
@@ -386,8 +387,8 @@ impl SettingsRepository {
     //
     // Backs namespaced JSON settings blobs (onboarding status, recording
     // preferences, notification settings, frontend UI config) in the
-    // `app_settings` table, replacing tauri-plugin-store JSON files and
-    // hand-rolled config file I/O across the app.
+    // `app_settings` table, replacing the retired Tauri shell's
+    // tauri-plugin-store JSON files and hand-rolled config file I/O.
 
     /// Gets the raw JSON string stored under `key`, if any.
     pub async fn get_setting_json(

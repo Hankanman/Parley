@@ -141,7 +141,8 @@ fn install_fatal_signal_handlers() {
     for sig in FATAL_SIGNALS {
         unsafe {
             let mut action: libc::sigaction = std::mem::zeroed();
-            action.sa_sigaction = on_fatal_signal as usize;
+            let handler: extern "C" fn(libc::c_int) = on_fatal_signal;
+            action.sa_sigaction = handler as libc::sighandler_t;
             // ONSTACK: run on the alternate signal stack Rust sets up per
             // thread, so a stack-overflow SIGSEGV can still be reported.
             action.sa_flags = libc::SA_RESETHAND | libc::SA_ONSTACK;

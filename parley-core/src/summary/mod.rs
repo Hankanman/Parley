@@ -5,7 +5,6 @@
 /// - Processor for chunking transcripts and generating summaries
 /// - Service layer for orchestrating summary generation
 /// - Templates for structured meeting summary generation
-/// - Tauri commands for frontend integration
 use serde::{Deserialize, Serialize};
 
 /// Custom OpenAI-compatible endpoint configuration
@@ -37,12 +36,9 @@ pub mod llm_client;
 pub mod markdown_export;
 pub mod processor;
 pub mod service;
+pub mod structured;
 pub mod summary_engine;
 pub mod templates;
-
-// Tauri commands (`api_process_transcript` etc., template CRUD) live in the
-// shell crate's `commands::summary::{commands, template_commands}` and are
-// referenced that way in generate_handler!.
 
 // Re-export commonly used items
 pub use llm_client::LLMProvider;

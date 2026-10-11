@@ -1,12 +1,11 @@
-//! StatusNotifierItem tray icon: Start/Stop recording, Open Parley (focus
-//! the main window), Quit. Mirrors `frontend/src-tauri/src/tray.rs`'s menu
-//! shape where sensible, built on `gpui-tray` the way
+//! StatusNotifierItem tray icon: Start/Stop recording, Bookmark this
+//! moment, Open Parley (focus
+//! the main window), Quit. Built on `gpui-tray` the way
 //! `spikes/gpui-shell/src/tray.rs` proved out.
 //!
 //! The menu is kept in sync with the canonical recording-state machine by
-//! subscribing to the `recording-state` core event on [`CoreEvents`] — the
-//! same event the Tauri shell's `TrayRefreshingSink` reacts to — rather than
-//! polling. A tray failure (no StatusNotifierItem host running) is logged
+//! subscribing to the `recording-state` core event on [`CoreEvents`] rather
+//! than polling. A tray failure (no StatusNotifierItem host running) is logged
 //! and otherwise ignored: the rest of the app must keep working without a
 //! tray icon.
 
@@ -29,6 +28,7 @@ actions!(
         TrayStopRecording,
         TrayPauseRecording,
         TrayResumeRecording,
+        TrayBookmark,
         TrayRecordDetectedCall,
         TrayOpenParley,
         TraySettings,
@@ -155,6 +155,10 @@ fn build_menu(cx: &mut App) -> Vec<MenuItem> {
             MenuItem::action("Stop recording", TrayStopRecording),
             !can_stop,
         ),
+        disabled(
+            MenuItem::action("Bookmark this moment", TrayBookmark),
+            !can_stop,
+        ),
         MenuItem::separator(),
         MenuItem::action("Open Parley", TrayOpenParley),
         MenuItem::action("Settings", TraySettings),
@@ -270,6 +274,10 @@ pub fn install(cx: &mut App) -> gpui_tray::Result<()> {
         log::info!("tray: resume recording");
         resume_recording_from_tray(cx);
     });
+    cx.on_action(|_: &TrayBookmark, cx: &mut App| {
+        log::info!("tray: bookmark");
+        crate::bookmark::bookmark_now(cx);
+    });
     cx.on_action(|_: &TrayRecordDetectedCall, cx: &mut App| {
         if let Some(call) = crate::meeting_detect::active_call(cx) {
             log::info!("tray: record detected {} call", call.app_name);
@@ -314,9 +322,8 @@ pub fn install(cx: &mut App) -> gpui_tray::Result<()> {
                 };
                 let previous = cx.try_global::<TrayPhase>().copied().unwrap_or_default().0;
                 // Pause/resume have no dedicated `recording-*` event (unlike
-                // start/stop) — the Tauri shell doesn't notify on them
-                // either (see `notifications.rs`'s module doc). Detect the
-                // transition here, off the canonical phase machine.
+                // start/stop). Detect the transition here, off the canonical
+                // phase machine.
                 if previous == RecordingPhase::Recording && snapshot.phase == RecordingPhase::Paused {
                     notifications::maybe_notify(cx, notifications::Kind::Paused);
                 } else if previous == RecordingPhase::Paused && snapshot.phase == RecordingPhase::Recording {
@@ -364,7 +371,7 @@ pub(crate) fn refresh(cx: &mut App) {
 }
 
 /// Tear the tray down (best-effort). Called from `request_quit` before the
-/// window closes, mirroring the Tauri tray's `close` on Quit.
+/// window closes, so the StatusNotifierItem disappears with the app.
 pub fn shutdown(cx: &mut App) {
     if let Some(tray) = cx.try_global::<AppTray>() {
         let tray = tray.tray.clone();

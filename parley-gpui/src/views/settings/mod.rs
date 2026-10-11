@@ -9,6 +9,7 @@
 mod about;
 mod appearance;
 mod calendar;
+mod export_folder;
 mod glossary;
 mod integrations;
 mod model_utils;

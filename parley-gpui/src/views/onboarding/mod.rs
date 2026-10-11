@@ -1,11 +1,6 @@
 //! First-launch onboarding flow: welcome -> setup overview (creates the
-//! database) -> model download progress -> done. Mirrors the React flow
-//! (`frontend/src/components/onboarding/**`,
-//! `frontend/src/contexts/OnboardingContext.tsx`) but talks to
-//! `parley-core` directly instead of through Tauri `invoke()` — every
-//! function called here is the same Tauri-free core function the Tauri
-//! commands (`onboarding_commands.rs`,
-//! `commands/database/commands.rs::initialize_fresh_database`) wrap.
+//! database) -> model download progress -> done, calling `parley-core`
+//! directly.
 //!
 //! `RootView` (`parley-gpui/src/root.rs`) decides whether to show this at
 //! all — this module only implements the flow once shown.
@@ -116,9 +111,8 @@ impl OnboardingView {
         this
     }
 
-    /// Mirrors `initialize_fresh_database` (Tauri):
-    /// `DatabaseManager::new_default()` + the same default model config
-    /// writes, then installs the result into `AppServices` so `pool()` /
+    /// Create the database: `DatabaseManager::new_default()` + the default
+    /// model config writes, then installs the result into `AppServices` so `pool()` /
     /// `recording_context()` work for the rest of the process without a
     /// restart.
     fn start_db_creation(&mut self, cx: &mut Context<Self>) {
@@ -307,8 +301,7 @@ impl OnboardingView {
         }
     }
 
-    /// Mirrors the Tauri `complete_onboarding` command: persist the chosen
-    /// model config, then mark onboarding status `completed`. Emits
+    /// Persist the chosen model config, then mark onboarding status `completed`. Emits
     /// [`OnboardingEvent::Completed`] on success so `RootView` swaps in the
     /// normal shell — no restart.
     fn complete(&mut self, cx: &mut Context<Self>) {

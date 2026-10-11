@@ -22,7 +22,7 @@ use parley_core::database::repositories::meeting::MeetingsRepository;
 use crate::app_state::AppServices;
 use crate::runtime::Io;
 use crate::views::{
-    action_items::ActionItemsView, ask::AskView, import, meeting::MeetingView, recording::RecordingView,
+    action_items::ActionItemsView, ask::AskView, brief::BriefView, import, meeting::MeetingView, recording::RecordingView,
     settings::SettingsView, speakers::SpeakersView,
 };
 use meeting_list::{ContentMatch, MeetingRow};
@@ -36,6 +36,8 @@ pub enum Route {
     Speakers,
     /// "Ask Parley" across all meetings.
     Ask,
+    /// Pre-meeting brief for a calendar event (by event id).
+    Brief(String),
 }
 
 /// Lets any view switch pages without holding the shell: `navigate(Route::Meeting(id), cx)`.
@@ -103,6 +105,11 @@ pub struct AppShell {
     action_items: Entity<ActionItemsView>,
     speakers: Entity<SpeakersView>,
     ask: Entity<AskView>,
+    brief: Entity<BriefView>,
+    /// Calendar events starting soon, shown as the sidebar's "Upcoming"
+    /// group (each opens its brief). Refreshed every few minutes.
+    upcoming: Vec<UpcomingEvent>,
+    _upcoming_refresh: Task<()>,
     meetings: Vec<MeetingRow>,
     meetings_loading: bool,
     /// (groups, meeting rows) the sidebar was last rendered with. gpui-kit's
@@ -150,6 +157,9 @@ impl AppShell {
             action_items: cx.new(|cx| ActionItemsView::new(window, cx)),
             speakers: cx.new(|cx| SpeakersView::new(window, cx)),
             ask: cx.new(|cx| AskView::new(window, cx)),
+            brief: cx.new(|cx| BriefView::new(window, cx)),
+            upcoming: Vec::new(),
+            _upcoming_refresh: Task::ready(()),
             meetings: Vec::new(),
             meetings_loading: false,
             rendered_sidebar_shape: (0, 0),
@@ -160,6 +170,7 @@ impl AppShell {
             _subscriptions: subscriptions,
         };
         shell.load_meetings(cx);
+        shell._upcoming_refresh = shell.start_upcoming_refresh(cx);
         shell
     }
 
@@ -170,6 +181,10 @@ impl AppShell {
         }
         if route == Route::Ask {
             self.ask.update(cx, |view, cx| view.on_show(cx));
+        }
+        if let Route::Brief(event_id) = &route {
+            let event_id = event_id.clone();
+            self.brief.update(cx, |view, cx| view.load(event_id, cx));
         }
         // Leaving the Speakers page while self-voice enrollment is recording
         // would otherwise leave the microphone open indefinitely — cancel it,
@@ -422,6 +437,109 @@ impl AppShell {
     }
 }
 
+/// One "Upcoming" sidebar entry.
+#[derive(Clone, Debug, PartialEq)]
+struct UpcomingEvent {
+    id: String,
+    title: String,
+    start: chrono::DateTime<chrono::Utc>,
+}
+
+/// How far ahead the "Upcoming" group looks, and how many it lists.
+const UPCOMING_HORIZON_HOURS: i64 = 12;
+const UPCOMING_MAX: usize = 3;
+/// An event stays listed this long after it starts (you may open its brief
+/// while joining late).
+const UPCOMING_GRACE_MINUTES: i64 = 10;
+const UPCOMING_REFRESH: Duration = Duration::from_secs(5 * 60);
+
+/// Pick the "Upcoming" entries from `events` (any order) at `now`.
+fn upcoming_from(
+    events: Vec<parley_core::calendar::models::CalendarEvent>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<UpcomingEvent> {
+    let earliest = now - chrono::Duration::minutes(UPCOMING_GRACE_MINUTES);
+    let mut upcoming: Vec<UpcomingEvent> = events
+        .into_iter()
+        .filter(|e| !e.is_all_day && e.start_at >= earliest)
+        .map(|e| UpcomingEvent {
+            id: e.id,
+            title: e
+                .summary
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "Untitled event".to_string()),
+            start: e.start_at,
+        })
+        .collect();
+    upcoming.sort_by_key(|e| e.start);
+    upcoming.truncate(UPCOMING_MAX);
+    upcoming
+}
+
+impl AppShell {
+    /// Reload the "Upcoming" group now and every [`UPCOMING_REFRESH`].
+    fn start_upcoming_refresh(&mut self, cx: &mut Context<Self>) -> Task<()> {
+        let io = Io::global(cx);
+        cx.spawn(async move |this, cx| loop {
+            let pool = cx.update(|cx| AppServices::global(cx).pool());
+            if let Some(pool) = pool {
+                let now = chrono::Utc::now();
+                let result = io
+                    .spawn(async move {
+                        parley_core::calendar::repository::CalendarRepository::list_events_in_range(
+                            &pool,
+                            now,
+                            now + chrono::Duration::hours(UPCOMING_HORIZON_HOURS),
+                        )
+                        .await
+                    })
+                    .await;
+                let upcoming = match result {
+                    Ok(Ok(events)) => upcoming_from(events, now),
+                    Ok(Err(e)) => {
+                        log::warn!("failed to load upcoming events: {e}");
+                        Vec::new()
+                    }
+                    Err(e) => {
+                        log::warn!("upcoming events task failed: {e}");
+                        Vec::new()
+                    }
+                };
+                let alive = this.update(cx, |this, cx| {
+                    if this.upcoming != upcoming {
+                        this.upcoming = upcoming;
+                        cx.notify();
+                    }
+                });
+                if alive.is_err() {
+                    return;
+                }
+            }
+            cx.background_executor().timer(UPCOMING_REFRESH).await;
+        })
+    }
+
+    fn upcoming_item(&self, event: &UpcomingEvent, cx: &mut Context<Self>) -> SidebarMenuItem {
+        let this = cx.entity();
+        let id = event.id.clone();
+        let active = matches!(&self.route, Route::Brief(active_id) if *active_id == event.id);
+        let local = event.start.with_timezone(&Local);
+        let when = if local.date_naive() == Local::now().date_naive() {
+            local.format("%H:%M").to_string()
+        } else {
+            local.format("%a %H:%M").to_string()
+        };
+        SidebarMenuItem::new(format!("{when} {}", event.title))
+            .icon(gpui_kit::assets::IconName::CalendarClock)
+            .active(active)
+            .on_click(move |_, window, cx| {
+                let id = id.clone();
+                this.update(cx, |shell, cx| shell.attempt_navigate(Route::Brief(id), window, cx));
+            })
+    }
+}
+
 fn meeting_row(model: MeetingModel) -> MeetingRow {
     MeetingRow {
         id: model.id,
@@ -439,6 +557,7 @@ impl Render for AppShell {
             Route::ActionItems => self.action_items.clone().into(),
             Route::Speakers => self.speakers.clone().into(),
             Route::Ask => self.ask.clone().into(),
+            Route::Brief(_) => self.brief.clone().into(),
         };
 
         let query = self.search.read(cx).value().to_string();
@@ -472,6 +591,11 @@ impl Render for AppShell {
                 ])),
             );
 
+        if !self.upcoming.is_empty() {
+            let items: Vec<SidebarMenuItem> = self.upcoming.iter().map(|e| self.upcoming_item(e, cx)).collect();
+            sidebar = sidebar.child(SidebarGroup::new("Upcoming").child(SidebarMenu::new().children(items)));
+        }
+
         for (label, meetings) in &grouped {
             let items: Vec<SidebarMenuItem> =
                 meetings.iter().map(|m| self.meeting_item(m, cx)).collect();
@@ -482,8 +606,13 @@ impl Render for AppShell {
         let shown_content_matches =
             !query.trim().is_empty() && (self.content_search_loading || !self.content_matches.is_empty());
         let shape = (
-            2 + grouped.len() + shown_no_matches as usize + shown_content_matches as usize,
-            grouped.iter().map(|(_, rows)| rows.len()).sum::<usize>() + self.content_matches.len(),
+            2 + (!self.upcoming.is_empty()) as usize
+                + grouped.len()
+                + shown_no_matches as usize
+                + shown_content_matches as usize,
+            grouped.iter().map(|(_, rows)| rows.len()).sum::<usize>()
+                + self.content_matches.len()
+                + self.upcoming.len(),
         );
         if shape != self.rendered_sidebar_shape {
             self.rendered_sidebar_shape = shape;
@@ -514,8 +643,7 @@ impl Render for AppShell {
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            // Drag-and-drop an audio file onto the window to import it —
-            // mirrors `frontend/src/components/bridges/FileDropBridge.tsx`.
+            // Drag-and-drop an audio file onto the window to import it.
             .on_drop(move |paths: &ExternalPaths, window, cx| {
                 if let Some(path) = import::pick_dropped_audio_file(paths.paths()) {
                     import::open_with_file(window, cx, path.clone());
@@ -551,5 +679,50 @@ impl Render for AppShell {
                     .child(sidebar)
                     .child(div().flex_1().min_w_0().h_full().child(page)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+    use parley_core::calendar::models::CalendarEvent;
+
+    fn event(id: &str, minutes: i64, all_day: bool, title: Option<&str>) -> CalendarEvent {
+        let now = Utc.with_ymd_and_hms(2026, 10, 16, 9, 0, 0).unwrap();
+        CalendarEvent {
+            id: id.into(),
+            source_id: "s".into(),
+            ics_uid: id.into(),
+            recurrence_id: None,
+            summary: title.map(str::to_string),
+            description: None,
+            location: None,
+            organizer_name: None,
+            organizer_email: None,
+            start_at: now + chrono::Duration::minutes(minutes),
+            end_at: now + chrono::Duration::minutes(minutes + 30),
+            is_all_day: all_day,
+            attendees: vec![],
+        }
+    }
+
+    #[std::prelude::v1::test]
+    fn upcoming_lists_the_next_few_timed_events() {
+        let now = Utc.with_ymd_and_hms(2026, 10, 16, 9, 0, 0).unwrap();
+        let picked = upcoming_from(
+            vec![
+                event("later", 240, false, Some("Later")),
+                event("all-day", 30, true, Some("Holiday")),
+                event("started-long-ago", -45, false, Some("Old")),
+                event("just-started", -5, false, Some("  ")),
+                event("soon", 20, false, Some("Sync")),
+                event("after", 300, false, Some("After")),
+            ],
+            now,
+        );
+        let ids: Vec<&str> = picked.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, vec!["just-started", "soon", "later"]);
+        assert_eq!(picked[0].title, "Untitled event");
     }
 }

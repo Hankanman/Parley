@@ -443,8 +443,8 @@ impl ModelManager {
         // `.await`), so the in-memory status mirror is updated via
         // `try_write` here — best-effort, since the callback also fires the
         // caller-supplied `progress_callback` (which drives the
-        // "builtin-ai-download-progress" Tauri event the frontend actually
-        // renders) on every tick regardless.
+        // "builtin-ai-download-progress" event the UI actually renders) on
+        // every tick regardless.
         let models_for_progress = self.available_models.clone();
         let model_name_for_progress = model_name.to_string();
 

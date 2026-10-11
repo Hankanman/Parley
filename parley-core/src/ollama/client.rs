@@ -1,7 +1,6 @@
-//! Tauri-free Ollama HTTP/CLI client: model listing, pulling (with
-//! progress reported via an [`EventSink`](crate::events::EventSink)),
-//! deletion, and context-size lookups. See `commands.rs` for the thin
-//! `#[tauri::command]` wrappers around these.
+//! Ollama HTTP/CLI client: model listing, pulling (with progress reported
+//! via an [`EventSink`](crate::events::EventSink)), deletion, and
+//! context-size lookups. The GPUI settings views call these directly.
 
 use crate::events::{EventSinkExt, SharedEventSink};
 use crate::ollama::metadata::METADATA_CACHE;
@@ -261,9 +260,7 @@ pub struct DownloadProgress {
 
 /// Stream-download `model_name` from an Ollama server, reporting progress
 /// through `sink` via `ollama-model-download-progress` /
-/// `ollama-model-download-complete` / `ollama-model-download-error` — the
-/// same three events the command previously emitted directly through the
-/// `AppHandle`.
+/// `ollama-model-download-complete` / `ollama-model-download-error`.
 pub async fn pull_ollama_model_with_progress(
     sink: SharedEventSink,
     model_name: String,

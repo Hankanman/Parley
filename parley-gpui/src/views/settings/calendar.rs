@@ -1,11 +1,8 @@
 //! "Calendar" settings page: ICS calendar sources — list, add, remove,
 //! refresh, and last sync status/errors.
 //!
-//! Mirrors `frontend/src/components/CalendarSettings.tsx` against the same
-//! Tauri-free core (`parley_core::calendar`): `CalendarRepository` for
-//! list/add/remove, and the new `calendar::refresh_source` helper (moved
-//! out of the `calendar_refresh_source` Tauri command, which is now a thin
-//! wrapper over it) for refresh + status.
+//! Backed by `parley_core::calendar`: `CalendarRepository` for
+//! list/add/remove, and `calendar::refresh_source` for refresh + status.
 
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},

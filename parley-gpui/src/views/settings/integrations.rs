@@ -1,6 +1,5 @@
 //! "Integrations" settings page: MCP server info and a ready-to-paste
-//! client config snippet, mirroring `frontend/src/components/McpSettings.tsx`
-//! against the same Tauri-free core (`parley_core::mcp_config`).
+//! client config snippet, backed by `parley_core::mcp_config`.
 
 use gpui_kit::component::{
     button::Button,
@@ -30,6 +29,7 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
                 )
                 .item(info_item(&view)),
         )
+        .group(super::export_folder::group(&view, cx))
 }
 
 fn info_item(view: &Entity<SettingsView>) -> SettingItem {

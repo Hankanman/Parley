@@ -1,6 +1,5 @@
-//! Pure logic for the per-segment speaker chip's edit flow — mirrors
-//! `frontend/src/components/EditableSpeakerChip.tsx` and
-//! `frontend/src/lib/voice-profiles.ts`'s `isUnnamedSpeakerLabel`.
+//! Pure logic for the per-segment speaker chip's edit flow, including
+//! detecting unnamed speaker labels.
 //!
 //! Kept free of GPUI/entity types so it's unit-testable without a window.
 

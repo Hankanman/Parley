@@ -1,21 +1,18 @@
 //! Desktop notifications for the recording lifecycle, transcription
-//! completion, system errors and meeting reminders, gated by the same
-//! notification settings the Tauri app stores (`notification_settings` in
-//! SQLite, via `SettingsRepository`/`KEY_NOTIFICATION_SETTINGS` —
-//! Tauri-free, already in `parley-core`).
+//! completion, system errors and meeting reminders, gated by the
+//! notification settings stored in SQLite (`app_settings` under
+//! `KEY_NOTIFICATION_SETTINGS`, via `SettingsRepository`).
 //!
-//! The full `NotificationSettings`/`NotificationPreferences` shape lives in
-//! `frontend/src-tauri/src/notifications/settings.rs`, which — being built
-//! around an `AppHandle`-based `ConsentManager` — isn't something this
-//! shell can reuse directly without pulling in Tauri. Deserializing only
-//! the handful of fields this needs (`serde` ignores the rest) reads the
-//! same row without moving that module into core. If no row exists yet
-//! (nobody has ever opened the Tauri app's notification settings), this
-//! defaults to on, per the phase 1 tray spec.
+//! The full `NotificationSettings` shape lives in
+//! `views/settings/state.rs`, which owns the settings page. Deserializing
+//! only the handful of fields this needs (`serde` ignores the rest) reads
+//! the same row without depending on the settings view. If no row exists
+//! yet (notification settings never saved), this defaults to on, per the
+//! phase 1 tray spec.
 //!
 //! Also owns the meeting-reminder background loop and the GitHub-releases
-//! update check — both dead code paths in the Tauri app (see module docs
-//! on [`start_meeting_reminder_loop`] and [`check_for_updates`]).
+//! update check (see [`start_meeting_reminder_loop`] and
+//! [`check_for_updates`]).
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -81,7 +78,7 @@ struct PreferencesMini {
 
 impl Default for PreferencesMini {
     fn default() -> Self {
-        // Matches the Tauri shell's `NotificationPreferences::default()`.
+        // Matches `views::settings::state::NotificationPreferences::default()`.
         Self {
             show_recording_started: false,
             show_recording_stopped: false,
@@ -119,10 +116,9 @@ impl Default for SettingsMini {
 // ============================================================================
 
 /// Whether `kind` should be shown given `settings` — consent, system
-/// permission, manual DND, and the per-event-type toggle, mirroring
-/// `NotificationManager::should_show_notification` (minus the system DND
-/// check, which needs a live D-Bus query and stays in [`maybe_notify`]).
-/// `Kind::Test` always shows, matching the Tauri manager.
+/// permission, manual DND, and the per-event-type toggle (the system DND
+/// check needs a live D-Bus query and stays in [`maybe_notify`]).
+/// `Kind::Test` always shows.
 fn should_notify(settings: &SettingsMini, kind: &Kind) -> bool {
     if matches!(kind, Kind::Test) {
         return true;
@@ -144,9 +140,7 @@ fn should_notify(settings: &SettingsMini, kind: &Kind) -> bool {
     }
 }
 
-/// Title/body pair for a notification kind, mirroring
-/// `frontend/src-tauri/src/notifications/types.rs`'s `Notification::*`
-/// constructors.
+/// Title/body pair for a notification kind.
 fn notification_text(kind: &Kind) -> (&'static str, String) {
     match kind {
         Kind::Started => (
@@ -374,37 +368,145 @@ fn due_reminders(
 
 /// Background loop that reads upcoming calendar events every ~45s and fires
 /// one reminder per event, `meeting_reminder_minutes` before its start,
-/// de-duplicated per event id for the process lifetime. Dead in the Tauri
-/// app (`show_meeting_reminder` is a command nothing ever calls) — this is
-/// the real implementation. Call once, after the main window opens.
+/// de-duplicated per event id for the process lifetime. Call once, after
+/// the main window opens.
+///
+/// Each reminder offers the event's pre-meeting brief (issue #84): an
+/// "Open brief" action button when the notification server supports
+/// actions, and clicking the notification itself opens it too. Either
+/// raises Parley on the Brief page for that event.
 pub fn start_meeting_reminder_loop(cx: &mut App) {
     let services = AppServices::global(cx);
     let io = services.io.clone();
     let db = services.db.clone();
 
-    io.spawn(async move {
+    cx.spawn(async move |cx| {
         let mut already_notified: HashSet<String> = HashSet::new();
         loop {
             let pool = db.read().unwrap().as_ref().map(|db| db.pool().clone());
             if let Some(pool) = pool {
-                reminder_tick(pool, &mut already_notified).await;
+                let tick = io
+                    .spawn(async move {
+                        let due = reminder_tick(pool, &mut already_notified).await;
+                        (already_notified, due)
+                    })
+                    .await;
+                let due = match tick {
+                    Ok((notified, due)) => {
+                        already_notified = notified;
+                        due
+                    }
+                    Err(e) => {
+                        log::warn!("meeting reminder tick panicked: {}", e);
+                        already_notified = HashSet::new();
+                        Vec::new()
+                    }
+                };
+                for reminder in due {
+                    let io = io.clone();
+                    cx.spawn(async move |cx| {
+                        let event_id = reminder.event_id.clone();
+                        let response = io
+                            .spawn(async move {
+                                tokio::task::spawn_blocking(move || show_reminder_blocking(&reminder))
+                                    .await
+                                    .unwrap_or(ReminderResponse::Dismissed)
+                            })
+                            .await
+                            .unwrap_or(ReminderResponse::Dismissed);
+                        if response == ReminderResponse::OpenBrief {
+                            let _ = cx.update(|cx| {
+                                crate::tray::open_parley(cx);
+                                crate::shell::navigate(crate::shell::Route::Brief(event_id), cx);
+                            });
+                        }
+                    })
+                    .detach();
+                }
             }
-            tokio::time::sleep(Duration::from_secs(45)).await;
+            cx.background_executor().timer(Duration::from_secs(45)).await;
         }
+    })
+    .detach();
+}
+
+/// A reminder that's due now.
+#[derive(Debug, Clone, PartialEq)]
+struct DueReminder {
+    event_id: String,
+    minutes: u64,
+    title: Option<String>,
+}
+
+/// What the user did with a meeting reminder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReminderResponse {
+    /// "Open brief", or a click on the notification body.
+    OpenBrief,
+    Dismissed,
+}
+
+/// How long a reminder stays up (servers may ignore this).
+const REMINDER_TIMEOUT_MS: u32 = 10 * 60 * 1000;
+
+/// Show a reminder and, when the server supports actions, wait for the user
+/// to act on it. Blocking (D-Bus): run on a blocking thread.
+fn show_reminder_blocking(reminder: &DueReminder) -> ReminderResponse {
+    let supports_actions = notify_rust::get_capabilities()
+        .map(|caps| caps.iter().any(|c| c == "actions"))
+        .unwrap_or(false);
+    let (summary, body) = notification_text(&Kind::MeetingReminder {
+        minutes: reminder.minutes,
+        title: reminder.title.clone(),
     });
+
+    let mut notification = notify_rust::Notification::new();
+    notification.appname("Parley").summary(summary);
+    if supports_actions {
+        notification
+            .body(&format!("{body}. Open the brief to catch up on past meetings."))
+            .timeout(notify_rust::Timeout::Milliseconds(REMINDER_TIMEOUT_MS))
+            .action("default", "Open brief")
+            .action("brief", "Open brief");
+    } else {
+        notification.body(&body);
+    }
+    let handle = match notification.show() {
+        Ok(handle) => handle,
+        Err(e) => {
+            log::warn!("failed to show meeting reminder: {}", e);
+            return ReminderResponse::Dismissed;
+        }
+    };
+    if !supports_actions {
+        return ReminderResponse::Dismissed;
+    }
+    let mut response = ReminderResponse::Dismissed;
+    handle.wait_for_action(|action| {
+        response = reminder_response(action);
+    });
+    response
+}
+
+fn reminder_response(action: &str) -> ReminderResponse {
+    match action {
+        "brief" | "default" => ReminderResponse::OpenBrief,
+        _ => ReminderResponse::Dismissed,
+    }
 }
 
 /// Real body of the reminder tick, taking the pool directly (used by
 /// [`start_meeting_reminder_loop`], separated out so it's callable/testable
-/// without a live `App`/`Io`).
-async fn reminder_tick(pool: sqlx::SqlitePool, already_notified: &mut HashSet<String>) {
+/// without a live `App`/`Io`). Returns the reminders to show now; their
+/// event ids are added to `already_notified`.
+async fn reminder_tick(pool: sqlx::SqlitePool, already_notified: &mut HashSet<String>) -> Vec<DueReminder> {
     let settings = load_settings(Some(pool.clone())).await;
     if !settings.notification_preferences.show_meeting_reminders {
-        return;
+        return Vec::new();
     }
     let reminder_minutes = &settings.notification_preferences.meeting_reminder_minutes;
     if reminder_minutes.is_empty() {
-        return;
+        return Vec::new();
     }
     let max_minutes = *reminder_minutes.iter().max().unwrap_or(&0);
 
@@ -414,7 +516,7 @@ async fn reminder_tick(pool: sqlx::SqlitePool, already_notified: &mut HashSet<St
         Ok(events) => events,
         Err(e) => {
             log::warn!("meeting reminder loop: failed to list upcoming events: {}", e);
-            return;
+            return Vec::new();
         }
     };
     let upcoming: Vec<UpcomingEvent> = events
@@ -428,11 +530,12 @@ async fn reminder_tick(pool: sqlx::SqlitePool, already_notified: &mut HashSet<St
         .collect();
 
     let due = due_reminders(&upcoming, now, reminder_minutes, already_notified);
-    for (id, minutes, title) in due {
-        already_notified.insert(id);
-        let (event_title, body) = notification_text(&Kind::MeetingReminder { minutes, title });
-        show(event_title, body).await;
-    }
+    due.into_iter()
+        .map(|(event_id, minutes, title)| {
+            already_notified.insert(event_id.clone());
+            DueReminder { event_id, minutes, title }
+        })
+        .collect()
 }
 
 // ============================================================================
@@ -461,9 +564,8 @@ fn is_newer(current: &str, latest_tag: &str) -> Result<bool, String> {
 }
 
 /// Check GitHub for the latest release and show a notification: "Parley
-/// X.Y.Z is available", "You're up to date", or a friendly error. Dead in
-/// the Tauri app (the "Check for updates" tray item dispatches a JS event
-/// nothing listens to) — this is the real implementation. No auto-install.
+/// X.Y.Z is available", "You're up to date", or a friendly error. No
+/// auto-install.
 pub fn check_for_updates(cx: &mut App) {
     let io = AppServices::global(cx).io.clone();
     io.spawn(async move {
@@ -591,7 +693,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_the_tauri_shell_defaults() {
+    fn defaults_match_the_settings_page_defaults() {
         let settings = SettingsMini::default();
         let p = &settings.notification_preferences;
         assert!(!p.show_recording_started);
@@ -644,6 +746,13 @@ mod tests {
         already.insert("e1".to_string());
         let due = due_reminders(&events, now, &[15, 5], &already);
         assert!(due.is_empty());
+    }
+
+    #[test]
+    fn reminder_actions_open_the_brief() {
+        assert_eq!(reminder_response("brief"), ReminderResponse::OpenBrief);
+        assert_eq!(reminder_response("default"), ReminderResponse::OpenBrief);
+        assert_eq!(reminder_response("__closed"), ReminderResponse::Dismissed);
     }
 
     #[test]

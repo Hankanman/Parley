@@ -1,8 +1,9 @@
 //! Parley desktop app on GPUI. Links `parley-core` directly — no webview,
-//! no IPC. Startup and shutdown are shared with the Tauri shell through
+//! no IPC. The UI-independent startup and shutdown sequence lives in
 //! `parley_core::bootstrap`.
 
 mod app_state;
+mod bookmark;
 mod core_events;
 mod crash_log;
 mod fonts;
@@ -45,8 +46,8 @@ fn main() {
     let (sink, events_rx) = core_events::channel();
     let sink: SharedEventSink = Arc::new(sink);
 
-    // Same order as the Tauri shell: paths, then the database (blocking, so
-    // everything after it sees the pool), then background init with the pool.
+    // Paths first, then the database (blocking, so everything after it sees
+    // the pool), then background init with the pool.
     bootstrap::init_paths();
     let db = match io.block_on(bootstrap::prepare_database()) {
         Ok(StartupOutcome::Initialized(db)) => Some(db),
@@ -70,8 +71,7 @@ fn main() {
     }
     // Same slot `spawn_background_init` pre-warms above — the Settings
     // page's built-in-AI model manager (`views/settings/summary.rs`) reads
-    // and writes through this, exactly like the Tauri shell's
-    // `tauri::State<ModelManagerState>`.
+    // and writes through this via `AppServices::builtin_manager`.
     let builtin_manager = parley_core::summary::summary_engine::ModelManagerState(model_manager);
     // `AppServices::set_db` fills this in later, without a restart, once
     // first-launch onboarding creates the database (see `root.rs` /
@@ -99,6 +99,7 @@ fn main() {
     app.run(move |cx| {
         gpui_kit::init(cx);
         zorite_editor::bind_keys(cx);
+        bookmark::install(cx);
         // After `gpui_kit::init` (which sets the Theme global), before any
         // text is laid out.
         fonts::apply_system_mono_font(cx);
@@ -145,8 +146,10 @@ fn main() {
     drop(db_guard);
     log::info!("Application cleanup complete");
 
-    // Exit immediately, skipping C/C++ static destructors — same reason as
-    // the Tauri shell (GPU driver / whisper.cpp teardown can crash on exit).
+    // Exit immediately, skipping C/C++ static destructors: ggml's
+    // CUDA/Vulkan/HIP finalizers race the GPU driver's own atexit teardown
+    // and can abort() on exit. Everything that matters (recording, DB
+    // checkpoint, sidecar, Whisper model) was already shut down above.
     unsafe { libc::_exit(0) };
 }
 

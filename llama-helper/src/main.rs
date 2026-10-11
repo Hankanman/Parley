@@ -11,8 +11,9 @@ use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel};
-// Protocol messages (JSON over stdin/stdout) are shared with the Tauri app
-// via the llama-protocol crate so the two ends can't drift apart.
+// Protocol messages (JSON over stdin/stdout) are shared with the app's
+// summary engine (`parley-core`'s `summary_engine::sidecar`) via the
+// llama-protocol crate so the two ends can't drift apart.
 use llama_protocol::{Request, Response};
 
 // ============================================================================
@@ -197,6 +198,7 @@ impl ModelState {
         top_k: i32,
         top_p: f32,
         stop_tokens: Vec<String>,
+        json_schema: Option<String>,
     ) -> Result<String> {
         let start_time = Instant::now();
         let model = self.model.as_ref().context("Model not loaded")?;
@@ -255,9 +257,26 @@ impl ModelState {
         // Build the sampler chain ONCE for the whole generation — the chain
         // (including the dist sampler's RNG) is stateful and designed to be
         // reused across tokens; rebuilding it per token wastes work.
-        let sampler = if temperature <= 0.0 {
+        let mut samplers: Vec<LlamaSampler> = Vec::with_capacity(5);
+
+        // Optional JSON-schema constraint: converted to a GBNF grammar and
+        // placed FIRST in the chain, so every later sampler only ever sees
+        // tokens that keep the output valid against the schema.
+        if let Some(schema) = json_schema.as_deref() {
+            let grammar = llama_cpp_2::json_schema_to_grammar(schema)
+                .map_err(|e| anyhow::anyhow!("invalid JSON schema: {e}"))?;
+            let grammar_sampler = LlamaSampler::grammar(model, &grammar, "root")
+                .map_err(|e| anyhow::anyhow!("failed to build grammar sampler: {e}"))?;
+            eprintln!(
+                "🧩 Constraining output to a JSON schema ({} byte grammar)",
+                grammar.len()
+            );
+            samplers.push(grammar_sampler);
+        }
+
+        if temperature <= 0.0 {
             // Greedy sampling for temp <= 0
-            LlamaSampler::chain_simple([LlamaSampler::greedy()])
+            samplers.push(LlamaSampler::greedy());
         } else {
             // Random sampling with temperature/top_k/top_p
             let seed = SystemTime::now()
@@ -265,13 +284,14 @@ impl ModelState {
                 .unwrap_or_default()
                 .as_millis() as u32;
 
-            LlamaSampler::chain_simple([
+            samplers.extend([
                 LlamaSampler::top_k(top_k),
                 LlamaSampler::top_p(top_p, 1),
                 LlamaSampler::temp(temperature),
                 LlamaSampler::dist(seed),
-            ])
-        };
+            ]);
+        }
+        let sampler = LlamaSampler::chain_simple(samplers);
         let mut sampler = pin!(sampler);
 
         // Longest stop token, for bounding the per-token stop scan to the
@@ -294,7 +314,10 @@ impl ModelState {
             }
 
             let token = sampler.as_mut().sample(&ctx, batch.n_tokens() - 1);
-            sampler.as_mut().accept(token);
+            // No explicit `accept`: `sample` (llama_sampler_sample) already
+            // accepts the token into every sampler in the chain. Accepting
+            // twice advances stateful samplers twice — fatal for the grammar
+            // sampler (GGML_ASSERT(!stacks.empty()) in llama-grammar.cpp).
 
             if model.is_eog_token(token) {
                 eprintln!(
@@ -407,7 +430,7 @@ fn send_response(response: &Response) -> Result<()> {
 
 fn main() -> Result<()> {
     // Rust starts with SIGPIPE ignored, so writing our JSON response to a
-    // stdout whose reader (the Tauri app) has gone away returns EPIPE and
+    // stdout whose reader (the Parley app) has gone away returns EPIPE and
     // `println!` panics with "failed printing to stdout: Broken pipe". Restore
     // the default disposition so a vanished parent just terminates us quietly —
     // the idiomatic behavior for a pipe-writing helper. Safe: this is the first
@@ -455,6 +478,7 @@ fn main() -> Result<()> {
                         top_k,
                         top_p,
                         stop_tokens,
+                        json_schema,
                     }) => {
                         let max_tokens = max_tokens.unwrap_or(512);
                         let context_size = context_size.unwrap_or(2048);
@@ -485,6 +509,7 @@ fn main() -> Result<()> {
                             top_k,
                             top_p,
                             stop_tokens,
+                            json_schema,
                         ) {
                             Ok(text) => {
                                 send_response(&Response::Response { text, error: None })?;

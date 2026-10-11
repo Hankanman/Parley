@@ -139,7 +139,7 @@ impl EchoDedup {
     ///   same-content duplicate line behind. Fixing the latter would require
     ///   either delaying emission of every segment to let the "better" copy
     ///   win first (added latency on *all* segments, not just echoes) or a
-    ///   retraction event across the Tauri boundary (more surface area for
+    ///   retraction event to the UI (more surface area for
     ///   a v1 whose goal is suppressing the common case cheaply). Neither
     ///   tradeoff was judged worth it yet.
     ///

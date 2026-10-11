@@ -1,15 +1,14 @@
 //! Pure helpers for the Import Audio dialog: extension filtering, dropped-path
-//! selection, formatting. Mirrors `frontend/src/components/ImportAudio/` and
-//! `frontend/src/hooks/useImportAudio.ts` (duration/size formatting,
-//! finding an audio file among dropped paths).
+//! selection, formatting (duration/size formatting, finding an audio file
+//! among dropped paths).
 
 use std::path::{Path, PathBuf};
 
 use parley_core::audio::constants::AUDIO_EXTENSIONS;
 
-/// Whitelisted languages offered in the dialog (a trimmed mirror of
-/// `frontend/src/constants/languages.ts` — full ISO 639-1 coverage isn't
-/// needed for a first pass; `"auto"` matches the React default).
+/// Whitelisted languages offered in the dialog (a trimmed list — full
+/// ISO 639-1 coverage isn't needed for a first pass; `"auto"` is the
+/// default).
 pub const LANGUAGES: &[(&str, &str)] = &[
     ("auto", "Auto Detect"),
     ("en", "English"),

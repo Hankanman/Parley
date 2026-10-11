@@ -1,7 +1,7 @@
 //! Generic model-listing client shared by the OpenAI-shaped LLM providers.
 //!
 //! `openai`, `anthropic`, `groq`, and `openrouter` all expose a "list available
-//! chat models" Tauri command that does the same five things: check an
+//! chat models" call that does the same five things: check an
 //! in-memory cache with a TTL, skip the network call entirely when no API key
 //! is configured (for providers that require one), issue a timeout-bounded
 //! GET request with a provider-specific auth header, parse the

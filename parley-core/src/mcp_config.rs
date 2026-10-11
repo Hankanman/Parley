@@ -3,7 +3,7 @@
 //! `parley-mcp` is a separate binary that an external AI client (Claude
 //! Desktop, Claude Code) spawns by absolute path and which reads this app's
 //! SQLite database directly — see the `parley-mcp` crate. It is deliberately
-//! *not* a Tauri sidecar and *not* bundled into the app (an absolute path into
+//! *not* a sidecar and *not* bundled into the app (an absolute path into
 //! an AppImage mount is not stable across launches), so the app cannot spawn
 //! it; all it can do is help the user register it. This module backs the
 //! Settings → Integrations panel: it reports where the database lives and does
@@ -28,8 +28,7 @@ const MCP_BIN_ENV: &str = "PARLEY_MCP_BIN";
 
 /// What the Integrations panel needs to render MCP-client config.
 ///
-/// Fields are `pub` (rather than accessed only through `Serialize`/JSON) so
-/// a non-Tauri shell — the GPUI Integrations settings page — can read them
+/// Fields are `pub` so the GPUI Integrations settings page can read them
 /// directly without round-tripping through JSON.
 #[derive(Debug, Clone, Serialize)]
 pub struct McpServerInfo {
@@ -119,8 +118,6 @@ fn locate_binary() -> Option<PathBuf> {
 
 /// Report the DB path plus a best-effort location for the `parley-mcp` binary
 /// so the Integrations settings panel can render client-registration config.
-/// Core logic behind the `get_mcp_server_info` Tauri command in
-/// `mcp_config_commands.rs`.
 pub fn get_mcp_server_info() -> Result<McpServerInfo, String> {
     let db_path = crate::paths::app_data_dir()?.join("meeting_minutes.sqlite");
 
@@ -141,8 +138,7 @@ pub fn get_mcp_server_info() -> Result<McpServerInfo, String> {
 }
 
 /// Open the folder containing the `parley-mcp` binary in the system file
-/// manager, so the user can grab its path or confirm it's there. Core logic
-/// behind the `reveal_mcp_binary` Tauri command in `mcp_config_commands.rs`.
+/// manager, so the user can grab its path or confirm it's there.
 pub fn reveal_mcp_binary(path: String) -> Result<(), String> {
     let path = PathBuf::from(&path);
     let dir = if path.is_file() {

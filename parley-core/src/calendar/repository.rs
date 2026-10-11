@@ -92,6 +92,18 @@ impl CalendarRepository {
     /// authoritative for the source, so a clean replace is safer than
     /// trying to diff individual occurrences (the ICS spec lets feeds
     /// rewrite UIDs / restructure recurrence sets at any time).
+    ///
+    /// Two things survive the replace:
+    ///
+    /// - **Events a meeting is linked to** (`meetings.calendar_event_id`)
+    ///   are never deleted, even once they've aged out of the feed's
+    ///   window (recurring occurrences older than a week do): they're the
+    ///   meeting's record of its series (ICS UID) and attendees, which
+    ///   pre-meeting briefs and the series filter rely on. Still-listed ones
+    ///   are updated in place by the upsert below.
+    /// - **Row ids**: an occurrence that was already stored keeps its id
+    ///   (matched on UID + recurrence id), so links, reminder de-duplication
+    ///   and an open brief don't break on every refresh.
     pub async fn replace_events(
         pool: &SqlitePool,
         source_id: &str,
@@ -99,18 +111,34 @@ impl CalendarRepository {
     ) -> Result<usize, sqlx::Error> {
         let mut tx = pool.begin().await?;
 
-        sqlx::query("DELETE FROM calendar_events WHERE source_id = ?")
-            .bind(source_id)
-            .execute(&mut *tx)
-            .await?;
+        let existing: Vec<(String, String, Option<String>)> =
+            sqlx::query_as("SELECT id, ics_uid, recurrence_id FROM calendar_events WHERE source_id = ?")
+                .bind(source_id)
+                .fetch_all(&mut *tx)
+                .await?;
+        let existing_ids: std::collections::HashMap<(String, String), String> = existing
+            .into_iter()
+            .map(|(id, uid, recurrence)| ((uid, recurrence.unwrap_or_default()), id))
+            .collect();
+
+        sqlx::query(
+            "DELETE FROM calendar_events WHERE source_id = ?
+               AND id NOT IN (SELECT calendar_event_id FROM meetings WHERE calendar_event_id IS NOT NULL)",
+        )
+        .bind(source_id)
+        .execute(&mut *tx)
+        .await?;
 
         let now = Utc::now().to_rfc3339();
         let mut inserted = 0usize;
         for occ in occurrences {
-            let id = Uuid::new_v4().to_string();
+            let recurrence_id = occ.recurrence_id.map(|dt| dt.to_rfc3339());
+            let id = existing_ids
+                .get(&(occ.master.ics_uid.clone(), recurrence_id.clone().unwrap_or_default()))
+                .cloned()
+                .unwrap_or_else(|| Uuid::new_v4().to_string());
             let attendees_json =
                 serde_json::to_string(&occ.master.attendees).unwrap_or_else(|_| "[]".to_string());
-            let recurrence_id = occ.recurrence_id.map(|dt| dt.to_rfc3339());
 
             sqlx::query(
                 "INSERT INTO calendar_events (
@@ -185,34 +213,6 @@ impl CalendarRepository {
             .collect())
     }
 
-    pub async fn find_event_for_now(
-        pool: &SqlitePool,
-    ) -> Result<Option<CalendarEvent>, sqlx::Error> {
-        let now = Utc::now();
-        // Tolerate +/- 5 minutes so a slightly-late record-start still picks
-        // up the current event.
-        let from = now - chrono::Duration::minutes(15);
-        let to = now + chrono::Duration::minutes(5);
-
-        let row = sqlx::query_as::<_, CalendarEventRow>(
-            "SELECT id, source_id, ics_uid, recurrence_id, summary, description,
-                    location, organizer_name, organizer_email, start_at, end_at,
-                    is_all_day, attendees_json, raw_ics, fetched_at
-             FROM calendar_events
-             WHERE is_all_day = 0
-               AND start_at <= ?
-               AND end_at >= ?
-             ORDER BY start_at DESC
-             LIMIT 1",
-        )
-        .bind(to.to_rfc3339())
-        .bind(from.to_rfc3339())
-        .fetch_optional(pool)
-        .await?;
-
-        Ok(row.and_then(|r| CalendarEvent::try_from(r).ok()))
-    }
-
     pub async fn get_event(
         pool: &SqlitePool,
         event_id: &str,
@@ -264,5 +264,92 @@ impl CalendarRepository {
         .await?;
 
         Ok(row.and_then(|r| CalendarEvent::try_from(r).ok()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::calendar::models::ParsedEvent;
+    use crate::database::repositories::meeting::MeetingsRepository;
+    use chrono::TimeZone;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    fn occ(uid: &str, day: u32) -> OccurrenceForUpsert {
+        let start = Utc.with_ymd_and_hms(2026, 9, day, 10, 0, 0).unwrap();
+        OccurrenceForUpsert {
+            master: ParsedEvent {
+                ics_uid: uid.into(),
+                recurrence_id: None,
+                summary: Some(format!("Event {uid}")),
+                description: None,
+                location: None,
+                organizer_name: None,
+                organizer_email: None,
+                start_at: start,
+                end_at: start + chrono::Duration::hours(1),
+                is_all_day: false,
+                attendees: vec![],
+                rrule_block: None,
+                raw_ics: String::new(),
+            },
+            start_at: start,
+            end_at: start + chrono::Duration::hours(1),
+            recurrence_id: Some(start),
+        }
+    }
+
+    async fn ids(pool: &SqlitePool) -> Vec<(String, String)> {
+        sqlx::query_as("SELECT ics_uid, id FROM calendar_events ORDER BY start_at")
+            .fetch_all(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn refresh_keeps_ids_and_linked_events() {
+        let pool = pool().await;
+        let source = CalendarRepository::add_source(&pool, "https://example.com/a.ics", None)
+            .await
+            .unwrap();
+        CalendarRepository::replace_events(&pool, &source.id, &[occ("old", 1), occ("standup", 20)])
+            .await
+            .unwrap();
+        let before = ids(&pool).await;
+
+        MeetingsRepository::create_recording_meeting(&pool, "m1", "Old", None)
+            .await
+            .unwrap();
+        CalendarRepository::link_meeting(&pool, "m1", Some(&before[0].1))
+            .await
+            .unwrap();
+
+        // The linked occurrence has aged out of the feed's window.
+        CalendarRepository::replace_events(&pool, &source.id, &[occ("standup", 20), occ("new", 25)])
+            .await
+            .unwrap();
+        let after = ids(&pool).await;
+        assert_eq!(after.len(), 3);
+        assert_eq!(after[0], before[0], "linked event kept, with its id");
+        assert_eq!(after[1], before[1], "re-listed event keeps its id");
+        assert_eq!(after[2].0, "new");
+        assert!(CalendarRepository::get_event_for_meeting(&pool, "m1")
+            .await
+            .unwrap()
+            .is_some());
+
+        // Unlinked events not in the feed are still dropped.
+        CalendarRepository::replace_events(&pool, &source.id, &[]).await.unwrap();
+        assert_eq!(ids(&pool).await, vec![before[0].clone()]);
     }
 }

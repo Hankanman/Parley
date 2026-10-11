@@ -8,8 +8,8 @@ use tracing::{debug, info, warn};
 // Global storage for the user's custom templates directory path
 static CUSTOM_TEMPLATES_DIR: Lazy<RwLock<Option<PathBuf>>> = Lazy::new(|| RwLock::new(None));
 
-/// Set the user's custom templates directory (called once at app startup,
-/// from Tauri's app-data dir — the same root every other user-data path in
+/// Set the user's custom templates directory (called once at app startup by
+/// `bootstrap::init_paths`, under `paths::app_data_dir()` — the same root every other user-data path in
 /// the app uses, rather than a second ad-hoc location).
 pub fn set_custom_templates_dir(path: PathBuf) {
     info!("Custom templates directory set to: {:?}", path);

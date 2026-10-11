@@ -7,7 +7,7 @@
 //! Installing ffmpeg (a network download + archive unpack) is a
 //! separate, explicit, async operation: [`ensure_ffmpeg_installed`].
 //! This keeps a `find_ffmpeg_path()` call from ever blocking a caller
-//! (e.g. an async Tauri command) on a synchronous download, and keeps a
+//! (e.g. a UI event handler) on a synchronous download, and keeps a
 //! transient network failure from poisoning the process for its
 //! lifetime — only a *successful* resolution is ever cached, so
 //! installing ffmpeg later (via [`ensure_ffmpeg_installed`] or by hand)
@@ -248,7 +248,7 @@ fn install_ffmpeg_blocking() -> anyhow::Result<PathBuf> {
     Ok(installed)
 }
 
-/// Status payload for the `ffmpeg_status` Tauri command — cheap and
+/// Status payload returned by [`ffmpeg_status`] — cheap and
 /// synchronous, like [`find_ffmpeg_path`]; never downloads anything.
 #[derive(Debug, Clone, Serialize)]
 pub struct FfmpegStatus {
@@ -260,8 +260,9 @@ pub struct FfmpegStatus {
 }
 
 /// Report whether ffmpeg is currently available and, if so, where it was
-/// found (core logic behind the `ffmpeg_status` Tauri command in
-/// `ffmpeg_commands.rs`). Never downloads anything.
+/// found. Never downloads anything. Nothing in the app calls this today
+/// (it backed a status command in the retired Tauri shell); kept as a
+/// ready-made status query for a future settings UI.
 pub fn ffmpeg_status() -> FfmpegStatus {
     match find_ffmpeg_path_with_source() {
         Some((path, source)) => FfmpegStatus {

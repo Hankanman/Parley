@@ -52,6 +52,10 @@ pub struct ChatRequest {
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
+    /// OpenAI-style `response_format` (JSON mode / JSON-schema structured
+    /// output). Only set for [`generate_structured`] calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<serde_json::Value>,
 }
 
 // Generic structure for OpenAI-compatible API chat responses
@@ -77,6 +81,12 @@ pub struct ClaudeRequest {
     pub max_tokens: u32,
     pub system: String,
     pub messages: Vec<ChatMessage>,
+    /// Tool definitions — structured output on Claude is a single forced
+    /// tool whose `input_schema` is the response schema.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<serde_json::Value>,
 }
 
 // Claude-specific response structure
@@ -85,9 +95,25 @@ pub struct ClaudeChatResponse {
     pub content: Vec<ClaudeChatContent>,
 }
 
+/// One Claude content block: `text` for prose, `tool_use` (with `input`)
+/// for the forced structured-output tool.
 #[derive(Deserialize, Debug)]
 pub struct ClaudeChatContent {
-    pub text: String,
+    #[serde(rename = "type", default)]
+    pub kind: String,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub input: Option<serde_json::Value>,
+}
+
+/// A JSON Schema a structured call's response must satisfy.
+#[derive(Debug, Clone, Copy)]
+pub struct ResponseSchema<'a> {
+    /// Short identifier (`[a-zA-Z0-9_-]`) — OpenAI's `json_schema.name` and
+    /// Claude's tool name.
+    pub name: &'a str,
+    pub schema: &'a serde_json::Value,
 }
 
 /// LLM Provider enumeration for multi-provider support
@@ -310,6 +336,60 @@ pub async fn generate_summary(
     cancellation_token: Option<&CancellationToken>,
     on_delta: Option<StreamSink<'_>>,
 ) -> Result<String, String> {
+    generate_completion(
+        config,
+        system_prompt,
+        user_prompt,
+        None,
+        cancellation_token,
+        on_delta,
+    )
+    .await
+}
+
+/// Like [`generate_summary`], but asks the provider to constrain its output
+/// to `schema`:
+///
+/// - **Built-in AI**: the sidecar compiles the schema to a llama.cpp GBNF
+///   grammar, so sampling can only produce matching JSON.
+/// - **OpenAI / OpenRouter / Ollama / custom OpenAI-compatible**:
+///   `response_format: {type: "json_schema", strict: true}` (Ollama's `/v1`
+///   endpoint maps this onto its native `format` schema).
+/// - **Groq**: JSON mode (`json_object`) — schema support varies by model.
+/// - **Claude**: a single forced tool whose `input_schema` is the schema;
+///   the tool call's `input` is returned as JSON text.
+///
+/// Returns the raw JSON text. It is NOT validated here — callers parse and
+/// validate it, and must treat it as untrusted (transcripts can steer it).
+/// An error means the provider rejected the request (e.g. a model without
+/// structured-output support); callers fall back to free-form generation.
+pub async fn generate_structured(
+    config: &LlmConfig,
+    system_prompt: &str,
+    user_prompt: &str,
+    schema: ResponseSchema<'_>,
+    cancellation_token: Option<&CancellationToken>,
+    on_delta: Option<StreamSink<'_>>,
+) -> Result<String, String> {
+    generate_completion(
+        config,
+        system_prompt,
+        user_prompt,
+        Some(schema),
+        cancellation_token,
+        on_delta,
+    )
+    .await
+}
+
+async fn generate_completion(
+    config: &LlmConfig,
+    system_prompt: &str,
+    user_prompt: &str,
+    schema: Option<ResponseSchema<'_>>,
+    cancellation_token: Option<&CancellationToken>,
+    on_delta: Option<StreamSink<'_>>,
+) -> Result<String, String> {
     if let Some(token) = cancellation_token {
         if token.is_cancelled() {
             return Err("Summary generation was cancelled".to_string());
@@ -324,6 +404,13 @@ pub async fn generate_summary(
             .as_ref()
             .ok_or_else(|| "app_data_dir is required for BuiltInAI provider".to_string())?;
 
+        let schema_text = match schema {
+            Some(s) => Some(
+                serde_json::to_string(s.schema)
+                    .map_err(|e| format!("failed to serialize response schema: {e}"))?,
+            ),
+            None => None,
+        };
         return crate::summary::summary_engine::generate_with_builtin(
             app_data_dir,
             &config.model,
@@ -331,6 +418,7 @@ pub async fn generate_summary(
             user_prompt,
             cancellation_token,
             on_delta,
+            schema_text.as_deref(),
         )
         .await
         .map_err(|e| e.to_string());
@@ -343,7 +431,9 @@ pub async fn generate_summary(
             }
         }
 
-        match send_chat_request(config, system_prompt, user_prompt, cancellation_token).await {
+        match send_chat_request(config, system_prompt, user_prompt, schema, cancellation_token)
+            .await
+        {
             Ok(text) => return Ok(text),
             Err(e) if e.retryable && attempt < MAX_ATTEMPTS => {
                 let delay = Duration::from_secs(2u64.pow(attempt - 1));
@@ -374,6 +464,7 @@ async fn send_chat_request(
     config: &LlmConfig,
     system_prompt: &str,
     user_prompt: &str,
+    schema: Option<ResponseSchema<'_>>,
     cancellation_token: Option<&CancellationToken>,
 ) -> Result<String, AttemptError> {
     let fatal = |message: String| AttemptError {
@@ -474,8 +565,16 @@ async fn send_chat_request(
             max_tokens: config.max_tokens,
             temperature: config.temperature,
             top_p: config.top_p,
+            response_format: schema.map(|s| openai_response_format(provider, s)),
         })
     } else {
+        let (tools, tool_choice) = match schema {
+            Some(s) => {
+                let (tools, choice) = claude_forced_tool(s);
+                (Some(tools), Some(choice))
+            }
+            None => (None, None),
+        };
         serde_json::json!(ClaudeRequest {
             system: system_prompt.to_string(),
             model: config.model.clone(),
@@ -483,7 +582,9 @@ async fn send_chat_request(
             messages: vec![ChatMessage {
                 role: "user".to_string(),
                 content: user_prompt.to_string(),
-            }]
+            }],
+            tools,
+            tool_choice,
         })
     };
 
@@ -552,13 +653,7 @@ async fn send_chat_request(
             .await
             .map_err(|e| fatal(format!("Failed to parse LLM response: {}", e)))?;
 
-        let content = chat_response
-            .content
-            .first()
-            .ok_or_else(|| fatal("No content in LLM response".to_string()))?
-            .text
-            .trim();
-        Ok(content.to_string())
+        claude_response_text(chat_response, schema.is_some()).map_err(fatal)
     } else {
         let chat_response = response
             .json::<ChatResponse>()
@@ -576,6 +671,60 @@ async fn send_chat_request(
     }
 }
 
+/// The OpenAI-style `response_format` for a structured call. Groq only gets
+/// JSON mode: its json_schema support is per-model and errors on the rest,
+/// while JSON mode works everywhere (the schema is also spelled out in the
+/// prompt, and the result is validated either way).
+fn openai_response_format(provider: LLMProvider, schema: ResponseSchema<'_>) -> serde_json::Value {
+    if provider == LLMProvider::Groq {
+        return serde_json::json!({ "type": "json_object" });
+    }
+    serde_json::json!({
+        "type": "json_schema",
+        "json_schema": {
+            "name": schema.name,
+            "strict": true,
+            "schema": schema.schema,
+        }
+    })
+}
+
+/// Claude structured output: one tool whose input schema is the response
+/// schema, and a `tool_choice` forcing the model to call it.
+fn claude_forced_tool(schema: ResponseSchema<'_>) -> (serde_json::Value, serde_json::Value) {
+    (
+        serde_json::json!([{
+            "name": schema.name,
+            "description": "Record the structured meeting summary.",
+            "input_schema": schema.schema,
+        }]),
+        serde_json::json!({ "type": "tool", "name": schema.name }),
+    )
+}
+
+/// Pull the answer out of a Claude response: the forced tool call's `input`
+/// (serialized back to JSON text) for structured calls, else the first text
+/// block.
+fn claude_response_text(response: ClaudeChatResponse, structured: bool) -> Result<String, String> {
+    if structured {
+        if let Some(input) = response
+            .content
+            .iter()
+            .find(|c| c.kind == "tool_use")
+            .and_then(|c| c.input.as_ref())
+        {
+            return serde_json::to_string(input)
+                .map_err(|e| format!("Failed to serialize tool input: {e}"));
+        }
+    }
+    response
+        .content
+        .iter()
+        .find_map(|c| c.text.as_deref())
+        .map(|t| t.trim().to_string())
+        .ok_or_else(|| "No content in LLM response".to_string())
+}
+
 /// Helper function to get provider name for logging
 fn provider_name(provider: &LLMProvider) -> &str {
     match provider {
@@ -586,6 +735,73 @@ fn provider_name(provider: &LLMProvider) -> &str {
         LLMProvider::BuiltInAI => "Built-in AI",
         LLMProvider::OpenRouter => "OpenRouter",
         LLMProvider::CustomOpenAI => "Custom OpenAI",
+    }
+}
+
+#[cfg(test)]
+mod structured_request_tests {
+    use super::*;
+
+    #[test]
+    fn openai_format_uses_strict_json_schema() {
+        let schema = serde_json::json!({"type": "object"});
+        let rf = openai_response_format(
+            LLMProvider::OpenAI,
+            ResponseSchema { name: "meeting_summary", schema: &schema },
+        );
+        assert_eq!(rf["type"], "json_schema");
+        assert_eq!(rf["json_schema"]["strict"], true);
+        assert_eq!(rf["json_schema"]["name"], "meeting_summary");
+        assert_eq!(rf["json_schema"]["schema"], schema);
+    }
+
+    #[test]
+    fn groq_gets_plain_json_mode() {
+        let schema = serde_json::json!({"type": "object"});
+        let rf = openai_response_format(
+            LLMProvider::Groq,
+            ResponseSchema { name: "x", schema: &schema },
+        );
+        assert_eq!(rf, serde_json::json!({"type": "json_object"}));
+    }
+
+    #[test]
+    fn claude_structured_reads_tool_input() {
+        let response: ClaudeChatResponse = serde_json::from_value(serde_json::json!({
+            "content": [
+                {"type": "text", "text": "Sure."},
+                {"type": "tool_use", "id": "t1", "name": "meeting_summary",
+                 "input": {"title": "Q3 planning"}}
+            ]
+        }))
+        .unwrap();
+        let text = claude_response_text(response, true).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&text).unwrap()["title"],
+            "Q3 planning"
+        );
+    }
+
+    #[test]
+    fn claude_plain_reads_first_text_block() {
+        let response: ClaudeChatResponse = serde_json::from_value(serde_json::json!({
+            "content": [{"type": "text", "text": "  # Title\nBody  "}]
+        }))
+        .unwrap();
+        assert_eq!(claude_response_text(response, false).unwrap(), "# Title\nBody");
+    }
+
+    #[test]
+    fn plain_requests_omit_structured_fields() {
+        let body = serde_json::json!(ChatRequest {
+            model: "m".into(),
+            messages: vec![],
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            response_format: None,
+        });
+        assert!(body.get("response_format").is_none());
     }
 }
 

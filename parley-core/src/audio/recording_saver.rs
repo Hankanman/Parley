@@ -618,7 +618,7 @@ impl RecordingSaver {
         !has_transcript_segments
     }
 
-    // in frontend/src-tauri/src/audio/recording_saver.rs
+    /// Checkpoint count and sample rate of the in-progress recording.
     pub fn get_stats(&self) -> (usize, u32) {
         if let Some(ref saver) = self.incremental_saver {
             if let Ok(guard) = saver.try_lock() {

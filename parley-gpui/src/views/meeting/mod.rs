@@ -12,7 +12,9 @@
 
 mod ask;
 mod calendar_format;
+mod followup;
 mod format;
+mod moments;
 mod insights;
 mod speaker_chip;
 
@@ -152,7 +154,7 @@ pub struct MeetingView {
     _poll_task: Option<Task<()>>,
 
     /// Available summary templates (id, name, description), loaded once at
-    /// startup — same list `list_templates` returns for the Tauri UI.
+    /// startup via `summary::templates::list_templates`.
     templates: Vec<(String, String, String)>,
     selected_template: String,
     /// Set once the user manually cycles the template picker, so the async
@@ -228,6 +230,8 @@ pub struct MeetingView {
     right_tab: RightTab,
     /// "Ask Parley" chat (see `ask.rs`).
     ask_panel: Entity<ask::AskPanel>,
+    /// Chapters & bookmarks strip above the transcript (see `moments.rs`).
+    moments_panel: Entity<moments::MomentsPanel>,
     /// Talk-time analytics (see `insights.rs`).
     insights_panel: Entity<insights::InsightsPanel>,
     /// Transcript row briefly highlighted after a citation jump.
@@ -261,6 +265,7 @@ impl MeetingView {
         });
 
         let ask_panel = cx.new(|cx| ask::AskPanel::new(window, cx));
+        let moments_panel = cx.new(|cx| moments::MomentsPanel::new(window, cx));
         let insights_panel = cx.new(|cx| insights::InsightsPanel::new(window, cx));
         let core_events = AppServices::global(cx).core_events.clone();
         let mut subscriptions = vec![cx.subscribe(&core_events, |this, _, event, cx| {
@@ -277,6 +282,15 @@ impl MeetingView {
         subscriptions.push(cx.subscribe(&ask_panel, |this, _, event: &ask::AskPanelEvent, cx| {
             let ask::AskPanelEvent::JumpTo(seconds) = event;
             this.jump_to_time(*seconds, cx);
+        }));
+        subscriptions.push(cx.subscribe(&moments_panel, |this, _, event: &moments::MomentsEvent, cx| {
+            let moments::MomentsEvent::JumpTo(seconds) = event;
+            this.jump_to_time(*seconds, cx);
+        }));
+        // Chapter/bookmark markers change transcript row heights.
+        subscriptions.push(cx.observe(&moments_panel, |this, _, cx| {
+            this.transcript_list_state.remeasure();
+            cx.notify();
         }));
         subscriptions.push(cx.subscribe(&insights_panel, |this, _, event: &insights::InsightsPanelEvent, cx| {
             let insights::InsightsPanelEvent::JumpTo(seconds) = event;
@@ -353,6 +367,7 @@ impl MeetingView {
             _summary_reveal_task: None,
             right_tab: RightTab::Summary,
             ask_panel,
+            moments_panel,
             insights_panel,
             highlighted_segment: None,
             _highlight_task: None,
@@ -447,12 +462,13 @@ impl MeetingView {
         self.pending_jump = None;
         self.summary_state.update(cx, |state, cx| state.set_text("", cx));
         self.ask_panel.update(cx, |panel, cx| panel.set_meeting(id.clone(), cx));
+        self.moments_panel.update(cx, |panel, cx| panel.set_meeting(id.clone(), cx));
         let insights_visible = self.right_tab == RightTab::Insights;
         self.insights_panel.update(cx, |panel, cx| panel.set_meeting(id.clone(), insights_visible, cx));
         cx.notify();
 
         let Some(pool) = AppServices::global(cx).pool() else {
-            self.load_error = Some("No database — complete onboarding in the Tauri app first.".into());
+            self.load_error = Some("No database yet — finish onboarding first.".into());
             self.transcripts_loading = false;
             return;
         };
@@ -493,7 +509,7 @@ impl MeetingView {
         }
 
         // Existing summary (if any), and resume polling if one is already
-        // in flight (e.g. started from the Tauri UI).
+        // in flight (e.g. started before navigating away and back).
         self.refresh_summary(generation, cx);
         self.load_calendar_event(generation, cx);
         self.load_notes(generation, cx);
@@ -796,12 +812,24 @@ impl MeetingView {
         struct Delta {
             meeting_id: String,
             delta: String,
+            /// Discard the preview streamed so far: the core is about to
+            /// re-stream (a structured-summary retry or the Markdown
+            /// fallback).
+            #[serde(default)]
+            reset: bool,
         }
         let Some(payload) = event.decode::<Delta>() else {
             return;
         };
         if self.meeting_id.as_deref() != Some(payload.meeting_id.as_str()) {
             return;
+        }
+        if payload.reset {
+            self.summary_has_content = false;
+            self.summary_markdown.clear();
+            self.summary_reveal_pending.clear();
+            self.summary_state.update(cx, |state, cx| state.set_text("", cx));
+            cx.notify();
         }
         if payload.delta.is_empty() {
             return;
@@ -927,10 +955,14 @@ impl MeetingView {
             let saved = io
                 .spawn(async move { SummaryProcessesRepository::update_meeting_summary(&pool, &id, &value).await })
                 .await;
-            // Best-effort sidecar write, same as the Tauri save command —
-            // failures here don't fail the save, the DB is the source of truth.
+            // Best-effort `summary.md` sidecar write — failures here don't
+            // fail the save, the DB is the source of truth.
             let _ = io
-                .spawn(async move { markdown_export::write_summary_md(&pool_for_md, &id_for_md, &value_for_md).await })
+                .spawn(async move {
+                    let _ = markdown_export::write_summary_md(&pool_for_md, &id_for_md, &value_for_md).await;
+                    // Keep the export-folder note (if enabled) in step with edits.
+                    parley_core::export::folder_sync::sync_after_summary(&pool_for_md, &id_for_md).await;
+                })
                 .await;
 
             let _ = this.update(cx, |this, cx| {
@@ -1011,10 +1043,9 @@ impl MeetingView {
         .detach();
     }
 
-    /// Export, then a native save-file dialog, mirroring
-    /// `export_meeting_to_file`'s Tauri command (minus the Tauri dialog
-    /// plugin — GPUI's own `prompt_for_new_path`).
-    fn export_save(&mut self, format: &'static str, cx: &mut Context<Self>) {
+    /// Export in any format (Markdown, JSON, SRT, VTT, DOCX, PDF), then a
+    /// native save-file dialog (GPUI's `prompt_for_new_path`).
+    fn export_save(&mut self, format: parley_core::export::ExportFormat, cx: &mut Context<Self>) {
         let Some(id) = self.meeting_id.clone() else {
             return;
         };
@@ -1024,11 +1055,18 @@ impl MeetingView {
         let io = Io::global(cx);
         cx.spawn(async move |_this, cx| {
             let result = io
-                .spawn(async move { parley_core::export::build_export(&pool, &id, format).await })
+                .spawn(async move { parley_core::export::build_export_file(&pool, &id, format).await })
                 .await;
             let export = match result {
                 Ok(Ok(export)) => export,
-                _ => {
+                Ok(Err(e)) => {
+                    log::warn!("meeting: {} export failed: {e}", format.name());
+                    // Core errors here are written for people ("This
+                    // transcript has no timestamps…"), so show them.
+                    let _ = cx.update(|cx| notify(cx, Notification::error(format!("Export failed: {e}"))));
+                    return;
+                }
+                Err(_) => {
                     let _ = cx.update(|cx| notify(cx, Notification::error("Failed to export meeting")));
                     return;
                 }
@@ -1038,7 +1076,7 @@ impl MeetingView {
             let rx = cx.update(|cx| cx.prompt_for_new_path(&home, Some(&export.filename)));
             match rx.await {
                 Ok(Ok(Some(path))) => {
-                    let content = export.content;
+                    let content = export.bytes;
                     let write_result = io.spawn(async move { std::fs::write(&path, content) }).await;
                     let _ = cx.update(|cx| match write_result {
                         Ok(Ok(())) => notify(cx, Notification::success("Meeting exported")),
@@ -1054,6 +1092,44 @@ impl MeetingView {
             }
         })
         .detach();
+    }
+
+    /// The header's "Export…" button: one menu entry per save format.
+    fn render_export_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+        use parley_core::export::ExportFormat;
+
+        let view = cx.entity().downgrade();
+        Button::new("export-meeting")
+            .ghost()
+            .icon(Lucide::Download)
+            .tooltip("Export meeting…")
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                for (i, format) in [
+                    ExportFormat::Markdown,
+                    ExportFormat::Json,
+                    ExportFormat::Docx,
+                    ExportFormat::Pdf,
+                    ExportFormat::Srt,
+                    ExportFormat::Vtt,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    // Separate the documents from the transcript-only subtitles.
+                    if i == 4 {
+                        menu = menu.separator();
+                    }
+                    let view = view.clone();
+                    menu = menu.item(PopupMenuItem::new(format!("{}…", format.label())).on_click(
+                        move |_, _, cx| {
+                            let _ = view.update(cx, |this, cx| this.export_save(format, cx));
+                        },
+                    ));
+                }
+                menu
+            })
     }
 
     // ---- Retranscription -----------------------------------------------------
@@ -1227,9 +1303,8 @@ impl MeetingView {
     }
 
     // ---- Calendar event link -------------------------------------------
-    // Mirrors `CalendarEventPanel.tsx` / `CalendarEventPicker.tsx`, calling
-    // the same core fns the Tauri `calendar_get_event_for_meeting` /
-    // `calendar_list_events` / `calendar_link_meeting` commands wrap.
+    // Show the linked calendar event and let the user pick or clear one,
+    // via `CalendarRepository` and `calendar::service::link_meeting_with_snapshot`.
 
     fn load_calendar_event(&mut self, generation: u64, cx: &mut Context<Self>) {
         let Some(pool) = AppServices::global(cx).pool() else {
@@ -1559,10 +1634,8 @@ impl MeetingView {
     }
 
     // ---- Per-segment audio playback --------------------------------------
-    // Mirrors `SegmentAudioContext.tsx`: only one clip plays at a time,
-    // played natively (not in-webview — moot here, there is no webview) via
-    // the same core fns the Tauri `play_meeting_audio_clip` /
-    // `stop_meeting_audio_clip` commands wrap.
+    // Only one clip plays at a time, played natively through
+    // `parley_core::audio::playback`.
 
     fn toggle_segment_playback(
         &mut self,
@@ -1979,8 +2052,7 @@ impl MeetingView {
         .detach();
     }
 
-    /// "Extract from summary" / "Re-extract" — mirrors the Tauri
-    /// `extract_action_items` command: try the transcript-grounded
+    /// "Extract from summary" / "Re-extract": try the transcript-grounded
     /// extractor first, falling back to the summary-markdown extractor if
     /// it errors (e.g. no transcript rows to window over).
     fn extract_action_items(&mut self, cx: &mut Context<Self>) {
@@ -2445,20 +2517,7 @@ impl MeetingView {
                             .tooltip("Copy meeting as JSON")
                             .on_click(cx.listener(|this, _, _, cx| this.export_copy("json", cx))),
                     )
-                    .child(
-                        Button::new("save-summary-md")
-                            .ghost()
-                            .icon(Lucide::Download)
-                            .tooltip("Save meeting as Markdown…")
-                            .on_click(cx.listener(|this, _, _, cx| this.export_save("markdown", cx))),
-                    )
-                    .child(
-                        Button::new("save-summary-json")
-                            .ghost()
-                            .icon(Lucide::FileCode)
-                            .tooltip("Save meeting as JSON…")
-                            .on_click(cx.listener(|this, _, _, cx| this.export_save("json", cx))),
-                    )
+                    .child(self.render_export_menu(cx))
                     .child(
                         Button::new("delete-meeting")
                             .danger()
@@ -2598,10 +2657,27 @@ impl MeetingView {
                     .justify_between()
                     .child(div().text_sm().font_semibold().child("Link calendar event"))
                     .child(
-                        Button::new("close-calendar-picker")
-                            .ghost()
-                            .icon(Lucide::X)
-                            .on_click(cx.listener(|this, _, _, cx| this.close_calendar_picker(cx))),
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            // Unlinking from the picker too, so a wrong
+                            // auto-link can be undone wherever the user goes.
+                            .when(current_id.is_some(), |el| {
+                                el.child(
+                                    Button::new("picker-unlink-calendar-event")
+                                        .ghost()
+                                        .icon(Lucide::Link2Off)
+                                        .label("Unlink")
+                                        .disabled(self.calendar_mutating)
+                                        .on_click(cx.listener(|this, _, _, cx| this.unlink_calendar_event(cx))),
+                                )
+                            })
+                            .child(
+                                Button::new("close-calendar-picker")
+                                    .ghost()
+                                    .icon(Lucide::X)
+                                    .on_click(cx.listener(|this, _, _, cx| this.close_calendar_picker(cx))),
+                            ),
                     ),
             );
 
@@ -2833,13 +2909,16 @@ impl MeetingView {
         let loading_segment = self.loading_segment.clone();
         let show_confidence = self.show_confidence;
         let highlighted_segment = self.highlighted_segment.clone();
+        let markers = self.moments_panel.read(cx).transcript_markers(&self.transcripts);
 
         v_flex()
             .size_full()
             .child(header)
+            .child(self.moments_panel.clone())
             .child(
                 list(list_state, move |ix, _window, cx| {
                     let t = &transcripts[ix];
+                    let row_markers = markers.get(&t.id);
                     let time = format::segment_timestamp(t.audio_start_time, &t.timestamp);
                     let speaker = t.speaker.clone().unwrap_or_else(|| "Speaker".to_string());
                     let editable = speaker_chip::can_edit_speaker(&speaker, t.voice_profile_id.as_deref());
@@ -2937,6 +3016,7 @@ impl MeetingView {
                         .when(highlighted_segment.as_deref() == Some(t.id.as_str()), |this| {
                             this.bg(cx.theme().primary.opacity(0.15))
                         })
+                        .when_some(row_markers, |this, m| this.child(moments::render_row_markers(m, cx)))
                         .child(header_row)
                         .child(div().text_sm().child(t.text.clone()));
 
@@ -3011,6 +3091,18 @@ impl MeetingView {
                                         .tooltip("Copy summary")
                                         .disabled(!has_summary)
                                         .on_click(cx.listener(|this, _, window, cx| this.copy_summary(window, cx))),
+                                )
+                                .child(
+                                    Button::new("draft-followup-email")
+                                        .ghost()
+                                        .icon(Lucide::Mail)
+                                        .tooltip("Draft follow-up email")
+                                        .disabled(!has_summary && self.transcripts.is_empty())
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            if let Some(id) = this.meeting_id.clone() {
+                                                followup::open(id, window, cx);
+                                            }
+                                        })),
                                 )
                                 .child(
                                     Button::new("edit-summary")

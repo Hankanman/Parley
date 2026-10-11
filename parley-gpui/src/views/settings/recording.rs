@@ -1,7 +1,6 @@
 //! "Recording" settings page: save folder, default devices, auto-save,
 //! meeting auto-detection.
-//! Reads/writes `recording_preferences` (`parley-core/src/audio/recording_preferences.rs`),
-//! the same table the Tauri app's Recording settings tab uses.
+//! Reads/writes `recording_preferences` (`parley-core/src/audio/recording_preferences.rs`).
 
 use gpui_kit::component::{
     button::Button,

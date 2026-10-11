@@ -5,9 +5,7 @@
 //! `.await` a DB round trip in them. So settings are read from SQLite once
 //! (on `SettingsView::new`, via `Io`) into this `Global`, and every field
 //! reads/writes the cache directly (instant, no flicker) while a setter
-//! also fires an async save through `Io` to persist it. This is the same
-//! shape the Tauri frontend uses (React state + a debounced/immediate save
-//! call), just without React.
+//! also fires an async save through `Io` to persist it.
 use std::collections::HashMap;
 
 use gpui_kit::{App, BorrowAppContext, Entity, Global};
@@ -47,15 +45,11 @@ pub struct SummaryConfig {
     pub ollama_endpoint: String,
 }
 
-/// Mirrors `frontend/src-tauri/src/notifications/settings.rs`'s
-/// `NotificationSettings`/`NotificationPreferences` field-for-field (same
-/// snake_case names, no `#[serde(rename_all)]` on either side) so this app
-/// reads/writes the exact same `app_settings` row under
-/// `KEY_NOTIFICATION_SETTINGS` — including the subset
-/// `parley-gpui/src/notifications.rs` already parses out of it. That
-/// struct isn't reusable directly: it lives in the Tauri shell crate
-/// (`frontend/src-tauri`), which `parley-gpui` deliberately does not
-/// depend on (only `parley-core`).
+/// Notification settings, stored as one JSON blob in the `app_settings` row
+/// under `KEY_NOTIFICATION_SETTINGS`. Field names are snake_case with no
+/// `#[serde(rename_all)]`, matching rows written by the retired Tauri shell
+/// (kept for compatibility with existing databases) and the subset
+/// `parley-gpui/src/notifications.rs` parses out of the same row.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NotificationSettings {
@@ -526,9 +520,8 @@ pub fn save_summary(
 }
 
 /// Save (or overwrite) the API key for `provider`, updating the in-memory
-/// "configured" flag immediately and persisting through the same
-/// `SettingsRepository::save_api_key` the Tauri `api_save_model_config`
-/// command uses.
+/// "configured" flag immediately and persisting through
+/// `SettingsRepository::save_api_key`.
 pub fn save_api_key(cx: &mut App, view: &Entity<SettingsView>, provider: String, api_key: String) {
     cx.global_mut::<SettingsCache>()
         .api_key_present
@@ -593,9 +586,9 @@ pub fn save_default_template(cx: &mut App, view: &Entity<SettingsView>, template
 }
 
 /// Merge `key: value` into the cached `ui_config` blob and persist the
-/// whole blob (a full replace, like the Tauri `api_save_ui_config`
-/// command) — every other field already in the blob (e.g. React's
-/// `providerModelMap`) is preserved since we mutate the cached `Value`
+/// whole blob (a full replace) — every other field already in the blob
+/// (e.g. `providerModelMap`, written by the retired React frontend) is
+/// preserved since we mutate the cached `Value`
 /// in place rather than constructing a fresh one.
 pub fn save_ui_field(
     cx: &mut App,
@@ -645,8 +638,7 @@ pub fn save_features(cx: &mut App, view: &Entity<SettingsView>, features: Featur
 
 /// Save notification settings (`KEY_NOTIFICATION_SETTINGS`) — the same row
 /// `parley-gpui/src/notifications.rs` reads back for tray/DBus
-/// notifications, and the same shape the Tauri `set_notification_settings`
-/// command persists.
+/// notifications.
 pub fn save_notifications(cx: &mut App, view: &Entity<SettingsView>, settings: NotificationSettings) {
     cx.global_mut::<SettingsCache>().notifications = settings.clone();
     let _ = view.update(cx, |_, cx| cx.notify());
@@ -680,9 +672,8 @@ pub fn save_theme_pref(cx: &mut App, mode: String) {
 }
 
 /// Add a calendar ICS source, refresh it immediately, then reload the
-/// cache's `calendar_sources` list. Mirrors the Tauri `calendar_add_source`
-/// + an immediate `calendar_refresh_source` (the React `CalendarSettings`
-/// UI does the same on add).
+/// cache's `calendar_sources` list, so a new source shows its events (or
+/// its fetch error) straight away.
 pub fn calendar_add(cx: &mut App, view: Entity<SettingsView>, url: String, label: Option<String>) {
     let Some(pool) = AppServices::global(cx).pool() else {
         log::warn!("settings: no DB pool yet, calendar source not added");
@@ -1112,11 +1103,10 @@ mod tests {
     }
 
     #[test]
-    fn notification_settings_default_matches_the_tauri_shell() {
-        // Mirrors `frontend/src-tauri/src/notifications/settings.rs`'s
-        // `NotificationSettings::default()`/`NotificationPreferences::default()`
-        // exactly — a divergence here would mean a fresh `app_settings` row
-        // written by this app doesn't match what the Tauri app expects.
+    fn notification_settings_defaults_are_stable() {
+        // Pins the defaults (originally the Tauri shell's, kept so existing
+        // `app_settings` rows behave the same) and keeps them in step with
+        // `notifications.rs`'s `PreferencesMini::default()`.
         let defaults = NotificationSettings::default();
         assert!(defaults.recording_notifications);
         assert!(defaults.time_based_reminders);

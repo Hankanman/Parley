@@ -57,7 +57,7 @@ apart silently:
 
 `whisper-core` (sibling crate) holds the `FullParams` construction and
 decoder-confidence formula, ported from
-`frontend/src-tauri/src/whisper_engine/whisper_engine.rs`'s
+`parley-core/src/whisper_engine/whisper_engine.rs`'s
 `transcribe_audio_with_confidence_opts`. The in-process engine itself is
 **unchanged** by this spike — see `whisper-core`'s doc comment for the
 follow-up that would switch it to call the shared crate too and delete the

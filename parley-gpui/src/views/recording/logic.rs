@@ -22,8 +22,7 @@ use parley_core::audio::simple_level_monitor::AudioLevelData;
 pub struct TranscriptRow {
     pub sequence_id: u64,
     /// Seconds from recording start — the true chronological anchor across
-    /// sources (mirrors `frontend/src/lib/transcriptOrder.ts`'s rationale:
-    /// dual-VAD segments can complete out of order).
+    /// sources (dual-VAD segments can complete out of order).
     pub audio_start_time: f64,
     pub speaker: String,
     pub text: String,
@@ -35,8 +34,8 @@ fn order_key(row: &TranscriptRow) -> (f64, u64) {
     (row.audio_start_time, row.sequence_id)
 }
 
-/// Chronological ordering per `frontend/src/lib/transcriptOrder.ts`'s
-/// `compareSegments`: `audio_start_time` first, `sequence_id` as tiebreaker.
+/// Chronological ordering: `audio_start_time` first, `sequence_id` as
+/// tiebreaker.
 pub fn compare_rows(a: &TranscriptRow, b: &TranscriptRow) -> Ordering {
     order_key(a)
         .partial_cmp(&order_key(b))
@@ -114,11 +113,10 @@ pub fn default_meeting_title(now: DateTime<Local>) -> String {
 }
 
 /// The `RecordingArgs { save_path }` argument `stop()` needs, built the same
-/// way the Tauri shell's Stop button (`RecordingTopBar.tsx`) and the core's
-/// own `spawn_fatal_error_stop` fallback do: `<app-data-dir>/recording-<ts>.wav`.
-/// `stop()` only uses this path's parent directory existing — the actual
-/// audio file is written elsewhere — but the format is kept identical for
-/// consistency across shells.
+/// way as the core's own `spawn_fatal_error_stop` fallback:
+/// `<app-data-dir>/recording-<ts>.wav`. `stop()` only uses this path's
+/// parent directory existing — the actual audio file is written elsewhere —
+/// but the format is kept identical for consistency.
 pub fn stop_save_path(app_data_dir: &Path, now: DateTime<Local>) -> String {
     let timestamp = now.format("%Y-%m-%dT%H-%M-%S").to_string();
     app_data_dir

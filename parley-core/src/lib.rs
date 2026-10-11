@@ -1,4 +1,4 @@
-//! Tauri-free core of the Parley desktop app: audio
+//! UI-independent core of the Parley desktop app: audio
 //! capture/mixing/VAD, transcription, speaker diarization, summary
 //! generation, and SQLite persistence. Depends on no UI framework;
 //! the GPUI desktop shell (`parley-gpui`) sits on top of this.
@@ -21,13 +21,16 @@ macro_rules! perf_debug {
 pub mod analytics;
 pub mod anthropic;
 pub mod audio;
+pub mod bookmarks;
 pub mod bootstrap;
 pub mod calendar;
+pub mod chapters;
 pub mod chat;
 pub mod config;
 pub mod database;
 pub mod events;
 pub mod export;
+pub mod followup;
 pub mod glossary;
 pub mod groq;
 pub mod llm_providers;
