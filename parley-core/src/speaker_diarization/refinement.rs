@@ -36,11 +36,18 @@
 //!    moves a few seconds of speech and never merges two substantial voices.
 //!    Clusters made of sub-second fragments, and strays on the mic channel,
 //!    fold into the nearest voice on their channel whatever the score.
-//! 4. **Speaker cap.** When the caller knows how many people were present
-//!    (calendar attendees), unnamed clusters keep merging closest-first
+//!    With a known head count and fewer substantial voices than that, the
+//!    largest minor clusters (one per unaccounted-for attendee) need
+//!    [`RefineOptions::missing_attendee_fold_similarity`] instead: a quiet
+//!    invitee shouldn't be folded into someone else.
+//! 4. **Speaker cap.** When the caller knows roughly how many people to
+//!    expect (calendar attendees — invitees skip meetings, others join
+//!    late or uninvited), unnamed clusters keep merging closest-first
 //!    until the *labels* fit that count — but never below
-//!    [`RefineOptions::cap_similarity_floor`], so a wrong attendee list
-//!    can't fuse genuinely different voices, and never two named people.
+//!    [`RefineOptions::cap_similarity_floor`], set near the same-voice
+//!    merge so the attendee list can't fuse genuinely different voices,
+//!    and never two named people. An extra "Speaker N" is easier to fix
+//!    than one label covering two people.
 //! 5. **Naming**, below.
 //!
 //! ## Profile handling
@@ -107,11 +114,21 @@ pub struct RefineOptions {
     pub min_cluster_secs: f32,
     /// Minimum centroid similarity for a minor cluster to fold.
     pub fold_similarity: f32,
-    /// Soft upper bound on the number of distinct speakers, e.g. the
-    /// calendar attendee count. `None` = unknown.
+    /// [`Self::fold_similarity`] for a minor cluster that may be an invitee
+    /// who barely spoke: with a known head count ([`Self::max_speakers`])
+    /// and fewer substantial voices than that, the largest minor clusters
+    /// (one per missing attendee) must be this alike to be folded.
+    pub missing_attendee_fold_similarity: f32,
+    /// Rough number of people expected, e.g. the calendar attendee count.
+    /// `None` = unknown. Only a guide: invitees skip meetings, others join
+    /// uninvited or late. Above it, clusters merge down toward it (see
+    /// [`Self::cap_similarity_floor`]); below it, minor clusters are kept
+    /// apart more readily (see [`Self::missing_attendee_fold_similarity`]).
     pub max_speakers: Option<usize>,
     /// Never merge two clusters less alike than this to satisfy
-    /// `max_speakers`.
+    /// `max_speakers`. Close to [`Self::merge_similarity`]: the attendee
+    /// list is a hint, and merging two different people to match it (0.42
+    /// alike in #102's data) is worse than one extra "Speaker N".
     pub cap_similarity_floor: f32,
     /// Honour [`SegmentSource`] for self-attribution (see module docs).
     pub use_sources: bool,
@@ -136,8 +153,9 @@ impl Default for RefineOptions {
             mic_merge_similarity: 0.40,
             min_cluster_secs: 20.0,
             fold_similarity: 0.30,
+            missing_attendee_fold_similarity: 0.45,
             max_speakers: None,
-            cap_similarity_floor: 0.40,
+            cap_similarity_floor: 0.55,
             use_sources: true,
             self_strong_match: 0.70,
             mic_self_similarity: 0.45,
@@ -156,6 +174,7 @@ impl RefineOptions {
             mic_merge_similarity: 1.1,
             min_cluster_secs: 0.0,
             fold_similarity: 1.1,
+            missing_attendee_fold_similarity: 1.1,
             max_speakers: None,
             cap_similarity_floor: 1.1,
             use_sources: false,
@@ -467,6 +486,21 @@ fn fold_minor_clusters(clusters: &mut Vec<Cluster>, options: &RefineOptions) {
         return;
     }
 
+    // Fewer substantial voices than expected attendees: the largest minor
+    // clusters (one per missing attendee) may be someone who barely spoke,
+    // so they need a closer match to be folded. Fragments too short to
+    // embed and mic-channel strays are never candidates.
+    let too_short = |c: &Cluster| c.secs < options.short_segment_secs * c.members.len() as f32;
+    let missing = options.max_speakers.map_or(0, |n| n.saturating_sub(majors.len()));
+    let mut candidates: Vec<usize> = (0..clusters.len())
+        .filter(|&i| {
+            let c = &clusters[i];
+            is_minor(c) && !too_short(c) && c.group != SegmentSource::Microphone
+        })
+        .collect();
+    candidates.sort_by(|&a, &b| clusters[b].secs.total_cmp(&clusters[a].secs));
+    candidates.truncate(missing);
+
     let mut target: Vec<Option<usize>> = vec![None; clusters.len()];
     for (i, cluster) in clusters.iter().enumerate() {
         if !is_minor(cluster) {
@@ -479,15 +513,15 @@ fn fold_minor_clusters(clusters: &mut Vec<Cluster>, options: &RefineOptions) {
             .map(|(j, c)| (*j, dot(&centroid, c)))
             .max_by(|a, b| a.1.total_cmp(&b.1));
         if let Some((j, sim)) = best {
-            let too_short =
-                cluster.secs < options.short_segment_secs * cluster.members.len() as f32;
-            let floor = if too_short || cluster.group == SegmentSource::Microphone {
+            let floor = if too_short(cluster) || cluster.group == SegmentSource::Microphone {
                 // Fragments too short for CAM++ to embed reliably have
                 // similarity scores that are noise; and a few seconds on the
                 // mic channel — the user's own channel — shouldn't stand as
                 // a new speaker either. Both go to the nearest voice on
                 // their channel whatever the score.
                 f32::NEG_INFINITY
+            } else if candidates.contains(&i) {
+                options.missing_attendee_fold_similarity
             } else {
                 options.fold_similarity
             };
@@ -1217,24 +1251,57 @@ mod tests {
     #[test]
     fn attendee_cap_merges_the_closest_unknown_voices_first() {
         // Three substantial voices; 1 and 2 are 0.5 alike, 3 is unlike both.
+        // The default floor keeps 0.5 apart (see the next test), so exercise
+        // the mechanism with a lower one.
         let history = vec![
             seg(1, v(3, &[(0, 1.0)]), SegmentSource::System, 30.0),
             seg(2, v(3, &[(0, 0.5), (1, 0.866)]), SegmentSource::System, 30.0),
             seg(3, v(3, &[(2, 1.0)]), SegmentSource::System, 30.0),
         ];
-        assert_eq!(
-            distinct_speakers(&refine(&history, &RefineOptions::default(), None)),
-            3
-        );
+        let low_floor = RefineOptions { cap_similarity_floor: 0.40, ..RefineOptions::default() };
+        assert_eq!(distinct_speakers(&refine(&history, &low_floor, None)), 3);
 
-        let capped = RefineOptions::default().with_max_speakers(Some(2));
-        let out = refine(&history, &capped, None);
+        let out = refine(&history, &low_floor.clone().with_max_speakers(Some(2)), None);
         assert_eq!(distinct_speakers(&out), 2);
         assert_eq!(label_of(&out, 1), label_of(&out, 2));
 
         // The cap is soft: it never fuses voices below the similarity floor.
-        let out = refine(&history, &RefineOptions::default().with_max_speakers(Some(1)), None);
+        let out = refine(&history, &low_floor.with_max_speakers(Some(1)), None);
         assert_eq!(distinct_speakers(&out), 2);
+    }
+
+    #[test]
+    fn attendee_cap_keeps_probably_different_people_apart() {
+        // 0.5 alike: in #102's data different people sat up to ~0.42 and one
+        // person's two profiles at 0.57, so the attendee list alone mustn't
+        // fuse these (that's how one "Speaker 3" held two people).
+        let history = vec![
+            seg(1, v(3, &[(0, 1.0)]), SegmentSource::System, 30.0),
+            seg(2, v(3, &[(0, 0.5), (1, 0.866)]), SegmentSource::System, 30.0),
+            seg(3, v(3, &[(2, 1.0)]), SegmentSource::System, 30.0),
+        ];
+        let out = refine(&history, &RefineOptions::default().with_max_speakers(Some(2)), None);
+        assert_eq!(distinct_speakers(&out), 3);
+    }
+
+    #[test]
+    fn a_quiet_voice_is_kept_while_an_invitee_is_unaccounted_for() {
+        // One substantial voice and a 6 s stray 0.40 alike to it: above the
+        // usual fold bar, below the missing-attendee one.
+        let history = vec![
+            seg(1, v(3, &[(0, 1.0)]), SegmentSource::System, 30.0),
+            seg(2, v(3, &[(0, 1.0)]), SegmentSource::System, 30.0),
+            seg(3, v(3, &[(0, 1.0), (1, 2.3)]), SegmentSource::System, 6.0),
+        ];
+        // No head count: folded, as before.
+        let out = refine(&history, &RefineOptions::default(), None);
+        assert_eq!(distinct_speakers(&out), 1);
+        // Two expected, one heard: the stray may be the second invitee.
+        let out = refine(&history, &RefineOptions::default().with_max_speakers(Some(2)), None);
+        assert_eq!(distinct_speakers(&out), 2);
+        // Everyone already accounted for: folded.
+        let out = refine(&history, &RefineOptions::default().with_max_speakers(Some(1)), None);
+        assert_eq!(distinct_speakers(&out), 1);
     }
 
     #[test]

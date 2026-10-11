@@ -235,6 +235,9 @@ async fn measure_fragmentation() {
     if let Some(v) = env_f32("PARLEY_MEASURE_SHORT") {
         options.short_segment_secs = v;
     }
+    if let Some(v) = env_f32("PARLEY_MEASURE_CAP_FLOOR") {
+        options.cap_similarity_floor = v;
+    }
     eprintln!("new = {options:?}");
     eprintln!(
         "{:<36} {:>4} | {:>4} | mixdown: {:>4} {:>4} {:>4} | per-channel: {:>4} {:>4} | substantial (>= {min_secs}s) db/live/new-ch",
