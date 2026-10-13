@@ -31,6 +31,12 @@ pub fn can_edit_speaker(speaker: &str, _voice_profile_id: Option<&str>) -> bool 
     speaker != ME_LABEL
 }
 
+/// Whether the panel offers "Unassign": any named line can go back to an
+/// unnamed "Speaker N" — an unnamed one already is one.
+pub fn can_unassign_speaker(speaker: &str) -> bool {
+    speaker != ME_LABEL && !is_unnamed_speaker_label(speaker)
+}
+
 /// Mirrors `canSave` in the React component: merging into an existing
 /// profile needs no new name (the target's own name/email are used), but
 /// creating a profile (or renaming an existing one) needs a non-empty name.
@@ -163,6 +169,13 @@ mod tests {
     #[test]
     fn a_line_named_without_a_profile_stays_editable() {
         assert!(can_edit_speaker("Tom Hennell", None));
+    }
+
+    #[test]
+    fn only_named_lines_can_be_unassigned() {
+        assert!(can_unassign_speaker("Garry Biddle"));
+        assert!(!can_unassign_speaker("Speaker 6"));
+        assert!(!can_unassign_speaker(ME_LABEL));
     }
 
     #[test]

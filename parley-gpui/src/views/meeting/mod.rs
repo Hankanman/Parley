@@ -51,6 +51,7 @@ use parley_core::database::repositories::summary::SummaryProcessesRepository;
 use parley_core::database::repositories::voice_profile::VoiceProfilesRepository;
 use parley_core::speaker_diarization::service::{
     assign_segment_speaker_core, merge_cluster_into_profile_core, promote_speaker_to_profile_core,
+    relearn_profile_voice_core, unassign_speaker_core,
 };
 use parley_core::summary::markdown_export;
 use parley_core::summary::service::SummaryService;
@@ -1696,6 +1697,76 @@ impl MeetingView {
         .detach();
     }
 
+    /// Undo a wrong name: the panel's lines (all of them, or just the
+    /// clicked one in single-line mode) go back to a fresh "Speaker N".
+    fn unassign_speaker_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.speaker_edit.as_mut() else {
+            return;
+        };
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        let Some(meeting_id) = self.meeting_id.clone() else {
+            return;
+        };
+        let speaker = state.speaker.clone();
+        let segment_id = state.single_segment.then(|| state.segment_id.clone());
+        let key = state.key.clone();
+        state.saving = true;
+        state.error = None;
+        cx.notify();
+
+        let io = Io::global(cx);
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let relearn_pool = pool.clone();
+            let outcome = match io
+                .spawn(async move { unassign_speaker_core(&pool, &meeting_id, &speaker, segment_id.as_deref()).await })
+                .await
+            {
+                Ok(Ok((_, profile_id))) => Ok(profile_id),
+                Ok(Err(e)) => Err(e),
+                Err(e) => Err(format!("Unassign task panicked: {e}")),
+            };
+            let relearn = outcome.as_ref().ok().cloned().flatten();
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                let still_open = this.speaker_edit.as_ref().is_some_and(|s| s.key == key);
+                match outcome {
+                    Ok(_) => {
+                        this.speaker_edit = None;
+                        this.reload_transcript(cx);
+                    }
+                    Err(e) if still_open => {
+                        let state = this.speaker_edit.as_mut().unwrap();
+                        state.saving = false;
+                        state.error = Some(e);
+                    }
+                    Err(_) => {}
+                }
+                cx.notify();
+            });
+
+            // The person's saved voice may have learned the unassigned lines;
+            // rebuild it from the lines still theirs so it stops matching the
+            // wrong voice in later meetings.
+            if let Some(profile_id) = relearn {
+                let result = io.spawn(async move { relearn_profile_voice_core(&relearn_pool, &profile_id).await }).await;
+                let notification = match result {
+                    Ok(Ok(o)) => {
+                        Notification::success(format!("Relearned {}'s voice from {} of their lines", o.name, o.samples))
+                    }
+                    Ok(Err(e)) => Notification::warning(e),
+                    Err(e) => Notification::error(format!("Relearn task panicked: {e}")),
+                };
+                let _ = this.update_in(cx, |_, window, cx| window.push_notification(notification, cx));
+            }
+        })
+        .detach();
+    }
+
     // ---- Per-segment audio playback --------------------------------------
     // Only one clip plays at a time, played natively through
     // `parley_core::audio::playback`.
@@ -2403,7 +2474,25 @@ fn render_floating_speaker_edit(state: &SpeakerEditState, entity: Entity<Meeting
                     .on_click(move |_, _, cx| {
                         entity_cancel.update(cx, |this, cx| this.close_speaker_edit(cx));
                     }),
-            ),
+            )
+            .when(speaker_chip::can_unassign_speaker(&state.speaker), |row| {
+                let entity_unassign = entity.clone();
+                row.child(div().flex_1()).child(
+                    Button::new("unassign-speaker-edit")
+                        .ghost()
+                        .danger()
+                        .label("Unassign")
+                        .tooltip(if single {
+                            "This line goes back to an unnamed speaker"
+                        } else {
+                            "These lines go back to an unnamed speaker"
+                        })
+                        .disabled(state.saving)
+                        .on_click(move |_, _, cx| {
+                            entity_unassign.update(cx, |this, cx| this.unassign_speaker_edit(cx));
+                        }),
+                )
+            }),
     )
     .into_any_element()
 }
