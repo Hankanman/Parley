@@ -2,6 +2,7 @@
 //! diarizer construction/lifecycle, and post-recording refinement. See
 //! `commands.rs` for the thin `#[tauri::command]` wrappers around these.
 
+use crate::database::models::VoiceProfile;
 use crate::database::repositories::transcript::TranscriptsRepository;
 use crate::database::repositories::voice_profile::{bytes_to_floats, VoiceProfilesRepository};
 use crate::events::{EventSinkExt, SharedEventSink};
@@ -423,6 +424,220 @@ pub async fn assign_segment_speaker_core(
         return Err("That segment no longer exists.".to_string());
     }
     Ok(label)
+}
+
+/// Undo a wrong attribution: give `label`'s lines in `meeting_id` (or
+/// only `segment_id`, when given) a fresh "Speaker N" no line in the
+/// meeting uses yet, unlinked from any voice profile, so they can be
+/// named again. Returns the new label and the voice profile the lines were
+/// linked to, if any — its voice may hold theirs, so the caller relearns it
+/// ([`relearn_profile_voice_core`]).
+pub async fn unassign_speaker_core(
+    pool: &SqlitePool,
+    meeting_id: &str,
+    label: &str,
+    segment_id: Option<&str>,
+) -> Result<(String, Option<String>), String> {
+    let profile_id: Option<String> = match segment_id {
+        Some(id) => {
+            sqlx::query_scalar(
+                "SELECT voice_profile_id FROM transcripts WHERE meeting_id = ? AND id = ?",
+            )
+            .bind(meeting_id)
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+        }
+        None => {
+            sqlx::query_scalar(
+                "SELECT voice_profile_id FROM transcripts
+             WHERE meeting_id = ? AND speaker = ? AND voice_profile_id IS NOT NULL LIMIT 1",
+            )
+            .bind(meeting_id)
+            .bind(label)
+            .fetch_optional(pool)
+            .await
+        }
+    }
+    .map_err(|e| format!("Failed to read this meeting's speakers: {}", e))?
+    .flatten();
+    let labels: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT DISTINCT speaker FROM transcripts WHERE meeting_id = ?")
+            .bind(meeting_id)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| format!("Failed to read this meeting's speakers: {}", e))?;
+    let next = labels
+        .iter()
+        .flatten()
+        .filter_map(|l| {
+            l.trim()
+                .strip_prefix("Speaker ")?
+                .trim()
+                .parse::<u32>()
+                .ok()
+        })
+        .max()
+        .unwrap_or(0)
+        + 1;
+    let fresh = format!("Speaker {}", next);
+
+    let updated = match segment_id {
+        Some(id) => {
+            TranscriptsRepository::set_segment_speaker(pool, meeting_id, id, &fresh, None).await
+        }
+        None => {
+            TranscriptsRepository::rename_speaker_in_meeting(pool, meeting_id, label, &fresh, None)
+                .await
+        }
+    }
+    .map_err(|e| format!("Failed to unassign speaker: {}", e))?;
+    if updated == 0 {
+        return Err("Those lines no longer exist.".to_string());
+    }
+    log::info!(
+        "Unassigned {} line(s) of '{}' in meeting {} -> {}",
+        updated,
+        label,
+        meeting_id,
+        fresh
+    );
+    Ok((fresh, profile_id))
+}
+
+/// Lines shorter than this give an unreliable voice embedding.
+const RELEARN_MIN_LINE_SECS: f64 = 1.5;
+/// The longest lines are plenty to pin a voice down; more only costs time.
+const RELEARN_MAX_LINES: i64 = 40;
+/// Fewer usable lines than this and the old voice is kept.
+const RELEARN_MIN_SAMPLES: usize = 3;
+
+/// What [`relearn_profile_voice_core`] did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelearnOutcome {
+    pub name: String,
+    /// Lines whose audio went into the new voice.
+    pub samples: usize,
+}
+
+/// Rebuild a voice profile's saved voice from the recorded audio of the
+/// lines currently attributed to it, across all meetings. Naming a cluster
+/// folds its voice into the profile and averaging can't take it back out,
+/// so after a wrong attribution is undone this is how the profile stops
+/// matching the wrong person. Uses the longest lines; keeps the old voice
+/// (and errors) when too few have audio. The self profile is skipped: it
+/// is a deliberate enrolment.
+pub async fn relearn_profile_voice_core(
+    pool: &SqlitePool,
+    profile_id: &str,
+) -> Result<RelearnOutcome, String> {
+    let (profile, lines) = relearn_lines(pool, profile_id).await?;
+    let model = default_model_path()
+        .filter(|p| model_is_ready(p))
+        .ok_or_else(|| "The speaker model isn't downloaded.".to_string())?;
+    let embedder = SpeakerEmbedder::from_path(&model, 1)
+        .map_err(|e| format!("Failed to load the speaker model: {}", e))?;
+    let mut embeddings = Vec::new();
+    for line in &lines {
+        let Ok(wav) = crate::audio::clip::extract_clip_wav(
+            pool,
+            &line.meeting_id,
+            line.start,
+            line.end,
+            line.source.as_deref(),
+        )
+        .await
+        else {
+            continue;
+        };
+        let Ok((pcm, 16_000, 1)) = crate::audio::clip::parse_wav_pcm16(&wav) else {
+            continue;
+        };
+        let samples: Vec<f32> = pcm.iter().map(|&s| s as f32 / 32_768.0).collect();
+        if let Ok(e) = embedder.embed(&samples) {
+            embeddings.push(e);
+        }
+    }
+    save_relearned_voice(pool, &profile, embeddings).await
+}
+
+/// One attributed line [`relearn_profile_voice_core`] takes audio from.
+#[derive(Debug, Clone, PartialEq)]
+struct RelearnLine {
+    meeting_id: String,
+    start: f64,
+    end: f64,
+    source: Option<String>,
+}
+
+/// The profile and its longest attributed lines with audio timing.
+async fn relearn_lines(
+    pool: &SqlitePool,
+    profile_id: &str,
+) -> Result<(VoiceProfile, Vec<RelearnLine>), String> {
+    let profile = VoiceProfilesRepository::get_by_id(pool, profile_id)
+        .await
+        .map_err(|e| format!("Failed to load voice profile: {}", e))?
+        .ok_or_else(|| "That voice profile no longer exists.".to_string())?;
+    if profile.is_self {
+        return Err("Your own voice is re-recorded in Speakers, not relearned.".to_string());
+    }
+    let rows: Vec<(String, f64, f64, Option<String>)> = sqlx::query_as(
+        "SELECT meeting_id, audio_start_time, audio_end_time, source FROM transcripts
+         WHERE voice_profile_id = ?
+           AND audio_start_time IS NOT NULL AND audio_end_time IS NOT NULL
+           AND audio_end_time - audio_start_time >= ?
+         ORDER BY audio_end_time - audio_start_time DESC
+         LIMIT ?",
+    )
+    .bind(profile_id)
+    .bind(RELEARN_MIN_LINE_SECS)
+    .bind(RELEARN_MAX_LINES)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to read {}'s lines: {}", profile.name, e))?;
+    let lines = rows
+        .into_iter()
+        .map(|(meeting_id, start, end, source)| RelearnLine {
+            meeting_id,
+            start,
+            end,
+            source,
+        })
+        .collect();
+    Ok((profile, lines))
+}
+
+/// Replace `profile`'s voice with the mean of `embeddings`, unless there
+/// are too few to trust.
+async fn save_relearned_voice(
+    pool: &SqlitePool,
+    profile: &VoiceProfile,
+    mut embeddings: Vec<Vec<f32>>,
+) -> Result<RelearnOutcome, String> {
+    let dim = embeddings.first().map(Vec::len);
+    embeddings.retain(|e| Some(e.len()) == dim);
+    if embeddings.len() < RELEARN_MIN_SAMPLES {
+        return Err(format!(
+            "Only {} of {}'s lines have usable audio, so their voice was left as it was.",
+            embeddings.len(),
+            profile.name
+        ));
+    }
+    let centroid = average_and_normalize(&embeddings);
+    VoiceProfilesRepository::update_centroid(pool, &profile.id, &centroid, embeddings.len() as i64)
+        .await
+        .map_err(|e| format!("Failed to save {}'s voice: {}", profile.name, e))?;
+    log::info!(
+        "Relearned voice profile '{}' ({}) from {} line(s)",
+        profile.name,
+        profile.id,
+        embeddings.len()
+    );
+    Ok(RelearnOutcome {
+        name: profile.name.clone(),
+        samples: embeddings.len(),
+    })
 }
 
 /// Shared core of the `promote_speaker_to_profile` command: pull the
@@ -882,5 +1097,117 @@ mod tests {
             speaker_of(&pool, "t1").await,
             (Some("Speaker 3".into()), None)
         );
+    }
+
+    #[tokio::test]
+    async fn unassigning_returns_lines_to_a_fresh_unlinked_speaker() {
+        let pool = pool_with_two_speaker_3_segments().await;
+        let id = VoiceProfilesRepository::create(&pool, "Garry", None, &[1.0, 0.0], 5)
+            .await
+            .unwrap();
+        assign_segment_speaker_core(&pool, "m1", "t1", "", Some(&id))
+            .await
+            .unwrap();
+        assign_segment_speaker_core(&pool, "m1", "t2", "", Some(&id))
+            .await
+            .unwrap();
+
+        // One line: the other keeps its name.
+        let one = unassign_speaker_core(&pool, "m1", "Garry", Some("t1"))
+            .await
+            .unwrap();
+        assert_eq!(one, ("Speaker 1".to_string(), Some(id.clone())));
+        assert_eq!(
+            speaker_of(&pool, "t1").await,
+            (Some("Speaker 1".into()), None)
+        );
+        assert_eq!(
+            speaker_of(&pool, "t2").await,
+            (Some("Garry".into()), Some(id.clone()))
+        );
+
+        // All lines: a label nothing else in the meeting uses.
+        let all = unassign_speaker_core(&pool, "m1", "Garry", None)
+            .await
+            .unwrap();
+        assert_eq!(all, ("Speaker 2".to_string(), Some(id.clone())));
+        assert_eq!(
+            speaker_of(&pool, "t2").await,
+            (Some("Speaker 2".into()), None)
+        );
+
+        // The profile survives; nothing is left to unassign.
+        assert!(VoiceProfilesRepository::get_by_id(&pool, &id)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(unassign_speaker_core(&pool, "m1", "Garry", None)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn relearning_rebuilds_the_voice_from_attributed_lines_only() {
+        let pool = pool_with_two_speaker_3_segments().await;
+        let id = VoiceProfilesRepository::create(&pool, "Garry", None, &[0.0, 1.0], 9)
+            .await
+            .unwrap();
+        // Three of Garry's lines, one too short, and a stranger's line.
+        sqlx::query(
+            "INSERT INTO transcripts
+               (id, meeting_id, transcript, timestamp, speaker, voice_profile_id,
+                audio_start_time, audio_end_time)
+             VALUES ('g1', 'm1', 'a', '00:10', 'Garry', ?1, 10.0, 14.0),
+                    ('g2', 'm1', 'b', '00:20', 'Garry', ?1, 20.0, 23.0),
+                    ('g3', 'm1', 'c', '00:30', 'Garry', ?1, 30.0, 32.0),
+                    ('g4', 'm1', 'd', '00:40', 'Garry', ?1, 40.0, 40.5),
+                    ('x1', 'm1', 'e', '00:50', 'Speaker 2', NULL, 50.0, 60.0)",
+        )
+        .bind(&id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (profile, lines) = relearn_lines(&pool, &id).await.unwrap();
+        let starts: Vec<f64> = lines.iter().map(|l| l.start).collect();
+        assert_eq!(
+            starts,
+            vec![10.0, 20.0, 30.0],
+            "longest first, short and foreign lines skipped"
+        );
+
+        let outcome = save_relearned_voice(&pool, &profile, vec![vec![1.0, 0.0]; 3])
+            .await
+            .unwrap();
+        assert_eq!(outcome.samples, 3);
+        let p = VoiceProfilesRepository::get_by_id(&pool, &id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(bytes_to_floats(&p.embedding).unwrap(), vec![1.0, 0.0]);
+        assert_eq!(p.sample_count, 3);
+    }
+
+    #[tokio::test]
+    async fn relearning_keeps_the_old_voice_without_enough_audio() {
+        let pool = pool_with_two_speaker_3_segments().await;
+        let id = VoiceProfilesRepository::create(&pool, "Garry", None, &[0.0, 1.0], 9)
+            .await
+            .unwrap();
+        let profile = VoiceProfilesRepository::get_by_id(&pool, &id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            save_relearned_voice(&pool, &profile, vec![vec![1.0, 0.0]; 2])
+                .await
+                .is_err()
+        );
+        let p = VoiceProfilesRepository::get_by_id(&pool, &id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(bytes_to_floats(&p.embedding).unwrap(), vec![0.0, 1.0]);
+        assert_eq!(p.sample_count, 9);
     }
 }

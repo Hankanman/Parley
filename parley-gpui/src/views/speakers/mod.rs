@@ -31,7 +31,7 @@ use parley_core::database::repositories::voice_profile::VoiceProfilesRepository;
 use parley_core::speaker_diarization::enrollment::{
     self, EnrollmentProgress, SelfVoiceStatus,
 };
-use parley_core::speaker_diarization::service::merge_voice_profiles_core;
+use parley_core::speaker_diarization::service::{merge_voice_profiles_core, relearn_profile_voice_core};
 
 use crate::app_state::AppServices;
 use crate::core_events::CoreEvent;
@@ -56,6 +56,8 @@ pub struct SpeakersView {
     email_input: Entity<InputState>,
     /// Profile currently showing a "merge into…" candidate list, if any.
     merging_id: Option<String>,
+    /// Profile whose voice is being rebuilt from its attributed lines.
+    relearning_id: Option<String>,
 
     // -- Self-voice enrollment ("Your voice" section) --
     self_status: Option<SelfVoiceStatus>,
@@ -85,6 +87,7 @@ impl SpeakersView {
             name_input,
             email_input,
             merging_id: None,
+            relearning_id: None,
             self_status: None,
             self_mode: SelfVoiceMode::Idle,
             self_progress: None,
@@ -434,6 +437,40 @@ impl SpeakersView {
             if !matches!(result, Ok(Ok(true))) {
                 let _ = this.update(cx, |this, cx| this.refresh(cx));
             }
+        })
+        .detach();
+    }
+
+    /// Rebuild a profile's voice from the audio of the lines attributed to
+    /// it — the fix when a wrong attribution taught it someone else's voice.
+    fn relearn(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        if self.relearning_id.is_some() {
+            return;
+        }
+        self.relearning_id = Some(id.clone());
+        cx.notify();
+
+        let io = Io::global(cx);
+        cx.spawn(async move |this, cx| {
+            let result = io.spawn(async move { relearn_profile_voice_core(&pool, &id).await }).await;
+            let _ = this.update(cx, |this, cx| {
+                this.relearning_id = None;
+                match result {
+                    Ok(Ok(o)) => {
+                        this.toast(
+                            NotificationType::Success,
+                            format!("Relearned {}'s voice from {} of their lines", o.name, o.samples),
+                        );
+                        this.refresh(cx);
+                    }
+                    Ok(Err(e)) => this.toast(NotificationType::Warning, e),
+                    Err(e) => this.toast(NotificationType::Error, format!("Relearn task panicked: {e}")),
+                }
+                cx.notify();
+            });
         })
         .detach();
     }
@@ -859,6 +896,8 @@ impl SpeakersView {
         let id_for_edit = id.clone();
         let id_for_merge = id.clone();
         let id_for_delete = id.clone();
+        let id_for_relearn = id.clone();
+        let relearning = self.relearning_id.as_deref() == Some(profile.id.as_str());
         let candidates = logic::merge_candidates(&self.profiles, &profile.id);
         let duplicate = logic::duplicate_name_ids(&self.profiles).contains(&profile.id);
 
@@ -914,6 +953,15 @@ impl SpeakersView {
                             this.start_edit(&profile, window, cx);
                         }
                     })),
+            )
+            .child(
+                Button::new(format!("relearn-speaker-{id}"))
+                    .ghost()
+                    .icon(AssetIcon::RefreshCw)
+                    .tooltip("Relearn voice from the lines attributed to them")
+                    .loading(relearning)
+                    .disabled(self.relearning_id.is_some())
+                    .on_click(cx.listener(move |this, _, _, cx| this.relearn(id_for_relearn.clone(), cx))),
             )
             .child(
                 Button::new(format!("merge-speaker-{id}"))
