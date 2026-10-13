@@ -25,6 +25,7 @@ pub async fn link_meeting_with_snapshot(
     if !updated {
         return Ok(false);
     }
+    crate::speaker_diarization::service::on_meeting_linked(pool, meeting_id).await;
 
     let folder = match lookup_meeting_folder(pool, meeting_id).await {
         Ok(Some(p)) => Some(PathBuf::from(p)),
