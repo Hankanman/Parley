@@ -1181,6 +1181,7 @@ mod channel_tests {
                 voice_profile_id: None,
                 changed,
                 previous_speaker: String::new(),
+                previous_voice_profile_id: None,
             }
         };
         let refined = vec![

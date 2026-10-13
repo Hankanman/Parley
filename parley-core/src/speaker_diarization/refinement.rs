@@ -196,8 +196,9 @@ pub struct RefinedAssignment {
     pub sequence_id: u64,
     pub speaker: String,
     /// Profile id after refinement. `Some` for a segment pinned to a profile
-    /// by the live pass (we only ever unpin a weak self match on the system
-    /// channel), and may be newly `Some` for a segment whose cluster was
+    /// by the live pass (we only unpin a weak self match on the system
+    /// channel, or a weak match to someone the calendar event didn't
+    /// invite), and may be newly `Some` for a segment whose cluster was
     /// folded into a stored profile.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voice_profile_id: Option<String>,
@@ -209,6 +210,10 @@ pub struct RefinedAssignment {
     /// row the user renamed underneath us is never clobbered.
     #[serde(skip)]
     pub previous_speaker: String,
+    /// The profile link the live pass gave the segment, matched the same
+    /// way so a link the user set since is never clobbered.
+    #[serde(skip)]
+    pub previous_voice_profile_id: Option<String>,
 }
 
 /// One working cluster: its member records plus running sums.
@@ -292,7 +297,10 @@ pub fn refine(
     let is_self = |pid: &str| matcher.is_some_and(|m| m.is_self(pid));
 
     // Effective pins: the live pass's profile matches, minus weak self
-    // matches heard on the system channel.
+    // matches heard on the system channel and matches to someone the linked
+    // calendar event didn't invite that fall short of the stricter bar
+    // uninvited voices need (they may have been made before the event was
+    // linked).
     let pins: Vec<Option<&str>> = history
         .iter()
         .map(|r| {
@@ -307,7 +315,13 @@ pub fn refine(
                 && is_self(pid)
                 && r.source == SegmentSource::System
                 && self_score.is_some_and(|s| s < options.self_strong_match);
-            (!weak_self_on_system).then_some(pid)
+            let weak_uninvited = matcher.is_some_and(|m| {
+                m.is_unexpected(pid)
+                    && m.score_against(pid, &r.embedding)
+                        .or(r.profile_score)
+                        .is_none_or(|s| s < m.threshold_for(pid))
+            });
+            (!weak_self_on_system && !weak_uninvited).then_some(pid)
         })
         .collect();
 
@@ -410,6 +424,7 @@ pub fn refine(
                 speaker,
                 voice_profile_id,
                 previous_speaker: record.label.clone(),
+                previous_voice_profile_id: record.voice_profile_id.clone(),
             }
         })
         .collect()
@@ -1486,5 +1501,52 @@ mod tests {
         let out = refine(&[far_end], &RefineOptions::default(), Some(&matcher));
         assert_eq!(out[0].speaker, "Speaker 1");
         assert!(out[0].voice_profile_id.is_none());
+    }
+
+    #[test]
+    fn a_weak_match_to_someone_not_invited_is_dropped() {
+        let matcher = match SpeakerProfileMatcher::new(
+            3,
+            vec![
+                ("p-zoe".to_string(), "Zoe".to_string(), v(3, &[(0, 1.0)])),
+                (
+                    "p-garry".to_string(),
+                    "Garry".to_string(),
+                    v(3, &[(1, 1.0)]),
+                ),
+            ],
+            0.60,
+        ) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("skipping: SpeakerEmbeddingManager unavailable ({})", e);
+                return;
+            }
+        };
+        // Matched live, before the event was linked, at 0.65 alike to Zoe.
+        let mut seg_zoe = seg(
+            1,
+            v(3, &[(0, 0.65), (2, 0.76)]),
+            SegmentSource::System,
+            30.0,
+        );
+        seg_zoe.voice_profile_id = Some("p-zoe".into());
+        seg_zoe.label = "Zoe".into();
+        seg_zoe.profile_score = Some(0.65);
+        let history = vec![seg_zoe];
+
+        let out = refine(&history, &RefineOptions::default(), Some(&matcher));
+        assert_eq!(
+            label_of(&out, 1),
+            "Zoe",
+            "no linked event: the match stands"
+        );
+
+        matcher.set_expected_profiles(Some(["p-garry".to_string()].into()));
+        let out = refine(&history, &RefineOptions::default(), Some(&matcher));
+        assert_ne!(label_of(&out, 1), "Zoe");
+        assert!(out[0].voice_profile_id.is_none());
+        assert!(out[0].changed);
+        assert_eq!(out[0].previous_voice_profile_id.as_deref(), Some("p-zoe"));
     }
 }

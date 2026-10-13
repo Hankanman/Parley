@@ -366,6 +366,9 @@ async fn run_retranscription(
             None
         }
     };
+    if let (Some(d), Some(pool)) = (diarizer.as_ref(), pool.as_ref()) {
+        crate::speaker_diarization::service::apply_meeting_attendees(pool, d, &meeting_id).await;
+    }
     if diarizer.is_some() {
         info!("Speaker diarization enabled for retranscription");
     } else {

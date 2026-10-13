@@ -241,6 +241,83 @@ pub async fn expected_speaker_count(pool: &SqlitePool, meeting_id: &str) -> Opti
     }
 }
 
+/// The voice profiles a meeting's linked calendar event invited, matched
+/// by email, else by name (trimmed, case-insensitive), minus anyone who
+/// declined. `None` when there's no usable event — no linked event, or one
+/// that isn't a real head count ([`head_count`]) — so matching stays
+/// unrestricted. Uninvited profiles then need a stronger voice match (see
+/// [`crate::speaker_diarization::SpeakerProfileMatcher::set_expected_profiles`]).
+pub async fn expected_profile_ids(
+    pool: &SqlitePool,
+    meeting_id: &str,
+) -> Option<std::collections::HashSet<String>> {
+    let event =
+        crate::calendar::repository::CalendarRepository::get_event_for_meeting(pool, meeting_id)
+            .await
+            .ok()
+            .flatten()?;
+    head_count(&event)?;
+    let profiles = VoiceProfilesRepository::list_all(pool).await.ok()?;
+    Some(invited_profile_ids(&event, &profiles))
+}
+
+fn invited_profile_ids(
+    event: &crate::calendar::models::CalendarEvent,
+    profiles: &[VoiceProfile],
+) -> std::collections::HashSet<String> {
+    let norm = |s: Option<&str>| s.map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+    let mut people: Vec<(Option<String>, Option<String>)> = vec![(
+        norm(event.organizer_email.as_deref()),
+        norm(event.organizer_name.as_deref()),
+    )];
+    for a in &event.attendees {
+        let declined = a
+            .status
+            .as_deref()
+            .is_some_and(|s| s.eq_ignore_ascii_case("DECLINED"));
+        if !declined {
+            people.push((norm(a.email.as_deref()), norm(a.name.as_deref())));
+        }
+    }
+    profiles
+        .iter()
+        .filter(|p| {
+            let email = norm(p.email.as_deref());
+            let name = norm(Some(&p.name));
+            people
+                .iter()
+                .any(|(e, n)| (email.is_some() && *e == email) || (name.is_some() && *n == name))
+        })
+        .map(|p| p.id.clone())
+        .collect()
+}
+
+/// Tell `diarizer` who `meeting_id`'s calendar event invited.
+pub async fn apply_meeting_attendees(pool: &SqlitePool, diarizer: &Diarizer, meeting_id: &str) {
+    let expected = expected_profile_ids(pool, meeting_id).await;
+    log::info!(
+        "Speaker matching for meeting {}: {}",
+        meeting_id,
+        match &expected {
+            Some(ids) => format!("{} invited voice profile(s) preferred", ids.len()),
+            None => "no linked event, all voice profiles equal".to_string(),
+        }
+    );
+    diarizer.set_expected_profiles(expected);
+}
+
+/// A meeting was linked to (or unlinked from) a calendar event. When it is
+/// the one being recorded, update the live diarizer so voices from here on
+/// favour the invitees.
+pub async fn on_meeting_linked(pool: &SqlitePool, meeting_id: &str) {
+    if crate::audio::recording_service::current_meeting_id().as_deref() != Some(meeting_id) {
+        return;
+    }
+    if let Some(diarizer) = current_diarizer() {
+        apply_meeting_attendees(pool, &diarizer, meeting_id).await;
+    }
+}
+
 fn head_count(event: &crate::calendar::models::CalendarEvent) -> Option<usize> {
     let key = |name: Option<&str>, email: Option<&str>| {
         email
@@ -313,6 +390,7 @@ pub async fn refine_and_persist(
     // Clustering is pure CPU work over the whole session's embeddings; keep
     // it off the async runtime so it can't stall other tasks (same reasoning
     // as whisper/embedding inference elsewhere).
+    apply_meeting_attendees(pool, &diarizer, meeting_id).await;
     let options = crate::speaker_diarization::RefineOptions::default()
         .with_max_speakers(expected_speaker_count(pool, meeting_id).await);
     let refined = {
@@ -329,13 +407,14 @@ pub async fn refine_and_persist(
         return Ok(0);
     }
 
-    let updates: Vec<(u64, String, String, Option<String>)> = refined
+    let updates: Vec<crate::database::repositories::transcript::RefinementUpdate> = refined
         .iter()
         .filter(|r| r.changed)
         .map(|r| {
             (
                 r.sequence_id,
                 r.previous_speaker.clone(),
+                r.previous_voice_profile_id.clone(),
                 r.speaker.clone(),
                 r.voice_profile_id.clone(),
             )
@@ -880,6 +959,42 @@ mod head_count_tests {
         }
     }
 
+    fn profile(id: &str, name: &str, email: Option<&str>) -> crate::database::models::VoiceProfile {
+        crate::database::models::VoiceProfile {
+            id: id.into(),
+            name: name.into(),
+            email: email.map(str::to_string),
+            embedding: Vec::new(),
+            embedding_dim: 0,
+            sample_count: 1,
+            is_self: false,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn invitees_are_matched_to_profiles_by_email_or_name() {
+        let mut e = event(
+            Some("Garry@IBM.com"),
+            &[("zoe@x.com", Some("DECLINED")), ("cat@x.com", None)],
+        );
+        e.attendees.push(Attendee {
+            name: Some(" Matthew Ball ".into()),
+            ..Default::default()
+        });
+        let profiles = [
+            profile("p-garry", "Garry Biddle", Some("garry@ibm.com")),
+            profile("p-zoe", "Zoe Carberry", Some("zoe@x.com")),
+            profile("p-matt", "matthew ball", None),
+            profile("p-other", "Someone Else", Some("else@x.com")),
+        ];
+        let ids = super::invited_profile_ids(&e, &profiles);
+        let mut ids: Vec<_> = ids.into_iter().collect();
+        ids.sort();
+        assert_eq!(ids, vec!["p-garry".to_string(), "p-matt".to_string()]);
+    }
+
     #[test]
     fn counts_organizer_and_attendees_once_each() {
         let e = event(
@@ -1209,5 +1324,48 @@ mod tests {
             .unwrap();
         assert_eq!(bytes_to_floats(&p.embedding).unwrap(), vec![0.0, 1.0]);
         assert_eq!(p.sample_count, 9);
+    }
+
+    #[tokio::test]
+    async fn refinement_rewrites_a_live_match_but_never_a_users_link() {
+        let pool = pool_with_two_speaker_3_segments().await;
+        sqlx::query(
+            "INSERT INTO transcripts
+               (id, meeting_id, transcript, timestamp, speaker, voice_profile_id, sequence_id)
+             VALUES ('l1', 'm1', 'a', '00:10', 'Zoe', 'p-zoe', 1),
+                    ('l2', 'm1', 'b', '00:20', 'Zoe', 'p-garry', 2)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Both were "Zoe"/p-zoe live; the user has since re-pointed l2.
+        let updates = vec![
+            (
+                1,
+                "Zoe".to_string(),
+                Some("p-zoe".to_string()),
+                "Speaker 4".to_string(),
+                None,
+            ),
+            (
+                2,
+                "Zoe".to_string(),
+                Some("p-zoe".to_string()),
+                "Speaker 4".to_string(),
+                None,
+            ),
+        ];
+        let changed = TranscriptsRepository::update_speakers_by_sequence(&pool, "m1", &updates)
+            .await
+            .unwrap();
+        assert_eq!(changed, 1);
+        assert_eq!(
+            speaker_of(&pool, "l1").await,
+            (Some("Speaker 4".into()), None)
+        );
+        assert_eq!(
+            speaker_of(&pool, "l2").await,
+            (Some("Zoe".into()), Some("p-garry".into()))
+        );
     }
 }

@@ -4,6 +4,11 @@ use sqlx::{Connection, Error as SqlxError, SqlitePool};
 use tracing::{error, info};
 use uuid::Uuid;
 
+/// One refined row for [`TranscriptsRepository::update_speakers_by_sequence`]:
+/// `(sequence_id, expected_speaker, expected_profile_id, new_speaker,
+/// new_profile_id)`.
+pub type RefinementUpdate = (u64, String, Option<String>, String, Option<String>);
+
 pub struct TranscriptsRepository;
 
 impl TranscriptsRepository {
@@ -312,8 +317,9 @@ impl TranscriptsRepository {
 
     /// Apply post-meeting speaker refinement to `meeting_id`'s transcripts.
     ///
-    /// `updates` is `(sequence_id, expected_current_speaker, new_speaker,
-    /// new_voice_profile_id)` — the profile id is `Some` when refinement
+    /// `updates` is `(sequence_id, expected_current_speaker,
+    /// expected_current_profile_id, new_speaker, new_voice_profile_id)` —
+    /// the new profile id is `Some` when refinement
     /// folded the row's cluster into a stored voice profile, linking the row
     /// so its chip routes through profile editing from then on.
     /// Returns the number of rows actually rewritten.
@@ -321,10 +327,12 @@ impl TranscriptsRepository {
     /// Three guards keep this from ever damaging a deliberate label, since
     /// refinement runs unattended in the background:
     ///
-    /// 1. `voice_profile_id IS NULL` — a row matched to an enrolled voice (or
-    ///    named by the user via promote/merge) is authoritative and is never
-    ///    re-clustered. This mirrors the pinning in `refinement::refine` and
-    ///    holds even if the in-memory diarizer history disagrees with the DB.
+    /// 1. `voice_profile_id IS expected_current_profile_id` — the row still
+    ///    carries the profile link the live pass gave it. Refinement keeps
+    ///    live profile matches except the weak ones it deliberately drops (a
+    ///    faint self match on the system channel, or someone the linked
+    ///    calendar event didn't invite); a link the user set since (via
+    ///    promote/merge/assign) differs, so it is never touched.
     /// 2. `speaker = expected_current_speaker` — makes each update a no-op
     ///    unless the row still carries the exact label the live pass gave it,
     ///    so a rename that landed between save and refinement wins, and a
@@ -339,7 +347,7 @@ impl TranscriptsRepository {
     pub async fn update_speakers_by_sequence(
         pool: &SqlitePool,
         meeting_id: &str,
-        updates: &[(u64, String, String, Option<String>)],
+        updates: &[RefinementUpdate],
     ) -> Result<u64, SqlxError> {
         if updates.is_empty() {
             return Ok(0);
@@ -349,20 +357,23 @@ impl TranscriptsRepository {
         let mut transaction = conn.begin().await?;
 
         let mut changed = 0u64;
-        for (sequence_id, expected_speaker, new_speaker, new_profile_id) in updates {
+        for (sequence_id, expected_speaker, expected_profile_id, new_speaker, new_profile_id) in
+            updates
+        {
             let result = sqlx::query(
                 "UPDATE transcripts
                  SET speaker = ?, voice_profile_id = ?
                  WHERE meeting_id = ?
                    AND sequence_id = ?
                    AND speaker = ?
-                   AND voice_profile_id IS NULL",
+                   AND voice_profile_id IS ?",
             )
             .bind(new_speaker)
             .bind(new_profile_id)
             .bind(meeting_id)
             .bind(*sequence_id as i64)
             .bind(expected_speaker)
+            .bind(expected_profile_id)
             .execute(&mut *transaction)
             .await;
 

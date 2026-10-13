@@ -492,6 +492,15 @@ impl Diarizer {
         self.refine_with(&RefineOptions::default())
     }
 
+    /// Favour the profiles a meeting's calendar event invited (see
+    /// [`SpeakerProfileMatcher::set_expected_profiles`]). No-op without
+    /// stored profiles.
+    pub fn set_expected_profiles(&self, ids: Option<std::collections::HashSet<String>>) {
+        if let Some(m) = &self.profile_matcher {
+            m.set_expected_profiles(ids);
+        }
+    }
+
     /// [`refine`] with explicit tuning — e.g. a known attendee count as the
     /// soft speaker cap (see [`RefineOptions::max_speakers`]).
     ///
