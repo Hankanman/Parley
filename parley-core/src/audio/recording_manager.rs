@@ -300,10 +300,7 @@ impl RecordingManager {
     }
 
     /// Stop recording and save audio (legacy method)
-    pub async fn stop_recording(
-        &mut self,
-        sink: &dyn crate::events::EventSink,
-    ) -> Result<()> {
+    pub async fn stop_recording(&mut self, sink: &dyn crate::events::EventSink) -> Result<()> {
         info!("Stopping recording manager");
 
         // Get recording duration BEFORE stopping (important!)

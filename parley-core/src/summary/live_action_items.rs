@@ -77,12 +77,11 @@ pub fn start(sink: SharedEventSink, pool: SqlitePool, provider_name: String, mod
         while GENERATION.load(Ordering::SeqCst) == generation {
             interval.tick().await;
 
-            let segments: Vec<Segment> =
-                crate::audio::recording_service::snapshot_segments()
-                    .iter()
-                    .map(Segment::from_common)
-                    .filter(|s| !s.is_empty())
-                    .collect();
+            let segments: Vec<Segment> = crate::audio::recording_service::snapshot_segments()
+                .iter()
+                .map(Segment::from_common)
+                .filter(|s| !s.is_empty())
+                .collect();
             if segments.is_empty() {
                 continue;
             }

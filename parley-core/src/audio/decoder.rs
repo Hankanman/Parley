@@ -137,7 +137,13 @@ impl DecodedAudio {
         }
         let stride = self.channels as usize;
         let channel = |c: usize| DecodedAudio {
-            samples: self.samples.iter().skip(c).step_by(stride).copied().collect(),
+            samples: self
+                .samples
+                .iter()
+                .skip(c)
+                .step_by(stride)
+                .copied()
+                .collect(),
             sample_rate: self.sample_rate,
             channels: 1,
             duration_seconds: self.duration_seconds,

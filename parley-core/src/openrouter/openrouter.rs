@@ -46,7 +46,10 @@ const FALLBACK_MODELS: &[(&str, &str)] = &[
     ("openrouter/auto", "Auto (best available model)"),
     ("anthropic/claude-3.5-sonnet", "Claude 3.5 Sonnet"),
     ("openai/gpt-4o", "GPT-4o"),
-    ("meta-llama/llama-3.1-70b-instruct", "Llama 3.1 70B Instruct"),
+    (
+        "meta-llama/llama-3.1-70b-instruct",
+        "Llama 3.1 70B Instruct",
+    ),
     ("google/gemini-pro-1.5", "Gemini Pro 1.5"),
 ];
 

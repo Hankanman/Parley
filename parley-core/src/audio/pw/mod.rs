@@ -157,7 +157,9 @@ fn enumerate_on_current_thread() -> Result<Vec<PwDevice>> {
 
     let mut out = devices.borrow().clone();
     // Stable ordering: microphones first, then sinks, alphabetical labels.
-    out.sort_by(|a, b| (a.kind == PwDeviceKind::System, &a.label).cmp(&(b.kind == PwDeviceKind::System, &b.label)));
+    out.sort_by(|a, b| {
+        (a.kind == PwDeviceKind::System, &a.label).cmp(&(b.kind == PwDeviceKind::System, &b.label))
+    });
     debug!("pw: enumerated {} audio nodes", out.len());
     Ok(out)
 }
@@ -387,27 +389,25 @@ fn run_capture_loop(
     let on_event_state = on_event.clone();
     let _listener = stream
         .add_local_listener_with_user_data(())
-        .state_changed(move |_stream, _ud, _old, new| {
-            match new {
-                pw::stream::StreamState::Streaming | pw::stream::StreamState::Paused => {
-                    reached_connected_cb.set(true);
+        .state_changed(move |_stream, _ud, _old, new| match new {
+            pw::stream::StreamState::Streaming | pw::stream::StreamState::Paused => {
+                reached_connected_cb.set(true);
+            }
+            pw::stream::StreamState::Error(e) => {
+                warn!("pw: capture stream error state: {}", e);
+                if reached_connected_cb.get() {
+                    on_event_state(PwStreamEvent::Error(e.clone()));
                 }
-                pw::stream::StreamState::Error(e) => {
-                    warn!("pw: capture stream error state: {}", e);
-                    if reached_connected_cb.get() {
-                        on_event_state(PwStreamEvent::Error(e.clone()));
-                    }
+                mainloop_err.quit();
+            }
+            pw::stream::StreamState::Unconnected => {
+                if reached_connected_cb.get() {
+                    warn!("pw: capture stream unconnected (device likely disappeared)");
+                    on_event_state(PwStreamEvent::Disconnected);
                     mainloop_err.quit();
                 }
-                pw::stream::StreamState::Unconnected => {
-                    if reached_connected_cb.get() {
-                        warn!("pw: capture stream unconnected (device likely disappeared)");
-                        on_event_state(PwStreamEvent::Disconnected);
-                        mainloop_err.quit();
-                    }
-                }
-                pw::stream::StreamState::Connecting => {}
             }
+            pw::stream::StreamState::Connecting => {}
         })
         .process(move |stream, _ud| {
             let Some(mut buffer) = stream.dequeue_buffer() else {

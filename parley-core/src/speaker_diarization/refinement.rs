@@ -338,8 +338,10 @@ pub fn refine(
         if indices.is_empty() {
             continue;
         }
-        let embeddings: Vec<Vec<f32>> =
-            indices.iter().map(|&i| history[i].embedding.clone()).collect();
+        let embeddings: Vec<Vec<f32>> = indices
+            .iter()
+            .map(|&i| history[i].embedding.clone())
+            .collect();
         let local = agglomerative_cluster(&embeddings, 1.0 - options.threshold);
         let offset = group_of_cluster.len();
         let count = local.iter().copied().max().map_or(0, |m| m + 1);
@@ -351,7 +353,11 @@ pub fn refine(
     let mut clusters = build_clusters(history, &pins, &cluster_of, &group_of_cluster);
 
     // 2. Merge clusters whose centroids say they're the same voice.
-    merge_closest(&mut clusters, options.merge_similarity, options.mic_merge_similarity);
+    merge_closest(
+        &mut clusters,
+        options.merge_similarity,
+        options.mic_merge_similarity,
+    );
 
     // 3. Fold minor clusters into the nearest substantial one.
     fold_minor_clusters(&mut clusters, options);
@@ -491,7 +497,9 @@ fn fold_minor_clusters(clusters: &mut Vec<Cluster>, options: &RefineOptions) {
     // so they need a closer match to be folded. Fragments too short to
     // embed and mic-channel strays are never candidates.
     let too_short = |c: &Cluster| c.secs < options.short_segment_secs * c.members.len() as f32;
-    let missing = options.max_speakers.map_or(0, |n| n.saturating_sub(majors.len()));
+    let missing = options
+        .max_speakers
+        .map_or(0, |n| n.saturating_sub(majors.len()));
     let mut candidates: Vec<usize> = (0..clusters.len())
         .filter(|&i| {
             let c = &clusters[i];
@@ -606,8 +614,7 @@ fn cap_speakers(
         let mut best: Option<(usize, usize, f32)> = None;
         for i in 0..clusters.len() {
             for j in (i + 1)..clusters.len() {
-                if (names[i].is_some() && names[j].is_some())
-                    || !clusters[i].may_join(&clusters[j])
+                if (names[i].is_some() && names[j].is_some()) || !clusters[i].may_join(&clusters[j])
                 {
                     continue;
                 }
@@ -1159,7 +1166,12 @@ mod tests {
         // 0.4 alike: below the same-voice merge, and neither is minor.
         let history = vec![
             seg(1, v(3, &[(0, 1.0)]), SegmentSource::System, 30.0),
-            seg(2, v(3, &[(0, 0.4), (1, 0.9165)]), SegmentSource::System, 30.0),
+            seg(
+                2,
+                v(3, &[(0, 0.4), (1, 0.9165)]),
+                SegmentSource::System,
+                30.0,
+            ),
         ];
         let out = refine(&history, &RefineOptions::default(), None);
         assert_eq!(distinct_speakers(&out), 2);
@@ -1255,13 +1267,25 @@ mod tests {
         // the mechanism with a lower one.
         let history = vec![
             seg(1, v(3, &[(0, 1.0)]), SegmentSource::System, 30.0),
-            seg(2, v(3, &[(0, 0.5), (1, 0.866)]), SegmentSource::System, 30.0),
+            seg(
+                2,
+                v(3, &[(0, 0.5), (1, 0.866)]),
+                SegmentSource::System,
+                30.0,
+            ),
             seg(3, v(3, &[(2, 1.0)]), SegmentSource::System, 30.0),
         ];
-        let low_floor = RefineOptions { cap_similarity_floor: 0.40, ..RefineOptions::default() };
+        let low_floor = RefineOptions {
+            cap_similarity_floor: 0.40,
+            ..RefineOptions::default()
+        };
         assert_eq!(distinct_speakers(&refine(&history, &low_floor, None)), 3);
 
-        let out = refine(&history, &low_floor.clone().with_max_speakers(Some(2)), None);
+        let out = refine(
+            &history,
+            &low_floor.clone().with_max_speakers(Some(2)),
+            None,
+        );
         assert_eq!(distinct_speakers(&out), 2);
         assert_eq!(label_of(&out, 1), label_of(&out, 2));
 
@@ -1277,10 +1301,19 @@ mod tests {
         // fuse these (that's how one "Speaker 3" held two people).
         let history = vec![
             seg(1, v(3, &[(0, 1.0)]), SegmentSource::System, 30.0),
-            seg(2, v(3, &[(0, 0.5), (1, 0.866)]), SegmentSource::System, 30.0),
+            seg(
+                2,
+                v(3, &[(0, 0.5), (1, 0.866)]),
+                SegmentSource::System,
+                30.0,
+            ),
             seg(3, v(3, &[(2, 1.0)]), SegmentSource::System, 30.0),
         ];
-        let out = refine(&history, &RefineOptions::default().with_max_speakers(Some(2)), None);
+        let out = refine(
+            &history,
+            &RefineOptions::default().with_max_speakers(Some(2)),
+            None,
+        );
         assert_eq!(distinct_speakers(&out), 3);
     }
 
@@ -1297,10 +1330,18 @@ mod tests {
         let out = refine(&history, &RefineOptions::default(), None);
         assert_eq!(distinct_speakers(&out), 1);
         // Two expected, one heard: the stray may be the second invitee.
-        let out = refine(&history, &RefineOptions::default().with_max_speakers(Some(2)), None);
+        let out = refine(
+            &history,
+            &RefineOptions::default().with_max_speakers(Some(2)),
+            None,
+        );
         assert_eq!(distinct_speakers(&out), 2);
         // Everyone already accounted for: folded.
-        let out = refine(&history, &RefineOptions::default().with_max_speakers(Some(1)), None);
+        let out = refine(
+            &history,
+            &RefineOptions::default().with_max_speakers(Some(1)),
+            None,
+        );
         assert_eq!(distinct_speakers(&out), 1);
     }
 
@@ -1310,7 +1351,11 @@ mod tests {
             pinned(1, v(3, &[(0, 1.0)]), "John", "p-john"),
             pinned(2, v(3, &[(0, 0.6), (1, 0.8)]), "Mary", "p-mary"),
         ];
-        let out = refine(&history, &RefineOptions::default().with_max_speakers(Some(1)), None);
+        let out = refine(
+            &history,
+            &RefineOptions::default().with_max_speakers(Some(1)),
+            None,
+        );
         assert_eq!(label_of(&out, 1), "John");
         assert_eq!(label_of(&out, 2), "Mary");
     }
@@ -1335,16 +1380,30 @@ mod tests {
         let Some(matcher) = self_matcher(v(3, &[(0, 1.0)])) else {
             return;
         };
-        let mut far_end = seg(1, v(3, &[(0, 0.62), (1, 0.785)]), SegmentSource::System, 30.0);
+        let mut far_end = seg(
+            1,
+            v(3, &[(0, 0.62), (1, 0.785)]),
+            SegmentSource::System,
+            30.0,
+        );
         far_end.voice_profile_id = Some("p-self".into());
         far_end.label = "Seb".into();
         far_end.profile_score = Some(0.62);
-        let mut strong = seg(2, v(3, &[(0, 0.9), (1, -0.436)]), SegmentSource::System, 30.0);
+        let mut strong = seg(
+            2,
+            v(3, &[(0, 0.9), (1, -0.436)]),
+            SegmentSource::System,
+            30.0,
+        );
         strong.voice_profile_id = Some("p-self".into());
         strong.label = "Seb".into();
         strong.profile_score = Some(0.9);
 
-        let out = refine(&[far_end, strong], &RefineOptions::default(), Some(&matcher));
+        let out = refine(
+            &[far_end, strong],
+            &RefineOptions::default(),
+            Some(&matcher),
+        );
         assert_ne!(label_of(&out, 1), "Seb");
         assert!(out[0].voice_profile_id.is_none());
         assert!(out[0].changed);
@@ -1402,7 +1461,11 @@ mod tests {
             3,
             vec![
                 ("p-self".to_string(), "Seb".to_string(), self_voice),
-                ("p-dup".to_string(), " seb".to_string(), contaminated.clone()),
+                (
+                    "p-dup".to_string(),
+                    " seb".to_string(),
+                    contaminated.clone(),
+                ),
             ],
             0.60,
         ) {

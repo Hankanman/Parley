@@ -59,7 +59,13 @@ const APP_RULES: &[Rule] = &[
         name: "Microsoft Teams",
         // teams-for-linux (binary + flatpak id `...teams_for_linux`), the
         // retired official client (`teams`), and `msteams`.
-        needles: &["teams-for-linux", "teams_for_linux", "msteams", "microsoft teams", "teams"],
+        needles: &[
+            "teams-for-linux",
+            "teams_for_linux",
+            "msteams",
+            "microsoft teams",
+            "teams",
+        ],
     },
     Rule {
         id: "zoom",
@@ -212,7 +218,8 @@ pub fn classify(props: &HashMap<String, String>, own_pid: u32) -> Option<Meeting
 /// `application.name = Parley`).
 fn is_own_stream(props: &HashMap<String, String>, own_pid: u32) -> bool {
     let own = own_pid.to_string();
-    if props.get("application.process.id") == Some(&own) || props.get("pipewire.sec.pid") == Some(&own)
+    if props.get("application.process.id") == Some(&own)
+        || props.get("pipewire.sec.pid") == Some(&own)
     {
         return true;
     }
@@ -263,16 +270,44 @@ mod tests {
     #[test]
     fn matches_each_native_app() {
         let cases = [
-            (vec![("application.name", "ZOOM VoiceEngine"), ("application.process.binary", "zoom")], "zoom"),
+            (
+                vec![
+                    ("application.name", "ZOOM VoiceEngine"),
+                    ("application.process.binary", "zoom"),
+                ],
+                "zoom",
+            ),
             (vec![("application.process.binary", "slack")], "slack"),
-            (vec![("application.name", "WEBRTC VoiceEngine"), ("application.process.binary", "Discord")], "discord"),
-            (vec![("application.process.binary", "CiscoCollabHost")], "webex"),
+            (
+                vec![
+                    ("application.name", "WEBRTC VoiceEngine"),
+                    ("application.process.binary", "Discord"),
+                ],
+                "discord",
+            ),
+            (
+                vec![("application.process.binary", "CiscoCollabHost")],
+                "webex",
+            ),
             (vec![("application.name", "Jitsi Meet")], "jitsi"),
-            (vec![("pipewire.access.portal.app_id", "us.zoom.Zoom")], "zoom"),
-            (vec![("application.id", "com.github.IsmaelMartinez.teams_for_linux")], "teams"),
+            (
+                vec![("pipewire.access.portal.app_id", "us.zoom.Zoom")],
+                "zoom",
+            ),
+            (
+                vec![(
+                    "application.id",
+                    "com.github.IsmaelMartinez.teams_for_linux",
+                )],
+                "teams",
+            ),
         ];
         for (pairs, expected) in cases {
-            assert_eq!(id_of(&stream(&pairs)).as_deref(), Some(expected), "{pairs:?}");
+            assert_eq!(
+                id_of(&stream(&pairs)).as_deref(),
+                Some(expected),
+                "{pairs:?}"
+            );
         }
     }
 
@@ -314,7 +349,10 @@ mod tests {
     #[test]
     fn ignores_playback_streams_and_devices() {
         for class in ["Stream/Output/Audio", "Audio/Source", "Video/Source"] {
-            let props = stream(&[("media.class", class), ("application.process.binary", "zoom")]);
+            let props = stream(&[
+                ("media.class", class),
+                ("application.process.binary", "zoom"),
+            ]);
             assert_eq!(id_of(&props), None, "{class}");
         }
     }

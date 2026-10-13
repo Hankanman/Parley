@@ -58,8 +58,7 @@ fn parse_event(ev: &IcalEvent) -> Result<ParsedEvent> {
         },
     };
 
-    let recurrence_id = parse_optional_datetime_property(ev, "RECURRENCE-ID")?
-        .map(|(dt, _)| dt);
+    let recurrence_id = parse_optional_datetime_property(ev, "RECURRENCE-ID")?.map(|(dt, _)| dt);
 
     let summary = prop_value(ev, "SUMMARY").map(|s| s.to_string());
     let description = prop_value(ev, "DESCRIPTION").map(|s| s.to_string());
@@ -96,12 +95,8 @@ fn prop_value<'a>(ev: &'a IcalEvent, name: &str) -> Option<&'a str> {
     prop(ev, name).and_then(|p| p.value.as_deref())
 }
 
-fn parse_datetime_property(
-    ev: &IcalEvent,
-    name: &str,
-) -> Result<(DateTime<Utc>, bool)> {
-    parse_optional_datetime_property(ev, name)?
-        .ok_or_else(|| anyhow!("missing {} property", name))
+fn parse_datetime_property(ev: &IcalEvent, name: &str) -> Result<(DateTime<Utc>, bool)> {
+    parse_optional_datetime_property(ev, name)?.ok_or_else(|| anyhow!("missing {} property", name))
 }
 
 fn parse_optional_datetime_property(
@@ -141,8 +136,7 @@ fn parse_optional_datetime_property(
 
 fn parse_naive_or_utc(value: &str) -> Result<NaiveDateTime> {
     if let Some(stripped) = value.strip_suffix('Z') {
-        return NaiveDateTime::parse_from_str(stripped, "%Y%m%dT%H%M%S")
-            .map_err(|e| e.into());
+        return NaiveDateTime::parse_from_str(stripped, "%Y%m%dT%H%M%S").map_err(|e| e.into());
     }
     NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%S").map_err(|e| e.into())
 }
@@ -443,7 +437,10 @@ END:VCALENDAR\r\n";
     fn strip_ogcs_suffix_is_case_insensitive_and_conservative() {
         assert_eq!(strip_ogcs_suffix("bob@example.com.ogcs"), "bob@example.com");
         assert_eq!(strip_ogcs_suffix("bob@example.com.OGCS"), "bob@example.com");
-        assert_eq!(strip_ogcs_suffix(" bob@example.com.ogcs "), "bob@example.com");
+        assert_eq!(
+            strip_ogcs_suffix(" bob@example.com.ogcs "),
+            "bob@example.com"
+        );
         // Untagged values are only trimmed.
         assert_eq!(strip_ogcs_suffix("bob@example.com"), "bob@example.com");
         assert_eq!(strip_ogcs_suffix("Alice Example"), "Alice Example");

@@ -131,38 +131,37 @@ pub async fn get_or_init_whisper(
             Ok(None)
         }
     };
-    let configured_model: Option<String> =
-        match saved_config {
-            Ok(Some(config)) => {
-                info!(
-                    "📝 Saved transcript config - provider: {}, model: {}",
-                    config.provider, config.model
-                );
-                if config.provider != "localWhisper" {
-                    if let Some(ref loaded) = current_model {
-                        info!(
-                            "ℹ️ Config uses provider '{}'; reusing loaded model '{}'",
-                            config.provider, loaded
-                        );
-                        return Ok(engine);
-                    }
-                    return Err(format!(
+    let configured_model: Option<String> = match saved_config {
+        Ok(Some(config)) => {
+            info!(
+                "📝 Saved transcript config - provider: {}, model: {}",
+                config.provider, config.model
+            );
+            if config.provider != "localWhisper" {
+                if let Some(ref loaded) = current_model {
+                    info!(
+                        "ℹ️ Config uses provider '{}'; reusing loaded model '{}'",
+                        config.provider, loaded
+                    );
+                    return Ok(engine);
+                }
+                return Err(format!(
                         "Cannot initialize Whisper engine: config uses provider '{}'. Local recording requires 'localWhisper'.",
                         config.provider
                     ));
-                }
-                if config.model.is_empty() {
-                    None
-                } else {
-                    Some(config.model)
-                }
             }
-            Ok(None) => None,
-            Err(e) => {
-                warn!("⚠️ Failed to get transcript config: {}", e);
+            if config.model.is_empty() {
                 None
+            } else {
+                Some(config.model)
             }
-        };
+        }
+        Ok(None) => None,
+        Err(e) => {
+            warn!("⚠️ Failed to get transcript config: {}", e);
+            None
+        }
+    };
 
     let configured_model = match (configured_model, &current_model) {
         (Some(model), _) => model,

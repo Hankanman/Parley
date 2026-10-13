@@ -13,8 +13,7 @@ use std::sync::Mutex;
 /// Default speaker-embedding model. English-trained (VoxCeleb), 192-dim,
 /// fast on CPU. The 3D-Speaker family ships its preprocessing inside the
 /// ONNX graph, so we feed raw 16 kHz mono audio directly.
-pub const DEFAULT_MODEL_FILENAME: &str =
-    "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx";
+pub const DEFAULT_MODEL_FILENAME: &str = "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx";
 
 /// Silero VAD ONNX model used by sherpa-onnx's `VoiceActivityDetector`.
 /// Lives alongside the speaker embedding model since both are sherpa-onnx

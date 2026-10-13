@@ -83,8 +83,7 @@ pub fn default_start_hooks(pool: Option<sqlx::SqlitePool>) -> StartHooks {
     StartHooks {
         validate_transcription_model: Box::new(move || {
             Box::pin(async move {
-                transcription::validate_transcription_model_ready(pool_for_validate.as_ref())
-                    .await
+                transcription::validate_transcription_model_ready(pool_for_validate.as_ref()).await
             })
         }),
         init_speaker_diarizer: Box::new(move || {
@@ -195,7 +194,13 @@ fn emit_phase(sink: &dyn crate::events::EventSink, phase: RecordingPhase) {
         }
     };
     let chunks_in_queue = transcription::queue_depth();
-    recording_phase::set_phase(sink, phase, active_duration_secs, total_pause_secs, chunks_in_queue);
+    recording_phase::set_phase(
+        sink,
+        phase,
+        active_duration_secs,
+        total_pause_secs,
+        chunks_in_queue,
+    );
 }
 
 /// Shared entry check for every start path. Refuses while another start is
@@ -599,7 +604,12 @@ pub async fn start(
 
     // Start recording with resolved devices
     let transcription_receiver = match manager
-        .start_recording(microphone_device, system_device, auto_save, streaming_partials)
+        .start_recording(
+            microphone_device,
+            system_device,
+            auto_save,
+            streaming_partials,
+        )
         .await
     {
         Ok(rx) => rx,
@@ -659,7 +669,10 @@ pub async fn start(
         // whether the insert above succeeded — see its own doc comment.
         let (writer, writer_task) = TranscriptDbWriter::start(pool);
         *TRANSCRIPT_DB_WRITER.lock().unwrap() = Some(writer);
-        let stale_task = TRANSCRIPT_DB_WRITER_TASK.lock().unwrap().replace(writer_task);
+        let stale_task = TRANSCRIPT_DB_WRITER_TASK
+            .lock()
+            .unwrap()
+            .replace(writer_task);
         if let Some(stale_task) = stale_task {
             // Same defensive cleanup as the stale transcript subscriber
             // below: a previous session's task should already be gone, but
@@ -741,16 +754,15 @@ pub async fn start(
     } else {
         "Recording started with custom devices and parallel processing"
     };
-    ctx.sink
-        .emit_event(
-            "recording-started",
-            &serde_json::json!({
-                "message": message,
-                "devices": devices,
-                "workers": 3,
-                "meeting_id": meeting_id
-            }),
-        )?;
+    ctx.sink.emit_event(
+        "recording-started",
+        &serde_json::json!({
+            "message": message,
+            "devices": devices,
+            "workers": 3,
+            "meeting_id": meeting_id
+        }),
+    )?;
 
     // The canonical `recording-state` emit below drives the shell's tray
     // refresh (see `recording_commands.rs`'s `TrayRefreshingSink`) — no
@@ -1158,7 +1170,11 @@ pub async fn stop(ctx: RecordingContext, _args: RecordingArgs) -> Result<(), Str
                 Ok(_) => info!(
                     "DB: meeting {} row finalised ({})",
                     mid,
-                    if was_fatal_error { "interrupted" } else { "completed" }
+                    if was_fatal_error {
+                        "interrupted"
+                    } else {
+                        "completed"
+                    }
                 ),
                 Err(e) => warn!("DB: failed to finalise meeting {} row: {}", mid, e),
             }
@@ -1183,16 +1199,15 @@ pub async fn stop(ctx: RecordingContext, _args: RecordingArgs) -> Result<(), Str
     // Emit final stop event with folder_path, meeting_name and meeting_id.
     // The frontend no longer needs meeting_id to look up *whether* it has a
     // meeting to update — the row already exists — only to know which row.
-    ctx.sink
-        .emit_event(
-            "recording-stopped",
-            &serde_json::json!({
-                "message": "Recording stopped",
-                "folder_path": folder_path_str,
-                "meeting_name": meeting_name_str,
-                "meeting_id": meeting_id_for_stop
-            }),
-        )?;
+    ctx.sink.emit_event(
+        "recording-stopped",
+        &serde_json::json!({
+            "message": "Recording stopped",
+            "folder_path": folder_path_str,
+            "meeting_name": meeting_name_str,
+            "meeting_id": meeting_id_for_stop
+        }),
+    )?;
 
     // The canonical `recording-state` emit below drives the shell's tray
     // refresh — no separate tray call needed here.
@@ -1364,12 +1379,16 @@ pub async fn get_recording_state() -> serde_json::Value {
     // above — the same fields `recording-state` events carry, so a fresh
     // window/tab that only calls this once on mount gets exactly what it
     // would have received had it been listening from the start.
-    let snapshot = recording_phase::build_snapshot(active_duration, total_pause_duration, chunks_in_queue);
+    let snapshot =
+        recording_phase::build_snapshot(active_duration, total_pause_duration, chunks_in_queue);
 
     let mut value = serde_json::to_value(&snapshot).unwrap_or_else(|_| serde_json::json!({}));
     if let serde_json::Value::Object(map) = &mut value {
         // Legacy keys kept for compatibility with existing callers.
-        map.insert("is_recording".to_string(), serde_json::json!(is_recording_flag));
+        map.insert(
+            "is_recording".to_string(),
+            serde_json::json!(is_recording_flag),
+        );
         map.insert(
             "is_finalising".to_string(),
             serde_json::json!(is_stop_in_progress()),
@@ -1411,8 +1430,8 @@ pub async fn get_meeting_folder_path() -> Result<Option<String>, String> {
 
 /// Get accumulated transcript segments from current recording session
 /// Used for syncing frontend state after page reload during active recording
-pub async fn get_transcript_history() -> Result<Vec<crate::audio::recording_saver::TranscriptSegment>, String>
-{
+pub async fn get_transcript_history(
+) -> Result<Vec<crate::audio::recording_saver::TranscriptSegment>, String> {
     let manager_guard = RECORDING_MANAGER.lock().unwrap();
 
     if let Some(manager) = manager_guard.as_ref() {
@@ -1463,7 +1482,11 @@ mod tests {
     #[test]
     fn replay_buffered_segments_drains_in_order_into_manager() {
         let manager = RecordingManager::new();
-        let mut buffer = vec![segment("seg_1", 1), segment("seg_2", 2), segment("seg_3", 3)];
+        let mut buffer = vec![
+            segment("seg_1", 1),
+            segment("seg_2", 2),
+            segment("seg_3", 3),
+        ];
 
         replay_buffered_segments(&mut buffer, &manager);
 

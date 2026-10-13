@@ -97,7 +97,10 @@ pub fn source_label(index: usize) -> String {
 
 /// Date as shown to the model and in the UI's source list ("Thu 14 Aug 2026").
 pub fn format_meeting_date(created_at: &DateTime<Utc>) -> String {
-    created_at.with_timezone(&Local).format("%a %-d %b %Y").to_string()
+    created_at
+        .with_timezone(&Local)
+        .format("%a %-d %b %Y")
+        .to_string()
 }
 
 /// A title safe to put inside the prompt's `title="…"` attribute.
@@ -183,7 +186,11 @@ pub fn build_prompt(
             } else {
                 content
             };
-            format!("{}: {}", if turn.is_user { "User" } else { "Assistant" }, content)
+            format!(
+                "{}: {}",
+                if turn.is_user { "User" } else { "Assistant" },
+                content
+            )
         })
         .collect::<Vec<_>>()
         .into_iter()
@@ -247,9 +254,7 @@ pub enum CrossSpan {
 const TS_PLAIN: &str = r"(?:\d{1,2}:)?\d{1,3}:[0-5]\d";
 
 static CITATION_RE: Lazy<Regex> = Lazy::new(|| {
-    let ts = |p: &str| {
-        format!(r"(?:(?P<{p}h>\d{{1,2}}):)?(?P<{p}m>\d{{1,3}}):(?P<{p}s>[0-5]\d)")
-    };
+    let ts = |p: &str| format!(r"(?:(?P<{p}h>\d{{1,2}}):)?(?P<{p}m>\d{{1,3}}):(?P<{p}s>[0-5]\d)");
     let range = format!(r"(?:\s*[-–]\s*{TS_PLAIN})?");
     let pattern = [
         // 1. [M1 12:34] / [M1, 12:34] / [M1 @ 12:34] / [M1: 12:34-13:00] / [M1]
@@ -360,7 +365,9 @@ pub fn link_citations(answer: &str, source_count: usize) -> String {
 pub fn citation_link_target(url: &str) -> Option<(usize, Option<f64>)> {
     let rest = url.strip_prefix(CITATION_LINK_SCHEME)?;
     match rest.split_once('@') {
-        Some((source, secs)) => Some((source.parse().ok()?, Some(secs.parse::<u64>().ok()? as f64))),
+        Some((source, secs)) => {
+            Some((source.parse().ok()?, Some(secs.parse::<u64>().ok()? as f64)))
+        }
         None => Some((rest.parse().ok()?, None)),
     }
 }
@@ -407,20 +414,41 @@ mod tests {
                 "a",
                 "Platform \"sync\" <b>",
                 vec![
-                    vec![seg(190.0, "Alice", "Where are we on the migration?"), seg(205.0, "Kingfisher", "Cut-over is the 30th.")],
-                    vec![seg(2460.0, "Kingfisher", "Migration rollback plan is ready.")],
+                    vec![
+                        seg(190.0, "Alice", "Where are we on the migration?"),
+                        seg(205.0, "Kingfisher", "Cut-over is the 30th."),
+                    ],
+                    vec![seg(
+                        2460.0,
+                        "Kingfisher",
+                        "Migration rollback plan is ready.",
+                    )],
                 ],
             ),
             excerpts("b", "", vec![vec![seg(5.0, "Bob", "Migration done.")]]),
         ];
         let history = vec![
-            ChatTurn { is_user: true, content: "When is the cut-over?".into() },
-            ChatTurn { is_user: false, content: "The 30th [M1 03:25].".into() },
+            ChatTurn {
+                is_user: true,
+                content: "When is the cut-over?".into(),
+            },
+            ChatTurn {
+                is_user: false,
+                content: "The 30th [M1 03:25].".into(),
+            },
         ];
-        let p = build_prompt(&meetings, &history, " And the rollback? ", Some("Kingfisher"));
+        let p = build_prompt(
+            &meetings,
+            &history,
+            " And the rollback? ",
+            Some("Kingfisher"),
+        );
         let u = &p.user;
         assert!(u.starts_with("(Search limited to: Kingfisher.)"));
-        assert!(u.contains("<meeting ref=\"M1\" title=\"Platform 'sync'  b\" date=\""), "{u}");
+        assert!(
+            u.contains("<meeting ref=\"M1\" title=\"Platform 'sync'  b\" date=\""),
+            "{u}"
+        );
         assert!(u.contains("2026\">\n[03:10] Alice: Where are we on the migration?\n[03:25] Kingfisher: Cut-over is the 30th.\n…\n[41:00] Kingfisher: Migration rollback plan is ready.\n</meeting>"), "{u}");
         assert!(u.contains("<meeting ref=\"M2\" title=\"Untitled meeting\""));
         // History keeps prose but drops stale citations.
@@ -445,13 +473,20 @@ mod tests {
         let cites: Vec<(usize, Option<f64>)> = spans
             .iter()
             .filter_map(|s| match s {
-                CrossSpan::Citation { source, seconds, .. } => Some((*source, *seconds)),
+                CrossSpan::Citation {
+                    source, seconds, ..
+                } => Some((*source, *seconds)),
                 _ => None,
             })
             .collect();
         assert_eq!(
             cites,
-            vec![(0, Some(205.0)), (0, Some(2460.0)), (1, Some(3605.0)), (1, None)]
+            vec![
+                (0, Some(205.0)),
+                (0, Some(2460.0)),
+                (1, Some(3605.0)),
+                (1, None)
+            ]
         );
         // M3 isn't a source: left as text.
         assert!(matches!(spans.last(), Some(CrossSpan::Text(t)) if t.contains("[M3 00:10]")));
@@ -461,27 +496,45 @@ mod tests {
     fn bare_timestamps_resolve_to_the_meeting_in_context() {
         // After "M2" is mentioned, a bare timestamp belongs to M2.
         let spans = parse_citations("[12:00] first. In M2, they agreed [00:30].", 2);
-        assert_eq!(spans[0], CrossSpan::Text("[12:00] first. In M2, they agreed ".into()));
+        assert_eq!(
+            spans[0],
+            CrossSpan::Text("[12:00] first. In M2, they agreed ".into())
+        );
         assert_eq!(
             spans[1],
-            CrossSpan::Citation { label: "[00:30]".into(), source: 1, seconds: Some(30.0) }
+            CrossSpan::Citation {
+                label: "[00:30]".into(),
+                source: 1,
+                seconds: Some(30.0)
+            }
         );
         // With a single source a bare timestamp is unambiguous.
         let spans = parse_citations("Agreed [00:30].", 1);
-        assert!(matches!(spans[1], CrossSpan::Citation { source: 0, seconds: Some(s), .. } if s == 30.0));
+        assert!(
+            matches!(spans[1], CrossSpan::Citation { source: 0, seconds: Some(s), .. } if s == 30.0)
+        );
         // No sources: nothing is a citation.
-        assert_eq!(parse_citations("[M1 00:30]", 0), vec![CrossSpan::Text("[M1 00:30]".into())]);
+        assert_eq!(
+            parse_citations("[M1 00:30]", 0),
+            vec![CrossSpan::Text("[M1 00:30]".into())]
+        );
         assert!(parse_citations("", 3).is_empty());
     }
 
     #[test]
     fn links_are_built_from_source_index_only_and_text_is_escaped() {
-        let linked = link_citations("Yes [M2 03:25]. ![x](https://evil.example/?q=1) <img src=x> [M1]", 2);
+        let linked = link_citations(
+            "Yes [M2 03:25]. ![x](https://evil.example/?q=1) <img src=x> [M1]",
+            2,
+        );
         assert_eq!(
             linked,
             "Yes [\\[M2 03:25\\]](parley-cite:1@205). !\\[x\\](https://evil.example/?q=1) \\<img src=x> [\\[M1\\]](parley-cite:0)"
         );
-        assert_eq!(citation_link_target("parley-cite:1@205"), Some((1, Some(205.0))));
+        assert_eq!(
+            citation_link_target("parley-cite:1@205"),
+            Some((1, Some(205.0)))
+        );
         assert_eq!(citation_link_target("parley-cite:0"), Some((0, None)));
         assert_eq!(citation_link_target("parley-cite:x@1"), None);
         assert_eq!(citation_link_target("parley-cite:1@-3"), None);
@@ -522,7 +575,10 @@ mod tests {
 
     #[test]
     fn strips_citations_from_history() {
-        assert_eq!(strip_citations("A [M1 03:25], B [12:00] and [M2]."), "A, B and.");
+        assert_eq!(
+            strip_citations("A [M1 03:25], B [12:00] and [M2]."),
+            "A, B and."
+        );
         assert_eq!(strip_citations("no refs [here]"), "no refs [here]");
     }
 }

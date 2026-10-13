@@ -110,7 +110,11 @@ pub async fn load_meeting_context(
     let summary = summary_row
         .and_then(|(result,)| result)
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.get("markdown").and_then(|m| m.as_str()).map(str::to_string))
+        .and_then(|v| {
+            v.get("markdown")
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        })
         .filter(|m| !m.trim().is_empty());
 
     Ok(MeetingContext {
@@ -197,7 +201,10 @@ pub async fn ask_meeting(
 
     if let Ok(mut map) = IN_FLIGHT.lock() {
         // Only remove our own token (a newer ask may have replaced it).
-        if map.get(&meeting_id).is_some_and(|(id, _)| *id == registration) {
+        if map
+            .get(&meeting_id)
+            .is_some_and(|(id, _)| *id == registration)
+        {
             map.remove(&meeting_id);
         }
     }

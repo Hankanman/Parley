@@ -23,7 +23,11 @@ use tracing::{info, warn};
 const FALLBACK_TEMPLATE: &str = "standard_meeting";
 
 /// Fire-and-forget wrapper: logs and carries on if anything goes wrong.
-pub async fn maybe_auto_summarize(sink: SharedEventSink, pool: Option<SqlitePool>, meeting_id: String) {
+pub async fn maybe_auto_summarize(
+    sink: SharedEventSink,
+    pool: Option<SqlitePool>,
+    meeting_id: String,
+) {
     let Some(pool) = pool else {
         return;
     };

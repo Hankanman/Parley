@@ -47,7 +47,9 @@ impl Default for OnboardingStatus {
 /// serializer) so this module no longer depends on the plugin at all. The
 /// file is left in place afterward.
 fn import_legacy_onboarding_status() -> Option<OnboardingStatus> {
-    let path = crate::paths::app_data_dir().ok()?.join("onboarding-status.json");
+    let path = crate::paths::app_data_dir()
+        .ok()?
+        .join("onboarding-status.json");
     let content = std::fs::read_to_string(&path).ok()?;
     let root: serde_json::Value = serde_json::from_str(&content).ok()?;
     let value = root.get("status")?;
@@ -118,8 +120,7 @@ pub async fn save_onboarding_status(
     let mut status = status.clone();
     status.last_updated = chrono::Utc::now().to_rfc3339();
 
-    let pool =
-        pool.ok_or_else(|| anyhow!("Database not yet initialized — try again shortly"))?;
+    let pool = pool.ok_or_else(|| anyhow!("Database not yet initialized — try again shortly"))?;
     SettingsRepository::set_setting(&pool, KEY_ONBOARDING_STATUS, &status)
         .await
         .map_err(|e| anyhow!("Failed to save onboarding status: {}", e))?;
@@ -132,8 +133,7 @@ pub async fn save_onboarding_status(
 pub async fn reset_onboarding_status(pool: Option<sqlx::SqlitePool>) -> Result<()> {
     info!("Resetting onboarding status");
 
-    let pool =
-        pool.ok_or_else(|| anyhow!("Database not yet initialized — try again shortly"))?;
+    let pool = pool.ok_or_else(|| anyhow!("Database not yet initialized — try again shortly"))?;
     SettingsRepository::delete_setting(&pool, KEY_ONBOARDING_STATUS)
         .await
         .map_err(|e| anyhow!("Failed to reset onboarding status: {}", e))?;

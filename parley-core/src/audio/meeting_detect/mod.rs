@@ -157,7 +157,13 @@ fn debounce_loop(
 #[cfg(target_os = "linux")]
 pub fn snapshot_streams(
     timeout: Duration,
-) -> Result<Vec<(u32, std::collections::HashMap<String, String>, Option<MeetingApp>)>> {
+) -> Result<
+    Vec<(
+        u32,
+        std::collections::HashMap<String, String>,
+        Option<MeetingApp>,
+    )>,
+> {
     watcher::snapshot_streams(timeout)
 }
 

@@ -221,7 +221,10 @@ async fn audit_models_at_startup(model_manager: &ModelManagerSlot) {
                 models.len()
             );
         }
-        Err(e) => log::warn!("[startup-audit] whisper:  failed to enumerate models: {}", e),
+        Err(e) => log::warn!(
+            "[startup-audit] whisper:  failed to enumerate models: {}",
+            e
+        ),
     }
 
     // ── Speaker diarizer ──────────────────────────────────────────────────
@@ -266,17 +269,22 @@ async fn audit_models_at_startup(model_manager: &ModelManagerSlot) {
 
     // ── Summary (built-in AI) ─────────────────────────────────────────────
     match summary::summary_engine::service::ensure_manager(model_manager).await {
-        Ok(manager) => match summary::summary_engine::service::get_available_summary_model(&manager).await {
-            Ok(Some(name)) => {
-                log::info!("[startup-audit] summary:  {} (built-in AI, available)", name);
-            }
-            Ok(None) => {
-                log::warn!(
+        Ok(manager) => {
+            match summary::summary_engine::service::get_available_summary_model(&manager).await {
+                Ok(Some(name)) => {
+                    log::info!(
+                        "[startup-audit] summary:  {} (built-in AI, available)",
+                        name
+                    );
+                }
+                Ok(None) => {
+                    log::warn!(
                     "[startup-audit] summary:  NO built-in AI model available (gemma3:1b/4b not downloaded)"
                 );
+                }
+                Err(e) => log::warn!("[startup-audit] summary:  status check failed: {}", e),
             }
-            Err(e) => log::warn!("[startup-audit] summary:  status check failed: {}", e),
-        },
+        }
         Err(e) => log::warn!("[startup-audit] summary:  status check failed: {}", e),
     }
 
@@ -367,9 +375,9 @@ async fn ensure_required_models_downloaded(sink: SharedEventSink, pool: Option<&
             speaker_diarization::set_current_diarizer(Some(diarizer));
             log::info!("✅ [startup-download] speaker diarizer initialized");
         }
-        Ok(None) => log::warn!(
-            "[startup-download] speaker model present but diarizer build returned None"
-        ),
+        Ok(None) => {
+            log::warn!("[startup-download] speaker model present but diarizer build returned None")
+        }
         Err(e) => log::warn!("[startup-download] diarizer build failed: {}", e),
     }
 }
@@ -457,8 +465,7 @@ pub async fn shutdown(db: Option<&DatabaseManager>) {
         engine_guard.as_ref().cloned()
     };
     if let Some(engine) = engine_clone {
-        match tokio::time::timeout(std::time::Duration::from_secs(3), engine.unload_model()).await
-        {
+        match tokio::time::timeout(std::time::Duration::from_secs(3), engine.unload_model()).await {
             Ok(true) => log::info!("Whisper model unloaded on exit"),
             Ok(false) => log::debug!("No Whisper model was loaded on exit"),
             Err(_) => log::warn!("Whisper model unload timed out on exit; continuing shutdown"),

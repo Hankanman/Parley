@@ -93,8 +93,16 @@ pub struct Segment {
 ///
 /// Rows written before diarization stored the raw channel (`"mic"` /
 /// `"system"`) as the speaker label, so those map to "Me" / "Others" too.
-pub fn speaker_display_name(profile_name: Option<&str>, speaker: Option<&str>, source: Option<&str>) -> String {
-    let clean = |s: Option<&str>| s.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+pub fn speaker_display_name(
+    profile_name: Option<&str>,
+    speaker: Option<&str>,
+    source: Option<&str>,
+) -> String {
+    let clean = |s: Option<&str>| {
+        s.map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
     if let Some(name) = clean(profile_name) {
         return name;
     }
@@ -150,7 +158,11 @@ pub fn segments_from_rows(rows: Vec<StoredSegment>) -> Vec<Segment> {
     let resolved: Vec<(String, Channel, bool)> = rows
         .iter()
         .map(|r| {
-            let name = speaker_display_name(r.profile_name.as_deref(), r.speaker.as_deref(), r.source.as_deref());
+            let name = speaker_display_name(
+                r.profile_name.as_deref(),
+                r.speaker.as_deref(),
+                r.source.as_deref(),
+            );
             let has_source = Channel::from_source(r.source.as_deref()) != Channel::Unknown;
             (name, stored_channel(r), has_source)
         })
@@ -258,7 +270,11 @@ fn word_count(text: &str) -> usize {
 
 fn is_question(text: &str) -> bool {
     let trimmed = text.trim_end_matches(|c: char| {
-        c.is_whitespace() || matches!(c, '"' | '\'' | ')' | ']' | '\u{201d}' | '\u{2019}' | '\u{bb}')
+        c.is_whitespace()
+            || matches!(
+                c,
+                '"' | '\'' | ')' | ']' | '\u{201d}' | '\u{2019}' | '\u{bb}'
+            )
     });
     trimmed.ends_with('?') || trimmed.ends_with('\u{ff1f}')
 }
@@ -285,12 +301,22 @@ struct Turn {
 }
 
 fn close_turn(turn: Option<Turn>, accs: &mut [Acc]) {
-    let Some(Turn { speaker, span: Some((s, e)) }) = turn else {
+    let Some(Turn {
+        speaker,
+        span: Some((s, e)),
+    }) = turn
+    else {
         return;
     };
-    let candidate = Monologue { start_secs: s, duration_secs: e - s };
+    let candidate = Monologue {
+        start_secs: s,
+        duration_secs: e - s,
+    };
     let acc = &mut accs[speaker];
-    if acc.longest.is_none_or(|m| candidate.duration_secs > m.duration_secs) {
+    if acc
+        .longest
+        .is_none_or(|m| candidate.duration_secs > m.duration_secs)
+    {
         acc.longest = Some(candidate);
     }
 }
@@ -317,10 +343,17 @@ pub fn compute(segments: &[Segment], recorded_duration: Option<f64>) -> MeetingS
                 .unwrap_or(UNKNOWN_SPEAKER)
                 .to_string();
             let speaker = *index.entry(name.clone()).or_insert_with(|| {
-                accs.push(Acc { name, ..Acc::default() });
+                accs.push(Acc {
+                    name,
+                    ..Acc::default()
+                });
                 accs.len() - 1
             });
-            Item { speaker, seg, span: interval(seg) }
+            Item {
+                speaker,
+                seg,
+                span: interval(seg),
+            }
         })
         .collect();
 
@@ -390,7 +423,10 @@ pub fn compute(segments: &[Segment], recorded_duration: Option<f64>) -> MeetingS
         } else {
             close_turn(turn.take(), &mut accs);
             accs[item.speaker].turns += 1;
-            turn = Some(Turn { speaker: item.speaker, span: item.span });
+            turn = Some(Turn {
+                speaker: item.speaker,
+                span: item.span,
+            });
         }
     }
     close_turn(turn, &mut accs);
@@ -398,7 +434,10 @@ pub fn compute(segments: &[Segment], recorded_duration: Option<f64>) -> MeetingS
     // Silence: gaps in the union of speech intervals.
     let mut spans: Vec<(f64, f64)> = items.iter().filter_map(|i| i.span).collect();
     spans.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let last_end = spans.iter().map(|s| s.1).fold(None, |m: Option<f64>, e| Some(m.map_or(e, |m| m.max(e))));
+    let last_end = spans
+        .iter()
+        .map(|s| s.1)
+        .fold(None, |m: Option<f64>, e| Some(m.map_or(e, |m| m.max(e))));
     let recorded = recorded_duration.filter(|d| d.is_finite() && *d > 0.0);
     let duration = match (last_end, recorded) {
         (Some(e), Some(r)) => Some(e.max(r)),
@@ -424,7 +463,11 @@ pub fn compute(segments: &[Segment], recorded_duration: Option<f64>) -> MeetingS
         .map(|a| SpeakerStats {
             is_me: a.me_segments * 2 > a.segments,
             segments: a.segments,
-            share: if total_talk > 0.0 { a.talk_secs / total_talk } else { 0.0 },
+            share: if total_talk > 0.0 {
+                a.talk_secs / total_talk
+            } else {
+                0.0
+            },
             turns: a.turns,
             words: a.words,
             words_per_minute: (a.talk_secs >= MIN_WPM_TALK_SECS)
@@ -456,8 +499,11 @@ pub fn compute(segments: &[Segment], recorded_duration: Option<f64>) -> MeetingS
         duration_secs: duration,
         total_talk_secs: total_talk,
         silence_secs: silence,
-        silence_ratio: duration.filter(|d| *d > 0.0).map(|d| (silence / d).clamp(0.0, 1.0)),
-        me_share: (channel_known_talk > 0.0 && channel_known_talk >= ME_SHARE_MIN_COVERAGE * total_talk)
+        silence_ratio: duration
+            .filter(|d| *d > 0.0)
+            .map(|d| (silence / d).clamp(0.0, 1.0)),
+        me_share: (channel_known_talk > 0.0
+            && channel_known_talk >= ME_SHARE_MIN_COVERAGE * total_talk)
             .then(|| me_talk / channel_known_talk),
         segment_count: segments.len(),
         untimed_segments: untimed,
@@ -471,7 +517,11 @@ pub fn compute(segments: &[Segment], recorded_duration: Option<f64>) -> MeetingS
 
 /// `m:ss`, or `h:mm:ss` past an hour.
 pub fn format_clock(secs: f64) -> String {
-    let total = if secs.is_finite() && secs > 0.0 { secs.round() as u64 } else { 0 };
+    let total = if secs.is_finite() && secs > 0.0 {
+        secs.round() as u64
+    } else {
+        0
+    };
     let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
     if h > 0 {
         format!("{h}:{m:02}:{s:02}")
@@ -482,7 +532,11 @@ pub fn format_clock(secs: f64) -> String {
 
 /// A length for humans: `45s`, `3m 05s`, `1h 02m`.
 pub fn format_span(secs: f64) -> String {
-    let total = if secs.is_finite() && secs > 0.0 { secs.round() as u64 } else { 0 };
+    let total = if secs.is_finite() && secs > 0.0 {
+        secs.round() as u64
+    } else {
+        0
+    };
     let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
     if h > 0 {
         format!("{h}h {m:02}m")
@@ -555,7 +609,10 @@ mod tests {
             seg("Bob", 15.0, 20.0, "a b c d e"),
         ];
         let stats = compute(&segs, None);
-        assert!(approx(speaker(&stats, "Alice").words_per_minute.unwrap(), 120.0));
+        assert!(approx(
+            speaker(&stats, "Alice").words_per_minute.unwrap(),
+            120.0
+        ));
         assert_eq!(speaker(&stats, "Bob").words_per_minute, None);
         assert_eq!(stats.total_words, 35);
     }
@@ -572,10 +629,22 @@ mod tests {
         let stats = compute(&segs, None);
         let bob = speaker(&stats, "Bob");
         assert_eq!(bob.turns, 1);
-        assert_eq!(bob.longest_monologue, Some(Monologue { start_secs: 5.0, duration_secs: 35.0 }));
+        assert_eq!(
+            bob.longest_monologue,
+            Some(Monologue {
+                start_secs: 5.0,
+                duration_secs: 35.0
+            })
+        );
         assert_eq!(
             stats.longest_monologue,
-            Some(("Bob".to_string(), Monologue { start_secs: 5.0, duration_secs: 35.0 }))
+            Some((
+                "Bob".to_string(),
+                Monologue {
+                    start_secs: 5.0,
+                    duration_secs: 35.0
+                }
+            ))
         );
     }
 
@@ -651,7 +720,11 @@ mod tests {
 
     #[test]
     fn overlapping_speech_is_not_silence() {
-        let segs = vec![seg("Alice", 0.0, 30.0, "a"), seg("Bob", 10.0, 15.0, "b"), seg("Bob", 29.0, 40.0, "b")];
+        let segs = vec![
+            seg("Alice", 0.0, 30.0, "a"),
+            seg("Bob", 10.0, 15.0, "b"),
+            seg("Bob", 29.0, 40.0, "b"),
+        ];
         let stats = compute(&segs, None);
         assert!(approx(stats.silence_secs, 0.0));
         // Overlap counted for both speakers.
@@ -661,15 +734,43 @@ mod tests {
     #[test]
     fn missing_timestamps_are_handled() {
         let segs = vec![
-            Segment { speaker: Some("Alice".into()), text: "no times here?".into(), ..Segment::default() },
+            Segment {
+                speaker: Some("Alice".into()),
+                text: "no times here?".into(),
+                ..Segment::default()
+            },
             // Start + duration.
-            Segment { speaker: Some("Bob".into()), text: "x".into(), start: Some(2.0), duration: Some(3.0), ..Segment::default() },
+            Segment {
+                speaker: Some("Bob".into()),
+                text: "x".into(),
+                start: Some(2.0),
+                duration: Some(3.0),
+                ..Segment::default()
+            },
             // End + duration.
-            Segment { speaker: Some("Bob".into()), text: "y".into(), end: Some(9.0), duration: Some(4.0), ..Segment::default() },
+            Segment {
+                speaker: Some("Bob".into()),
+                text: "y".into(),
+                end: Some(9.0),
+                duration: Some(4.0),
+                ..Segment::default()
+            },
             // Nonsense: end before start.
-            Segment { speaker: Some("Alice".into()), text: "z".into(), start: Some(10.0), end: Some(4.0), ..Segment::default() },
+            Segment {
+                speaker: Some("Alice".into()),
+                text: "z".into(),
+                start: Some(10.0),
+                end: Some(4.0),
+                ..Segment::default()
+            },
             // NaN.
-            Segment { speaker: Some("Alice".into()), text: "w".into(), start: Some(f64::NAN), end: Some(1.0), ..Segment::default() },
+            Segment {
+                speaker: Some("Alice".into()),
+                text: "w".into(),
+                start: Some(f64::NAN),
+                end: Some(1.0),
+                ..Segment::default()
+            },
         ];
         let stats = compute(&segs, None);
         assert_eq!(stats.segment_count, 5);
@@ -685,9 +786,21 @@ mod tests {
     #[test]
     fn fully_untimed_meeting_still_counts_words_and_turns() {
         let segs = vec![
-            Segment { speaker: Some("Alice".into()), text: "one two".into(), ..Segment::default() },
-            Segment { speaker: Some("Bob".into()), text: "three?".into(), ..Segment::default() },
-            Segment { speaker: Some("Alice".into()), text: "four".into(), ..Segment::default() },
+            Segment {
+                speaker: Some("Alice".into()),
+                text: "one two".into(),
+                ..Segment::default()
+            },
+            Segment {
+                speaker: Some("Bob".into()),
+                text: "three?".into(),
+                ..Segment::default()
+            },
+            Segment {
+                speaker: Some("Alice".into()),
+                text: "four".into(),
+                ..Segment::default()
+            },
         ];
         let stats = compute(&segs, None);
         assert_eq!(stats.duration_secs, None);
@@ -701,8 +814,18 @@ mod tests {
     #[test]
     fn unknown_speakers_are_grouped() {
         let segs = vec![
-            Segment { speaker: None, start: Some(0.0), end: Some(2.0), ..Segment::default() },
-            Segment { speaker: Some("   ".into()), start: Some(2.0), end: Some(4.0), ..Segment::default() },
+            Segment {
+                speaker: None,
+                start: Some(0.0),
+                end: Some(2.0),
+                ..Segment::default()
+            },
+            Segment {
+                speaker: Some("   ".into()),
+                start: Some(2.0),
+                end: Some(4.0),
+                ..Segment::default()
+            },
         ];
         let stats = compute(&segs, None);
         assert_eq!(stats.speakers.len(), 1);
@@ -735,12 +858,14 @@ mod tests {
 
     #[test]
     fn rows_without_source_infer_channels_from_the_self_profile() {
-        let row = |speaker: &str, profile: Option<&str>, is_self: bool, source: Option<&str>| StoredSegment {
-            speaker: Some(speaker.to_string()),
-            profile_name: profile.map(str::to_string),
-            profile_is_self: is_self,
-            source: source.map(str::to_string),
-            ..StoredSegment::default()
+        let row = |speaker: &str, profile: Option<&str>, is_self: bool, source: Option<&str>| {
+            StoredSegment {
+                speaker: Some(speaker.to_string()),
+                profile_name: profile.map(str::to_string),
+                profile_is_self: is_self,
+                source: source.map(str::to_string),
+                ..StoredSegment::default()
+            }
         };
         // Imported meeting: the self profile is recognised, so the rest is
         // everyone else.
@@ -757,7 +882,10 @@ mod tests {
         );
 
         // No self anywhere: unknown stays unknown.
-        let segs = segments_from_rows(vec![row("Speaker 1", None, false, None), row("Speaker 2", None, false, None)]);
+        let segs = segments_from_rows(vec![
+            row("Speaker 1", None, false, None),
+            row("Speaker 2", None, false, None),
+        ]);
         assert!(segs.iter().all(|s| s.channel == Channel::Unknown));
 
         // Live recording: the stored source wins.
@@ -775,12 +903,21 @@ mod tests {
 
     #[test]
     fn display_name_resolution() {
-        assert_eq!(speaker_display_name(Some("Alice"), Some("Speaker 1"), Some("system")), "Alice");
-        assert_eq!(speaker_display_name(Some("  "), Some("Speaker 1"), Some("system")), "Speaker 1");
+        assert_eq!(
+            speaker_display_name(Some("Alice"), Some("Speaker 1"), Some("system")),
+            "Alice"
+        );
+        assert_eq!(
+            speaker_display_name(Some("  "), Some("Speaker 1"), Some("system")),
+            "Speaker 1"
+        );
         assert_eq!(speaker_display_name(None, Some("mic"), None), "Me");
         assert_eq!(speaker_display_name(None, Some("system"), None), "Others");
         assert_eq!(speaker_display_name(None, None, Some("mic")), "Me");
-        assert_eq!(speaker_display_name(None, Some(""), Some("system")), "Others");
+        assert_eq!(
+            speaker_display_name(None, Some(""), Some("system")),
+            "Others"
+        );
         assert_eq!(speaker_display_name(None, None, None), UNKNOWN_SPEAKER);
         assert_eq!(Channel::from_source(Some("mic")), Channel::Me);
         assert_eq!(Channel::from_source(Some("bogus")), Channel::Unknown);

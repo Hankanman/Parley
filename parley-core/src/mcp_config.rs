@@ -121,9 +121,7 @@ fn locate_binary() -> Option<PathBuf> {
 pub fn get_mcp_server_info() -> Result<McpServerInfo, String> {
     let db_path = crate::paths::app_data_dir()?.join("meeting_minutes.sqlite");
 
-    let db_is_default = default_db_path()
-        .map(|d| d == db_path)
-        .unwrap_or(false);
+    let db_is_default = default_db_path().map(|d| d == db_path).unwrap_or(false);
 
     let binary = locate_binary();
     let binary_found = binary.is_some();

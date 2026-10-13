@@ -558,7 +558,13 @@ async fn run_retranscription(
 }
 
 /// Emit a `retranscription-progress` event through `sink`.
-fn emit_progress(sink: &dyn EventSink, meeting_id: &str, stage: &str, progress: u32, message: &str) {
+fn emit_progress(
+    sink: &dyn EventSink,
+    meeting_id: &str,
+    stage: &str,
+    progress: u32,
+    message: &str,
+) {
     let _ = sink.emit_event(
         "retranscription-progress",
         &RetranscriptionProgress {
@@ -747,12 +753,19 @@ pub fn spawn_auto_refine(
         )
         .await
         {
-            info!("Auto-refine not performed for meeting {}: {}", meeting_id, e);
+            info!(
+                "Auto-refine not performed for meeting {}: {}",
+                meeting_id, e
+            );
         }
         // Summarise last, whether refine ran, was skipped or failed, so the
         // summary sees the refined transcript when there is one.
-        crate::summary::auto_summary::maybe_auto_summarize(sink.clone(), pool.clone(), meeting_id.clone())
-            .await;
+        crate::summary::auto_summary::maybe_auto_summarize(
+            sink.clone(),
+            pool.clone(),
+            meeting_id.clone(),
+        )
+        .await;
         // Then chapters (issue #87), behind the same auto-summary switch.
         crate::chapters::maybe_auto_chapter(sink, pool, meeting_id).await;
     });
@@ -892,8 +905,8 @@ pub struct RetranscriptionStarted {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::common::BatchTranscript;
+    use super::*;
 
     fn bt(text: &str, start_ms: f64, end_ms: f64) -> BatchTranscript {
         BatchTranscript {

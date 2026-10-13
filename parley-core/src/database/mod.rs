@@ -19,7 +19,9 @@ mod migration_tests {
         let mut seen: HashMap<String, String> = HashMap::new();
         for entry in std::fs::read_dir(dir).expect("read migrations dir") {
             let name = entry.unwrap().file_name().to_string_lossy().into_owned();
-            let Some((version, _)) = name.split_once('_') else { continue };
+            let Some((version, _)) = name.split_once('_') else {
+                continue;
+            };
             if let Some(other) = seen.insert(version.to_string(), name.clone()) {
                 panic!("migrations share version {version}: {other} and {name}");
             }

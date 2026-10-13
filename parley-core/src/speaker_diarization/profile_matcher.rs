@@ -131,7 +131,9 @@ impl SpeakerProfileMatcher {
         }
         let mut probe = embedding.to_vec();
         crate::speaker_diarization::embedding_math::l2_normalize(&mut probe);
-        Some(crate::speaker_diarization::embedding_math::dot(stored, &probe))
+        Some(crate::speaker_diarization::embedding_math::dot(
+            stored, &probe,
+        ))
     }
 
     /// The self profile as a [`ProfileMatch`] with its score against
@@ -155,9 +157,7 @@ impl SpeakerProfileMatcher {
     pub fn search(&self, embedding: &[f32]) -> Option<ProfileMatch> {
         // `get_best_matches` returns up to `n` matches above threshold; we
         // only care about the top one. Score is cosine sim in [-1, 1].
-        let mut matches = self
-            .manager
-            .get_best_matches(embedding, self.threshold, 1);
+        let mut matches = self.manager.get_best_matches(embedding, self.threshold, 1);
         let m = matches.pop()?;
         let name = self.profiles.get(&m.name).cloned()?;
         Some(ProfileMatch {

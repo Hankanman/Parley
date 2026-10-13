@@ -99,7 +99,12 @@ pub fn sanitize_title(raw: &str, speakers: &[String]) -> Option<String> {
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .filter(|c| !is_invisible_format_char(*c))
-        .filter(|c| !matches!(c, '*' | '_' | '#' | '`' | '[' | ']' | '<' | '>' | '|' | '\\' | '~'))
+        .filter(|c| {
+            !matches!(
+                c,
+                '*' | '_' | '#' | '`' | '[' | ']' | '<' | '>' | '|' | '\\' | '~'
+            )
+        })
         .collect();
     text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let trimmed = text
@@ -155,12 +160,18 @@ pub fn parse_chapters(output: &str, limits: &ChapterLimits) -> Vec<ChapterDraft>
         if chapters.len() >= MAX_CHAPTERS {
             break;
         }
-        let Some(caps) = CHAPTER_LINE.captures(line) else { continue };
-        let Some(start) = parse_time(&caps[1]) else { continue };
+        let Some(caps) = CHAPTER_LINE.captures(line) else {
+            continue;
+        };
+        let Some(start) = parse_time(&caps[1]) else {
+            continue;
+        };
         if !(start >= limits.min_start && start <= limits.max_start) {
             continue;
         }
-        let Some(title) = sanitize_title(&caps[2], &limits.speakers) else { continue };
+        let Some(title) = sanitize_title(&caps[2], &limits.speakers) else {
+            continue;
+        };
         if let Some(prev) = chapters.last() {
             if start < prev.start_seconds + MIN_CHAPTER_GAP_SECS
                 || prev.title.eq_ignore_ascii_case(&title)
@@ -255,7 +266,12 @@ mod tests {
         let chapters = parse_chapters(out, &limits(4000.0));
         assert_eq!(
             titles(&chapters),
-            vec!["Introductions", "Q3 budget review", "Hiring plan", "Wrap-up and next steps"]
+            vec![
+                "Introductions",
+                "Q3 budget review",
+                "Hiring plan",
+                "Wrap-up and next steps"
+            ]
         );
         assert_eq!(chapters[1].start_seconds, 135.0);
         assert_eq!(chapters[3].start_seconds, 3723.0);
@@ -273,7 +289,10 @@ mod tests {
             max_start: 600.0,
             speakers: vec![],
         };
-        let chapters = parse_chapters("[04:59] Before\n[05:00] Edge\n[10:00] End edge\n[10:01] After", &chunk);
+        let chapters = parse_chapters(
+            "[04:59] Before\n[05:00] Edge\n[10:00] End edge\n[10:01] After",
+            &chunk,
+        );
         assert_eq!(titles(&chapters), vec!["Edge", "End edge"]);
     }
 
@@ -327,17 +346,23 @@ mod tests {
 
     #[test]
     fn long_titles_are_cut_at_a_word() {
-        let raw = "Discussion of the quarterly roadmap including hiring, budget, infrastructure costs";
+        let raw =
+            "Discussion of the quarterly roadmap including hiring, budget, infrastructure costs";
         let title = sanitize_title(raw, &[]).unwrap();
         assert!(title.chars().count() <= MAX_TITLE_CHARS + 1);
         assert!(title.ends_with('…'));
         assert!(!title.contains("cos…"));
-        assert_eq!(sanitize_title("\"Title: Budget.\"", &[]).as_deref(), Some("Budget"));
+        assert_eq!(
+            sanitize_title("\"Title: Budget.\"", &[]).as_deref(),
+            Some("Budget")
+        );
     }
 
     #[test]
     fn caps_chapter_count() {
-        let out: String = (0..200).map(|i| format!("[{:02}:{:02}] Topic {i}\n", i / 2, (i % 2) * 30)).collect();
+        let out: String = (0..200)
+            .map(|i| format!("[{:02}:{:02}] Topic {i}\n", i / 2, (i % 2) * 30))
+            .collect();
         assert_eq!(parse_chapters(&out, &limits(10_000.0)).len(), MAX_CHAPTERS);
     }
 
@@ -349,10 +374,17 @@ mod tests {
         };
         let merged = merge_chapters(vec![
             vec![c(0.0, "Intro"), c(300.0, "Budget")],
-            vec![c(305.0, "Budget cont."), c(600.0, "budget"), c(900.0, "Hiring")],
+            vec![
+                c(305.0, "Budget cont."),
+                c(600.0, "budget"),
+                c(900.0, "Hiring"),
+            ],
             vec![c(100.0, "Out of order"), c(1200.0, "Wrap-up")],
         ]);
-        assert_eq!(titles(&merged), vec!["Intro", "Budget", "Hiring", "Wrap-up"]);
+        assert_eq!(
+            titles(&merged),
+            vec!["Intro", "Budget", "Hiring", "Wrap-up"]
+        );
         assert!(is_valid_chapter_list(&merged, 1200.0));
         assert!(!is_valid_chapter_list(&merged, 1000.0));
     }

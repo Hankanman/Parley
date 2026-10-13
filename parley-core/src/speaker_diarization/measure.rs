@@ -97,7 +97,13 @@ async fn extract(
     let channel_16k = |c: usize| -> Option<Vec<f32>> {
         (channels >= 2).then(|| {
             crate::audio::decoder::DecodedAudio {
-                samples: decoded.samples.iter().skip(c).step_by(channels).copied().collect(),
+                samples: decoded
+                    .samples
+                    .iter()
+                    .skip(c)
+                    .step_by(channels)
+                    .copied()
+                    .collect(),
                 sample_rate: decoded.sample_rate,
                 channels: 1,
                 duration_seconds: decoded.duration_seconds,
@@ -110,10 +116,13 @@ async fn extract(
     let embed = |audio: &[f32], start: f64, end: f64| -> Option<Vec<f32>> {
         let a = ((start * 16_000.0) as usize).min(audio.len());
         let b = ((end * 16_000.0) as usize).min(audio.len());
-        (b > a).then(|| embedder.embed(&audio[a..b]).ok()).flatten().map(|mut e| {
-            l2_normalize(&mut e);
-            e
-        })
+        (b > a)
+            .then(|| embedder.embed(&audio[a..b]).ok())
+            .flatten()
+            .map(|mut e| {
+                l2_normalize(&mut e);
+                e
+            })
     };
 
     let mut segments = Vec::with_capacity(rows.len());
@@ -383,7 +392,6 @@ fn replay(
         })
         .collect()
 }
-
 
 /// Per-label talk time and channel mix, for eyeballing one stage's output.
 fn breakdown(labels: &[String], history: &[EmbeddingRecord], segs: &[SegmentFeatures]) {

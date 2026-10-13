@@ -36,7 +36,10 @@ impl Highlight<'static> {
     /// No markers: a plain-text snippet.
     pub const NONE: Highlight<'static> = Highlight { start: "", end: "" };
     /// Markdown bold, for agent/LLM-facing output.
-    pub const MARKDOWN: Highlight<'static> = Highlight { start: "**", end: "**" };
+    pub const MARKDOWN: Highlight<'static> = Highlight {
+        start: "**",
+        end: "**",
+    };
 }
 
 /// One ranked transcript-segment hit.
@@ -227,9 +230,17 @@ mod tests {
     }
 
     async fn hits(pool: &SqlitePool, query: &str) -> Vec<SearchHit> {
-        search_transcripts(pool, query, 50, Highlight { start: "[", end: "]" })
-            .await
-            .unwrap()
+        search_transcripts(
+            pool,
+            query,
+            50,
+            Highlight {
+                start: "[",
+                end: "]",
+            },
+        )
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -241,25 +252,41 @@ mod tests {
             .unwrap();
         assert_eq!(enabled, 1, "bundled SQLite must be compiled with FTS5");
         // And the migration actually created the virtual table.
-        let sql: String = sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE name = 'transcripts_fts'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let sql: String =
+            sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE name = 'transcripts_fts'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert!(sql.to_lowercase().contains("fts5"), "{sql}");
     }
 
     #[test]
     fn match_expression_quotes_terms_and_prefixes_the_last() {
-        assert_eq!(match_expression("budget review").as_deref(), Some("\"budget\" \"review\"*"));
-        assert_eq!(match_expression("budget review ").as_deref(), Some("\"budget\" \"review\""));
+        assert_eq!(
+            match_expression("budget review").as_deref(),
+            Some("\"budget\" \"review\"*")
+        );
+        assert_eq!(
+            match_expression("budget review ").as_deref(),
+            Some("\"budget\" \"review\"")
+        );
         assert_eq!(match_expression("  budg").as_deref(), Some("\"budg\"*"));
     }
 
     #[test]
     fn match_expression_neutralises_fts_syntax() {
-        assert_eq!(match_expression("say \"hi").as_deref(), Some("\"say\" \"\"\"hi\"*"));
-        assert_eq!(match_expression("a AND b").as_deref(), Some("\"a\" \"AND\" \"b\"*"));
-        assert_eq!(match_expression("transcript:foo").as_deref(), Some("\"transcript:foo\"*"));
+        assert_eq!(
+            match_expression("say \"hi").as_deref(),
+            Some("\"say\" \"\"\"hi\"*")
+        );
+        assert_eq!(
+            match_expression("a AND b").as_deref(),
+            Some("\"a\" \"AND\" \"b\"*")
+        );
+        assert_eq!(
+            match_expression("transcript:foo").as_deref(),
+            Some("\"transcript:foo\"*")
+        );
     }
 
     #[test]
@@ -276,9 +303,23 @@ mod tests {
         add_meeting(&pool, "m1", "Standup").await;
         add_segment(&pool, "t1", "m1", "we should review the budget", 1.0).await;
         for q in [
-            "\"", "\"\"", "*", "budget*", "NEAR(a b)", "a OR", "AND", "NOT budget", "(budget",
-            "transcript:budget", "^budget", "budget\"review", "{a b}:c", "'; DROP TABLE transcripts; --",
-            "a + b", "😀", "x".repeat(5000).as_str(),
+            "\"",
+            "\"\"",
+            "*",
+            "budget*",
+            "NEAR(a b)",
+            "a OR",
+            "AND",
+            "NOT budget",
+            "(budget",
+            "transcript:budget",
+            "^budget",
+            "budget\"review",
+            "{a b}:c",
+            "'; DROP TABLE transcripts; --",
+            "a + b",
+            "😀",
+            "x".repeat(5000).as_str(),
         ] {
             // The sanitised expression must be valid FTS5 on its own — not
             // merely rescued by `search_transcripts`' error swallowing.
@@ -302,8 +343,22 @@ mod tests {
         let pool = test_pool().await;
         add_meeting(&pool, "m1", "Standup").await;
         add_meeting(&pool, "m2", "Planning").await;
-        add_segment(&pool, "t1", "m1", "the weather is nice and the budget came up once", 3.5).await;
-        add_segment(&pool, "t2", "m2", "budget budget budget: the budget review", 42.0).await;
+        add_segment(
+            &pool,
+            "t1",
+            "m1",
+            "the weather is nice and the budget came up once",
+            3.5,
+        )
+        .await;
+        add_segment(
+            &pool,
+            "t2",
+            "m2",
+            "budget budget budget: the budget review",
+            42.0,
+        )
+        .await;
         add_segment(&pool, "t3", "m2", "nothing relevant here", 50.0).await;
 
         let results = hits(&pool, "budget").await;
@@ -314,19 +369,42 @@ mod tests {
         assert_eq!(results[0].meeting_title, "Planning");
         assert_eq!(results[0].audio_start_time, Some(42.0));
         assert!(results[0].rank <= results[1].rank);
-        assert!(results[1].snippet.contains("[budget]"), "{}", results[1].snippet);
+        assert!(
+            results[1].snippet.contains("[budget]"),
+            "{}",
+            results[1].snippet
+        );
     }
 
     #[tokio::test]
     async fn prefix_and_diacritics() {
         let pool = test_pool().await;
         add_meeting(&pool, "m1", "Standup").await;
-        add_segment(&pool, "t1", "m1", "Meet at the Café for the quarterly roadmap", 0.0).await;
-        assert_eq!(hits(&pool, "quart").await.len(), 1, "prefix on the last term");
-        assert_eq!(hits(&pool, "quart ").await.len(), 0, "a finished word isn't a prefix");
+        add_segment(
+            &pool,
+            "t1",
+            "m1",
+            "Meet at the Café for the quarterly roadmap",
+            0.0,
+        )
+        .await;
+        assert_eq!(
+            hits(&pool, "quart").await.len(),
+            1,
+            "prefix on the last term"
+        );
+        assert_eq!(
+            hits(&pool, "quart ").await.len(),
+            0,
+            "a finished word isn't a prefix"
+        );
         assert_eq!(hits(&pool, "cafe").await.len(), 1, "diacritics are folded");
         assert_eq!(hits(&pool, "ROADMAP").await.len(), 1, "case-insensitive");
-        assert_eq!(hits(&pool, "roadmap banana").await.len(), 0, "terms are ANDed");
+        assert_eq!(
+            hits(&pool, "roadmap banana").await.len(),
+            0,
+            "terms are ANDed"
+        );
     }
 
     #[tokio::test]
@@ -364,9 +442,11 @@ mod tests {
             .unwrap();
         assert!(hits(&pool, "charlie").await.is_empty());
 
-        let check = sqlx::query("INSERT INTO transcripts_fts (transcripts_fts, rank) VALUES ('integrity-check', 1)")
-            .execute(&pool)
-            .await;
+        let check = sqlx::query(
+            "INSERT INTO transcripts_fts (transcripts_fts, rank) VALUES ('integrity-check', 1)",
+        )
+        .execute(&pool)
+        .await;
         assert!(check.is_ok(), "index out of sync with content: {check:?}");
     }
 
@@ -407,7 +487,12 @@ mod tests {
         let mut migrator = sqlx::migrate!("./migrations");
         let fts_version = 20261010000000_i64;
         let all = migrator.migrations.clone();
-        migrator.migrations = all.iter().filter(|m| m.version < fts_version).cloned().collect::<Vec<_>>().into();
+        migrator.migrations = all
+            .iter()
+            .filter(|m| m.version < fts_version)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into();
         migrator.run(&pool).await.unwrap();
 
         add_meeting(&pool, "m1", "Old meeting").await;

@@ -7,8 +7,8 @@ use crate::summary::structured::{
 };
 use crate::summary::templates;
 use once_cell::sync::Lazy;
-use std::future::Future;
 use regex::Regex;
+use std::future::Future;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -224,9 +224,11 @@ pub fn sanitize_meeting_title(raw: &str) -> String {
                 // legitimately start with those words ("Meeting summary
                 // playback design review").
                 let rest_trimmed = rest.trim_start();
-                if rest_trimmed.chars().next().map_or(false, |c| {
-                    matches!(c, ':' | '-' | '–' | '—' | ']' | ')')
-                }) {
+                if rest_trimmed
+                    .chars()
+                    .next()
+                    .map_or(false, |c| matches!(c, ':' | '-' | '–' | '—' | ']' | ')'))
+                {
                     s = rest_trimmed
                         .trim_start_matches(|c: char| {
                             matches!(c, ':' | '-' | '–' | '—' | ']' | ')')
@@ -327,10 +329,7 @@ mod sanitize_title_tests {
 
     #[test]
     fn strips_plain_title_prefix() {
-        assert_eq!(
-            sanitize_meeting_title("Title: Q3 review"),
-            "Q3 review"
-        );
+        assert_eq!(sanitize_meeting_title("Title: Q3 review"), "Q3 review");
     }
 
     #[test]
@@ -497,8 +496,14 @@ impl SummaryLlm for LlmConfig {
                     .await
                 }
                 None => {
-                    generate_summary(self, system_prompt, user_prompt, cancellation_token, on_delta)
-                        .await
+                    generate_summary(
+                        self,
+                        system_prompt,
+                        user_prompt,
+                        cancellation_token,
+                        on_delta,
+                    )
+                    .await
                 }
             }
         }
@@ -515,9 +520,7 @@ fn is_cancellation(e: &str) -> bool {
 
 fn check_cancelled(cancellation_token: Option<&CancellationToken>) -> Result<(), String> {
     match cancellation_token {
-        Some(token) if token.is_cancelled() => {
-            Err("Summary generation was cancelled".to_string())
-        }
+        Some(token) if token.is_cancelled() => Err("Summary generation was cancelled".to_string()),
         _ => Ok(()),
     }
 }
@@ -675,10 +678,7 @@ pub async fn generate_meeting_summary<L: SummaryLlm>(
             reduce_summaries(llm, chunk_summaries, notes, call_budget, cancellation_token).await?;
     }
 
-    info!(
-        "Generating final report with template: {}",
-        template_id
-    );
+    info!("Generating final report with template: {}", template_id);
 
     let user_prompt = final_user_prompt(&content_to_summarize, custom_prompt, notes);
 
@@ -1199,11 +1199,7 @@ mod generation_tests {
             ) -> impl Future<Output = Result<String, String>> + Send + 'a {
                 async move {
                     if schema.is_some() {
-                        self.inner
-                            .calls
-                            .lock()
-                            .unwrap()
-                            .push((u.to_string(), true));
+                        self.inner.calls.lock().unwrap().push((u.to_string(), true));
                         return Ok(self.final_json.clone());
                     }
                     self.inner.complete(s, u, schema, c, d).await
@@ -1230,15 +1226,28 @@ mod generation_tests {
         assert!(out.chunks_processed >= 2);
 
         let calls = llm.calls();
-        let map_calls: Vec<_> = calls.iter().filter(|c| c.0.contains("<transcript_chunk>")).collect();
-        let reduce_calls: Vec<_> = calls.iter().filter(|c| c.0.contains("<summaries>")).collect();
+        let map_calls: Vec<_> = calls
+            .iter()
+            .filter(|c| c.0.contains("<transcript_chunk>"))
+            .collect();
+        let reduce_calls: Vec<_> = calls
+            .iter()
+            .filter(|c| c.0.contains("<summaries>"))
+            .collect();
         assert!(
             !map_calls.is_empty() && !reduce_calls.is_empty(),
             "calls: {:?}",
-            calls.iter().map(|c| c.0.chars().take(120).collect::<String>()).collect::<Vec<_>>()
+            calls
+                .iter()
+                .map(|c| c.0.chars().take(120).collect::<String>())
+                .collect::<Vec<_>>()
         );
         for call in map_calls.iter().chain(reduce_calls.iter()) {
-            assert!(call.0.contains("note_1: Roadmap dates"), "notes missing: {}", call.0);
+            assert!(
+                call.0.contains("note_1: Roadmap dates"),
+                "notes missing: {}",
+                call.0
+            );
         }
         let final_call = calls.iter().find(|c| c.1).unwrap();
         assert!(final_call.0.contains("note_1: Roadmap dates"));
@@ -1256,7 +1265,10 @@ mod generation_tests {
         let out = run(&llm, &[], 10_000, Some(&stream)).await.unwrap();
         assert!(out.structured.is_none());
         let events = stream.events.lock().unwrap().clone();
-        let last_reset = events.iter().rposition(|e| e == "<RESET>").expect("a reset");
+        let last_reset = events
+            .iter()
+            .rposition(|e| e == "<RESET>")
+            .expect("a reset");
         let after: String = events[last_reset + 1..].concat();
         assert_eq!(after, "# Fallback\n\nBody text here.");
     }
@@ -1269,7 +1281,10 @@ mod generation_tests {
         let stream = RecordingStream::default();
         let out = run(&llm, &[], 10_000, Some(&stream)).await.unwrap();
         let preview = stream.events.lock().unwrap().concat();
-        assert!(!preview.contains('{'), "raw JSON leaked into preview: {preview}");
+        assert!(
+            !preview.contains('{'),
+            "raw JSON leaked into preview: {preview}"
+        );
         assert!(out.markdown.starts_with(&preview));
         assert!(!preview.is_empty());
     }
@@ -1304,7 +1319,8 @@ mod builtin_smoke {
             top_p: None,
             app_data_dir: Some(app_dir.into()),
         };
-        let transcript = "[00:01] Alice: Okay, let's go through the Q3 budget. Marketing is 20% over.\n\
+        let transcript =
+            "[00:01] Alice: Okay, let's go through the Q3 budget. Marketing is 20% over.\n\
             [00:12] Bob: We agreed to freeze hiring until October, right?\n\
             [00:15] Alice: Yes, hiring freeze until October is decided.\n\
             [00:30] Bob: I'll send the revised budget to Finance by Friday.\n\

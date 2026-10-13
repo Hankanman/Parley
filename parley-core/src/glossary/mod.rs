@@ -200,15 +200,18 @@ impl PreparedGlossary {
 async fn known_names(pool: &SqlitePool, meeting_id: Option<&str>) -> Vec<String> {
     let mut names = Vec::new();
 
-    match crate::database::repositories::voice_profile::VoiceProfilesRepository::list_all(pool).await
+    match crate::database::repositories::voice_profile::VoiceProfilesRepository::list_all(pool)
+        .await
     {
         Ok(profiles) => names.extend(profiles.into_iter().map(|p| p.name)),
         Err(e) => log::warn!("glossary: failed to list voice profiles: {}", e),
     }
 
     if let Some(meeting_id) = meeting_id {
-        match crate::calendar::repository::CalendarRepository::get_event_for_meeting(pool, meeting_id)
-            .await
+        match crate::calendar::repository::CalendarRepository::get_event_for_meeting(
+            pool, meeting_id,
+        )
+        .await
         {
             Ok(Some(event)) => {
                 names.extend(event.organizer_name.clone());
@@ -257,7 +260,11 @@ pub async fn prepare(pool: Option<&SqlitePool>, meeting_id: Option<&str>) -> Pre
         log::info!(
             "glossary: whisper prompt prefix ready (~{} est. tokens, correction {})",
             prompt::estimate_tokens(p),
-            if prepared.corrector.is_some() { "on" } else { "off" }
+            if prepared.corrector.is_some() {
+                "on"
+            } else {
+                "off"
+            }
         );
     }
     prepared
@@ -295,7 +302,10 @@ mod tests {
 
     #[test]
     fn aliases_split_and_trim() {
-        let t = GlossaryTerm::new("Kubernetes".into(), " cooper  netties ; cube natives,, ".into());
+        let t = GlossaryTerm::new(
+            "Kubernetes".into(),
+            " cooper  netties ; cube natives,, ".into(),
+        );
         assert_eq!(t.aliases(), vec!["cooper netties", "cube natives"]);
     }
 

@@ -326,14 +326,10 @@ pub async fn finish_self_voice_enrollment_with_pool(
             .map_err(|e| e.to_string())?;
 
     let label = self_label_or_default(name.as_deref());
-    let profile_id = VoiceProfilesRepository::upsert_self(
-        pool,
-        &label,
-        &centroid,
-        window_count as i64,
-    )
-    .await
-    .map_err(|e| format!("Failed to save your voice profile: {}", e))?;
+    let profile_id =
+        VoiceProfilesRepository::upsert_self(pool, &label, &centroid, window_count as i64)
+            .await
+            .map_err(|e| format!("Failed to save your voice profile: {}", e))?;
 
     log::info!(
         "Voice enrollment: saved self profile {} from {} windows (dim={})",

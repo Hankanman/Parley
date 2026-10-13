@@ -30,9 +30,7 @@ impl MeetingNotesRepository {
     ) -> Result<MeetingNote, SqlxError> {
         let trimmed = body.trim();
         if trimmed.is_empty() {
-            return Err(SqlxError::Protocol(
-                "note body cannot be empty".to_string(),
-            ));
+            return Err(SqlxError::Protocol("note body cannot be empty".to_string()));
         }
 
         let id = format!("note-{}", Uuid::new_v4());

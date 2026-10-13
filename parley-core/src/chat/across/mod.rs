@@ -40,10 +40,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 pub use embeddings::SemanticAvailability;
-pub use prompt::{citation_link_target, format_meeting_date, link_citations, parse_citations, CrossSpan, SourceRef};
+pub use prompt::{
+    citation_link_target, format_meeting_date, link_citations, parse_citations, CrossSpan,
+    SourceRef,
+};
 pub use retrieval::{
-    list_people, list_series, AskFilters, PersonFilter, PersonOption, RetrievalStats, SelectionLimits,
-    SeriesFilter, SeriesOption,
+    list_people, list_series, AskFilters, PersonFilter, PersonOption, RetrievalStats,
+    SelectionLimits, SeriesFilter, SeriesOption,
 };
 
 /// Streamed answer text: `{ "request_id": u64, "delta": String }`.
@@ -111,7 +114,8 @@ pub async fn refresh_semantic_index(pool: &SqlitePool) {
 pub async fn semantic_status(pool: &SqlitePool) -> (SemanticAvailability, Option<(i64, i64)>) {
     let availability = embeddings::availability(pool).await;
     let progress = match &availability {
-        SemanticAvailability::Ready { model_id } | SemanticAvailability::Failing { model_id, .. } => {
+        SemanticAvailability::Ready { model_id }
+        | SemanticAvailability::Failing { model_id, .. } => {
             embeddings::index_progress(pool, model_id).await.ok()
         }
         SemanticAvailability::Off(_) => None,
@@ -148,7 +152,13 @@ pub async fn ask_across(
         .map_err(|e| format!("failed to read model settings: {e}"))?
         .filter(|m| !m.provider.is_empty() && !m.model.is_empty())
         .ok_or_else(|| "No model configured — set one up in Settings first.".to_string())?;
-    let config = LlmConfig::resolve(&pool, &model.provider, &model.model, crate::paths::app_data_dir().ok()).await?;
+    let config = LlmConfig::resolve(
+        &pool,
+        &model.provider,
+        &model.model,
+        crate::paths::app_data_dir().ok(),
+    )
+    .await?;
     let context_tokens = config.token_threshold().await;
 
     // Retrieval query: the question plus the previous question, which
@@ -163,8 +173,14 @@ pub async fn ask_across(
     let (semantic_hits, semantic) = match embeddings::resolve_embedder(&pool).await {
         Ok(embedder) => {
             let model_id = embedder.model_id();
-            let result =
-                embeddings::semantic_candidates(&pool, embedder.as_ref(), &query_text, &filters, SEMANTIC_LIMIT).await;
+            let result = embeddings::semantic_candidates(
+                &pool,
+                embedder.as_ref(),
+                &query_text,
+                &filters,
+                SEMANTIC_LIMIT,
+            )
+            .await;
             // Index whatever is new for next time.
             embeddings::spawn_backfill(pool.clone(), embedder);
             match result {
@@ -179,7 +195,10 @@ pub async fn ask_across(
         Err(other) => (Vec::new(), SemanticUse::Unavailable(format!("{other:?}"))),
     };
 
-    let budget = excerpt_budget(context_tokens, prompt::fixed_prompt_tokens(&question, &history));
+    let budget = excerpt_budget(
+        context_tokens,
+        prompt::fixed_prompt_tokens(&question, &history),
+    );
     let retrieved = retrieval::retrieve(
         &pool,
         &query_text,
@@ -202,7 +221,12 @@ pub async fn ask_across(
     }
 
     let filter_note = filters.describe();
-    let built = prompt::build_prompt(&retrieved.meetings, &history, &question, filter_note.as_deref());
+    let built = prompt::build_prompt(
+        &retrieved.meetings,
+        &history,
+        &question,
+        filter_note.as_deref(),
+    );
     info!(
         "Ask across meetings: provider={} model={} window={context_tokens} budget={budget} sources={} stats={:?} semantic={:?}",
         model.provider,
@@ -223,7 +247,14 @@ pub async fn ask_across(
             &serde_json::json!({ "request_id": request_id, "delta": delta }),
         );
     };
-    let result = generate_summary(&config, &built.system, &built.user, Some(&token), Some(&on_delta)).await;
+    let result = generate_summary(
+        &config,
+        &built.system,
+        &built.user,
+        Some(&token),
+        Some(&on_delta),
+    )
+    .await;
     if let Ok(mut slot) = IN_FLIGHT.lock() {
         if slot.as_ref().is_some_and(|(id, _)| *id == request_id) {
             *slot = None;
@@ -239,7 +270,13 @@ pub async fn ask_across(
                 Ok(text)
             }
         })
-        .map_err(|e| if token.is_cancelled() { "Stopped.".to_string() } else { e })?;
+        .map_err(|e| {
+            if token.is_cancelled() {
+                "Stopped.".to_string()
+            } else {
+                e
+            }
+        })?;
 
     Ok(AcrossOutcome {
         question,
@@ -271,9 +308,16 @@ mod tests {
             .unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
         let sink: SharedEventSink = std::sync::Arc::new(crate::events::NullSink);
-        let err = ask_across(sink.clone(), pool.clone(), 1, " ".into(), vec![], AskFilters::default())
-            .await
-            .unwrap_err();
+        let err = ask_across(
+            sink.clone(),
+            pool.clone(),
+            1,
+            " ".into(),
+            vec![],
+            AskFilters::default(),
+        )
+        .await
+        .unwrap_err();
         assert!(err.contains("question"));
         let err = ask_across(sink, pool, 2, "What?".into(), vec![], AskFilters::default())
             .await
@@ -284,7 +328,10 @@ mod tests {
     #[test]
     fn nothing_found_mentions_filters() {
         assert!(!nothing_found_answer(&AskFilters::default()).contains("filters"));
-        let f = AskFilters { from: Some(chrono::Utc::now()), ..Default::default() };
+        let f = AskFilters {
+            from: Some(chrono::Utc::now()),
+            ..Default::default()
+        };
         assert!(nothing_found_answer(&f).contains("filters"));
     }
 }

@@ -123,13 +123,17 @@ fn watch_once(tx: &Sender<WatchEvent>, stop: &Arc<AtomicBool>, own_pid: u32) -> 
             let Some(props) = global.props else { return };
             match global.type_ {
                 ObjectType::Client => {
-                    clients_add.borrow_mut().insert(global.id, dict_to_map(props));
+                    clients_add
+                        .borrow_mut()
+                        .insert(global.id, dict_to_map(props));
                 }
                 ObjectType::Node => {
                     if props.get("media.class") != Some(CAPTURE_STREAM_CLASS) {
                         return;
                     }
-                    let Some(registry) = registry_weak.upgrade() else { return };
+                    let Some(registry) = registry_weak.upgrade() else {
+                        return;
+                    };
                     let node: pw::node::Node = match registry.bind(global) {
                         Ok(node) => node,
                         Err(e) => {
@@ -143,7 +147,9 @@ fn watch_once(tx: &Sender<WatchEvent>, stop: &Arc<AtomicBool>, own_pid: u32) -> 
                     let listener = node
                         .add_listener_local()
                         .info(move |info| {
-                            let Some(node_props) = info.props() else { return };
+                            let Some(node_props) = info.props() else {
+                                return;
+                            };
                             let mut merged = dict_to_map(node_props);
                             let client_id = merged
                                 .get("client.id")
@@ -279,17 +285,25 @@ fn list_capture_streams(out: Sender<(u32, HashMap<String, String>)>) -> Result<(
             let Some(props) = global.props else { return };
             match global.type_ {
                 ObjectType::Client => {
-                    clients_add.borrow_mut().insert(global.id, dict_to_map(props));
+                    clients_add
+                        .borrow_mut()
+                        .insert(global.id, dict_to_map(props));
                 }
                 ObjectType::Node if props.get("media.class") == Some(CAPTURE_STREAM_CLASS) => {
-                    let Some(registry) = registry_weak.upgrade() else { return };
-                    let Ok(node) = registry.bind::<pw::node::Node, _>(global) else { return };
+                    let Some(registry) = registry_weak.upgrade() else {
+                        return;
+                    };
+                    let Ok(node) = registry.bind::<pw::node::Node, _>(global) else {
+                        return;
+                    };
                     let clients = clients_add.clone();
                     let out = out.clone();
                     let listener = node
                         .add_listener_local()
                         .info(move |info| {
-                            let Some(node_props) = info.props() else { return };
+                            let Some(node_props) = info.props() else {
+                                return;
+                            };
                             let mut merged = dict_to_map(node_props);
                             if let Some(client_props) = merged
                                 .get("client.id")

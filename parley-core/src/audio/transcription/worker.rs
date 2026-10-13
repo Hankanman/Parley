@@ -281,10 +281,7 @@ async fn process_chunk(
     }
 
     if !engine.is_model_loaded().await {
-        warn!(
-            "⚠️ Model unloaded, skipping chunk {}",
-            chunk.chunk_id
-        );
+        warn!("⚠️ Model unloaded, skipping chunk {}", chunk.chunk_id);
         return;
     }
 
@@ -301,13 +298,12 @@ async fn process_chunk(
     //
     // The "Me" fallback in `default_speaker_for_source` still applies for
     // users who haven't downloaded the speaker model (no diarizer loaded).
-    let diarization_samples = if embedding.is_none()
-        && crate::speaker_diarization::current_diarizer().is_some()
-    {
-        Some(chunk.data.clone())
-    } else {
-        None
-    };
+    let diarization_samples =
+        if embedding.is_none() && crate::speaker_diarization::current_diarizer().is_some() {
+            Some(chunk.data.clone())
+        } else {
+            None
+        };
 
     let (transcript, confidence_opt, is_partial) =
         match transcribe_chunk_with_provider(engine, chunk, sink, None).await {
@@ -424,17 +420,23 @@ async fn process_chunk(
             };
             let duration_secs = chunk_duration as f32;
             tokio::task::spawn_blocking(move || {
-                diarizer.process_from_source(sequence_id, &samples, embedding, source, duration_secs)
+                diarizer.process_from_source(
+                    sequence_id,
+                    &samples,
+                    embedding,
+                    source,
+                    duration_secs,
+                )
             })
-                .await
-                .ok()
-                .and_then(|res| match res {
-                    Ok(result) => Some(result),
-                    Err(e) => {
-                        log::debug!("Diarization fallback for chunk {}: {}", sequence_id, e);
-                        None
-                    }
-                })
+            .await
+            .ok()
+            .and_then(|res| match res {
+                Ok(result) => Some(result),
+                Err(e) => {
+                    log::debug!("Diarization fallback for chunk {}: {}", sequence_id, e);
+                    None
+                }
+            })
         }
         _ => None,
     };

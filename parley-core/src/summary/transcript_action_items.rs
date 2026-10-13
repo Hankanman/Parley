@@ -51,10 +51,7 @@ impl Segment {
             text: t.text.trim().to_string(),
             start: t.audio_start_time,
             end: t.audio_end_time,
-            speaker: t
-                .speaker
-                .clone()
-                .unwrap_or_else(|| "Speaker".to_string()),
+            speaker: t.speaker.clone().unwrap_or_else(|| "Speaker".to_string()),
         }
     }
 
@@ -142,8 +139,11 @@ pub fn spawn_transcript_extraction(
     model_name: String,
 ) {
     tokio::spawn(async move {
-        match extract_from_transcript(&sink, &pool, &meeting_id, &provider_name, &model_name).await {
-            Ok(count) => info!("Transcript action-item extraction finished for {meeting_id}: {count}"),
+        match extract_from_transcript(&sink, &pool, &meeting_id, &provider_name, &model_name).await
+        {
+            Ok(count) => {
+                info!("Transcript action-item extraction finished for {meeting_id}: {count}")
+            }
             Err(e) => warn!("Transcript action-item extraction failed for {meeting_id}: {e}"),
         }
     });
@@ -293,7 +293,10 @@ fn fmt_ts(secs: Option<f64>) -> String {
 }
 
 enum Grounding {
-    Anchored { start: Option<f64>, end: Option<f64> },
+    Anchored {
+        start: Option<f64>,
+        end: Option<f64>,
+    },
     Kept,
     Hallucinated,
 }

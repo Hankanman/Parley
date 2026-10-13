@@ -35,11 +35,7 @@ pub async fn fetch_and_expand(url: &str) -> Result<Vec<OccurrenceForUpsert>> {
 
     let resp = client.get(url).send().await.context("fetching ICS URL")?;
     if !resp.status().is_success() {
-        return Err(anyhow!(
-            "ICS endpoint returned {} ({})",
-            resp.status(),
-            url
-        ));
+        return Err(anyhow!("ICS endpoint returned {} ({})", resp.status(), url));
     }
     let body = resp.text().await.context("reading ICS body")?;
     let masters = parser::parse_ics(&body)?;
@@ -49,14 +45,12 @@ pub async fn fetch_and_expand(url: &str) -> Result<Vec<OccurrenceForUpsert>> {
     let to = now + Duration::days(WINDOW_FORWARD_DAYS);
 
     // Split into master events (no RECURRENCE-ID) and overrides.
-    let (overrides, masters): (Vec<_>, Vec<_>) = masters
-        .into_iter()
-        .partition(|e| e.recurrence_id.is_some());
+    let (overrides, masters): (Vec<_>, Vec<_>) =
+        masters.into_iter().partition(|e| e.recurrence_id.is_some());
 
     let mut out = Vec::new();
     for master in masters {
-        let occurrences =
-            parser::expand_event_window(&master, from, to, MAX_OCCURRENCES_PER_RULE);
+        let occurrences = parser::expand_event_window(&master, from, to, MAX_OCCURRENCES_PER_RULE);
         let duration = master.end_at - master.start_at;
         let is_recurring = master.rrule_block.is_some();
         for start in occurrences {

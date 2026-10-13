@@ -136,13 +136,13 @@ impl SummaryService {
         );
 
         // Register cancellation token for this meeting
-        let (registration_id, cancellation_token) =
-            Self::register_cancellation_token(&meeting_id);
+        let (registration_id, cancellation_token) = Self::register_cancellation_token(&meeting_id);
 
         // Register the run in `summary_processes` first: the completed /
         // failed / cancelled updates below only UPDATE an existing row, so
         // without this a summary for a meeting with no prior row is lost.
-        if let Err(e) = SummaryProcessesRepository::create_or_reset_process(&pool, &meeting_id).await
+        if let Err(e) =
+            SummaryProcessesRepository::create_or_reset_process(&pool, &meeting_id).await
         {
             error!(
                 "Failed to register summary process for {}: {}",
@@ -176,15 +176,14 @@ impl SummaryService {
 
         // The user's own notes ride along as priorities (#82). A failure to
         // read them shouldn't cost the user their summary.
-        let notes: Vec<String> = match MeetingNotesRepository::list_by_meeting(&pool, &meeting_id)
-            .await
-        {
-            Ok(notes) => notes.into_iter().map(|n| n.body).collect(),
-            Err(e) => {
-                warn!("Failed to load notes for {}: {}", meeting_id, e);
-                Vec::new()
-            }
-        };
+        let notes: Vec<String> =
+            match MeetingNotesRepository::list_by_meeting(&pool, &meeting_id).await {
+                Ok(notes) => notes.into_iter().map(|n| n.body).collect(),
+                Err(e) => {
+                    warn!("Failed to load notes for {}: {}", meeting_id, e);
+                    Vec::new()
+                }
+            };
 
         // Bookmarked moments (issue #87) ride along as emphasis context.
         let custom_prompt =
@@ -246,10 +245,9 @@ impl SummaryService {
                         )
                         .await
                         {
-                            Ok(true) => info!(
-                                "Named meeting {} '{}' from its summary",
-                                meeting_id, name
-                            ),
+                            Ok(true) => {
+                                info!("Named meeting {} '{}' from its summary", meeting_id, name)
+                            }
                             Ok(false) => {}
                             Err(e) => {
                                 error!("Failed to update meeting name for {}: {}", meeting_id, e)
@@ -278,8 +276,7 @@ impl SummaryService {
                         "Summary for {} is partial: {} chunk(s) failed",
                         meeting_id, output.failed_chunks
                     );
-                    result_json["failed_chunks"] =
-                        serde_json::json!(output.failed_chunks);
+                    result_json["failed_chunks"] = serde_json::json!(output.failed_chunks);
                 }
 
                 // Update database with completed status
@@ -332,13 +329,15 @@ impl SummaryService {
                         // failing extraction must not delay or affect it.
                         // Only runs once the summary is committed, so a
                         // failure here can never roll one back.
-                        None => crate::summary::transcript_action_items::spawn_transcript_extraction(
-                            sink.clone(),
-                            pool.clone(),
-                            meeting_id.clone(),
-                            model_provider.clone(),
-                            model_name.clone(),
-                        ),
+                        None => {
+                            crate::summary::transcript_action_items::spawn_transcript_extraction(
+                                sink.clone(),
+                                pool.clone(),
+                                meeting_id.clone(),
+                                model_provider.clone(),
+                                model_name.clone(),
+                            )
+                        }
                     }
 
                     // Best-effort, no-op unless the user turned on export

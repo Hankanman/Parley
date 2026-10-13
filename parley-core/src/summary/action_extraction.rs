@@ -256,9 +256,7 @@ fn normalize_elements(elements: Vec<RawElement>) -> Vec<NewActionItem> {
     for element in elements {
         let (text, assignee, due_hint, quote) = match element {
             RawElement::Text(t) => (t, None, None, None),
-            RawElement::Object(o) => {
-                (o.text.unwrap_or_default(), o.assignee, o.due_hint, o.quote)
-            }
+            RawElement::Object(o) => (o.text.unwrap_or_default(), o.assignee, o.due_hint, o.quote),
         };
 
         let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -429,8 +427,7 @@ mod tests {
 
     #[test]
     fn parses_an_object_wrapper() {
-        let items =
-            parse_action_items(r#"{"action_items":[{"text":"Review the PR"}]}"#).unwrap();
+        let items = parse_action_items(r#"{"action_items":[{"text":"Review the PR"}]}"#).unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].text, "Review the PR");
     }
@@ -548,10 +545,18 @@ mod tests {
     #[test]
     fn structured_items_get_the_same_normalization() {
         let items = normalize_structured_items(vec![
-            ("Send the deck".to_string(), Some("Speaker 2".to_string()), Some("TBD".to_string())),
+            (
+                "Send the deck".to_string(),
+                Some("Speaker 2".to_string()),
+                Some("TBD".to_string()),
+            ),
             ("send the deck.".to_string(), None, None),
             ("Ok".to_string(), None, None),
-            ("Book the room".to_string(), Some("Bob".to_string()), Some("Monday".to_string())),
+            (
+                "Book the room".to_string(),
+                Some("Bob".to_string()),
+                Some("Monday".to_string()),
+            ),
         ]);
         assert_eq!(items.len(), 2);
         assert!(items[0].assignee.is_none());
@@ -581,7 +586,9 @@ mod tests {
 
     #[test]
     fn caps_runaway_output() {
-        let many: Vec<String> = (0..200).map(|i| format!(r#""Task number {i} here""#)).collect();
+        let many: Vec<String> = (0..200)
+            .map(|i| format!(r#""Task number {i} here""#))
+            .collect();
         let raw = format!("[{}]", many.join(","));
         let items = parse_action_items(&raw).unwrap();
         assert_eq!(items.len(), MAX_ITEMS);

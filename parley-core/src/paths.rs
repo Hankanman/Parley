@@ -117,8 +117,14 @@ mod tests {
     #[test]
     fn fresh_install_uses_the_new_identifier() {
         let base = tempfile::tempdir().unwrap();
-        assert_eq!(resolve_data_dir(base.path()), base.path().join(APP_IDENTIFIER));
-        assert_eq!(migrate_legacy_data_dir_in(base.path()), Migration::NotNeeded);
+        assert_eq!(
+            resolve_data_dir(base.path()),
+            base.path().join(APP_IDENTIFIER)
+        );
+        assert_eq!(
+            migrate_legacy_data_dir_in(base.path()),
+            Migration::NotNeeded
+        );
         assert!(!base.path().join(APP_IDENTIFIER).exists());
     }
 
@@ -147,13 +153,25 @@ mod tests {
                 to: current.clone()
             }
         );
-        assert_eq!(std::fs::read(current.join("meeting_minutes.sqlite")).unwrap(), b"db");
-        assert!(std::fs::symlink_metadata(&legacy).unwrap().file_type().is_symlink());
-        assert_eq!(std::fs::read(legacy.join("meeting_minutes.sqlite")).unwrap(), b"db");
+        assert_eq!(
+            std::fs::read(current.join("meeting_minutes.sqlite")).unwrap(),
+            b"db"
+        );
+        assert!(std::fs::symlink_metadata(&legacy)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read(legacy.join("meeting_minutes.sqlite")).unwrap(),
+            b"db"
+        );
         assert_eq!(resolve_data_dir(base.path()), current);
 
         // A second run sees the symlink and does nothing.
-        assert_eq!(migrate_legacy_data_dir_in(base.path()), Migration::NotNeeded);
+        assert_eq!(
+            migrate_legacy_data_dir_in(base.path()),
+            Migration::NotNeeded
+        );
     }
 
     #[test]
@@ -164,8 +182,14 @@ mod tests {
         std::fs::write(legacy.join("old"), b"old").unwrap();
         std::fs::create_dir(base.path().join(APP_IDENTIFIER)).unwrap();
 
-        assert_eq!(migrate_legacy_data_dir_in(base.path()), Migration::NotNeeded);
+        assert_eq!(
+            migrate_legacy_data_dir_in(base.path()),
+            Migration::NotNeeded
+        );
         assert!(legacy.join("old").is_file());
-        assert_eq!(resolve_data_dir(base.path()), base.path().join(APP_IDENTIFIER));
+        assert_eq!(
+            resolve_data_dir(base.path()),
+            base.path().join(APP_IDENTIFIER)
+        );
     }
 }

@@ -210,24 +210,23 @@ impl LlmConfig {
             None
         };
 
-        let (custom_openai_endpoint, api_key, max_tokens, temperature, top_p) =
-            if provider == LLMProvider::CustomOpenAI {
-                let config = SettingsRepository::get_custom_openai_config(pool)
-                    .await
-                    .map_err(|e| format!("failed to read custom OpenAI config: {e}"))?
-                    .ok_or_else(|| {
-                        "custom OpenAI provider selected but not configured".to_string()
-                    })?;
-                (
-                    Some(config.endpoint),
-                    config.api_key.unwrap_or_default(),
-                    config.max_tokens.map(|t| t as u32),
-                    config.temperature,
-                    config.top_p,
-                )
-            } else {
-                (None, api_key, None, None, None)
-            };
+        let (custom_openai_endpoint, api_key, max_tokens, temperature, top_p) = if provider
+            == LLMProvider::CustomOpenAI
+        {
+            let config = SettingsRepository::get_custom_openai_config(pool)
+                .await
+                .map_err(|e| format!("failed to read custom OpenAI config: {e}"))?
+                .ok_or_else(|| "custom OpenAI provider selected but not configured".to_string())?;
+            (
+                Some(config.endpoint),
+                config.api_key.unwrap_or_default(),
+                config.max_tokens.map(|t| t as u32),
+                config.temperature,
+                config.top_p,
+            )
+        } else {
+            (None, api_key, None, None, None)
+        };
 
         Ok(Self {
             provider,
@@ -276,9 +275,7 @@ impl LlmConfig {
             LLMProvider::BuiltInAI => {
                 use crate::summary::summary_engine::models;
                 match models::get_model_by_name(&self.model) {
-                    Some(model_def) => {
-                        single_pass_threshold(model_def.context_size as usize)
-                    }
+                    Some(model_def) => single_pass_threshold(model_def.context_size as usize),
                     None => {
                         warn!("Unknown built-in model {}, using default 2048", self.model);
                         single_pass_threshold(2048)
@@ -442,8 +439,14 @@ async fn generate_completion(
             }
         }
 
-        match send_chat_request(config, system_prompt, user_prompt, schema, cancellation_token)
-            .await
+        match send_chat_request(
+            config,
+            system_prompt,
+            user_prompt,
+            schema,
+            cancellation_token,
+        )
+        .await
         {
             Ok(text) => return Ok(text),
             Err(e) if e.retryable && attempt < MAX_ATTEMPTS => {
@@ -758,7 +761,10 @@ mod structured_request_tests {
         let schema = serde_json::json!({"type": "object"});
         let rf = openai_response_format(
             LLMProvider::OpenAI,
-            ResponseSchema { name: "meeting_summary", schema: &schema },
+            ResponseSchema {
+                name: "meeting_summary",
+                schema: &schema,
+            },
         );
         assert_eq!(rf["type"], "json_schema");
         assert_eq!(rf["json_schema"]["strict"], true);
@@ -771,7 +777,10 @@ mod structured_request_tests {
         let schema = serde_json::json!({"type": "object"});
         let rf = openai_response_format(
             LLMProvider::Groq,
-            ResponseSchema { name: "x", schema: &schema },
+            ResponseSchema {
+                name: "x",
+                schema: &schema,
+            },
         );
         assert_eq!(rf, serde_json::json!({"type": "json_object"}));
     }
@@ -799,7 +808,10 @@ mod structured_request_tests {
             "content": [{"type": "text", "text": "  # Title\nBody  "}]
         }))
         .unwrap();
-        assert_eq!(claude_response_text(response, false).unwrap(), "# Title\nBody");
+        assert_eq!(
+            claude_response_text(response, false).unwrap(),
+            "# Title\nBody"
+        );
     }
 
     #[test]

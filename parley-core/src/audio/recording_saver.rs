@@ -7,8 +7,9 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use super::audio_processing::create_meeting_folder;
 use super::common::{
-    self, write_metadata as common_write_metadata, write_transcripts_json as common_write_transcripts_json,
-    DeviceInfo, MeetingMetadata, TRANSCRIPTS_JOURNAL_FILENAME,
+    self, write_metadata as common_write_metadata,
+    write_transcripts_json as common_write_transcripts_json, DeviceInfo, MeetingMetadata,
+    TRANSCRIPTS_JOURNAL_FILENAME,
 };
 use super::incremental_saver::IncrementalAudioSaver;
 use super::recording_state::AudioChunk;
@@ -288,8 +289,7 @@ impl RecordingSaver {
             // Stereo: mic on the left channel, system on the right (the
             // pipeline interleaves them). Keeps the two sources separable for
             // source-aware playback instead of pre-mixing to mono.
-            let incremental_saver =
-                IncrementalAudioSaver::new(meeting_folder.clone(), 48000, 2)?;
+            let incremental_saver = IncrementalAudioSaver::new(meeting_folder.clone(), 48000, 2)?;
             self.incremental_saver = Some(Arc::new(AsyncMutex::new(incremental_saver)));
             info!(
                 "✅ Incremental audio saver initialized for meeting: {}",
@@ -312,13 +312,11 @@ impl RecordingSaver {
                 microphone: None, // Could be enhanced to store actual device names
                 system_audio: None,
             }),
-            audio_file: Some(
-                if create_checkpoints {
-                    "audio.mp4".to_string()
-                } else {
-                    "".to_string()
-                },
-            ),
+            audio_file: Some(if create_checkpoints {
+                "audio.mp4".to_string()
+            } else {
+                "".to_string()
+            }),
             transcript_file: Some("transcripts.json".to_string()),
             sample_rate: Some(48000),
             status: Some("recording".to_string()),
@@ -372,7 +370,10 @@ impl RecordingSaver {
         let (sender, mut receiver) = mpsc::unbounded_channel::<TranscriptSegment>();
 
         let task = tokio::spawn(async move {
-            info!("Transcript journal writer task started for {}", folder.display());
+            info!(
+                "Transcript journal writer task started for {}",
+                folder.display()
+            );
             let mut dirty = false;
 
             loop {
@@ -411,20 +412,27 @@ impl RecordingSaver {
     /// Rebuild transcripts.json from the current in-memory segment set.
     /// Used both by the journal writer task's debounced rebuild and, via
     /// `write_transcripts_json`'s callers, at final save time.
-    async fn rebuild_transcripts_json(folder: &Path, segments: &Arc<Mutex<Vec<TranscriptSegment>>>) {
+    async fn rebuild_transcripts_json(
+        folder: &Path,
+        segments: &Arc<Mutex<Vec<TranscriptSegment>>>,
+    ) {
         let mut segments_clone = match segments.lock() {
             Ok(guard) => guard.clone(),
             Err(e) => {
-                error!("Failed to lock transcript segments for debounced rebuild: {}", e);
+                error!(
+                    "Failed to lock transcript segments for debounced rebuild: {}",
+                    e
+                );
                 return;
             }
         };
         Self::sort_segments_chronologically(&mut segments_clone);
 
         let folder = folder.to_path_buf();
-        let write_result =
-            tokio::task::spawn_blocking(move || common_write_transcripts_json(&folder, &segments_clone))
-                .await;
+        let write_result = tokio::task::spawn_blocking(move || {
+            common_write_transcripts_json(&folder, &segments_clone)
+        })
+        .await;
         match write_result {
             Ok(Ok(())) => {}
             Ok(Err(e)) => warn!("Debounced transcripts.json rebuild failed: {}", e),
@@ -837,7 +845,11 @@ impl Default for RecordingSaver {
 mod tests {
     use super::*;
 
-    fn segment(id: &str, audio_start_time: Option<f64>, sequence_id: Option<u64>) -> TranscriptSegment {
+    fn segment(
+        id: &str,
+        audio_start_time: Option<f64>,
+        sequence_id: Option<u64>,
+    ) -> TranscriptSegment {
         TranscriptSegment {
             id: id.to_string(),
             text: id.to_string(),

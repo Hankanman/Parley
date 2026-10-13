@@ -31,7 +31,9 @@
 //! remembered for [`FAILURE_COOLDOWN`] so asks don't each wait on it, and
 //! retrieval carries on with keywords only.
 
-use super::retrieval::{load_segments, push_meeting_filters, AskFilters, ChunkHit, RetrievedSegment};
+use super::retrieval::{
+    load_segments, push_meeting_filters, AskFilters, ChunkHit, RetrievedSegment,
+};
 use crate::database::repositories::setting::SettingsRepository;
 use crate::database::repositories::voice_profile::{bytes_to_floats, floats_to_bytes};
 use crate::summary::llm_client::LLMProvider;
@@ -94,7 +96,11 @@ impl OllamaEmbedder {
             .timeout(Duration::from_secs(120))
             .build()
             .unwrap_or_default();
-        Self { endpoint, model, client }
+        Self {
+            endpoint,
+            model,
+            client,
+        }
     }
 
     /// nomic-embed-text is trained with task prefixes and retrieves much
@@ -158,14 +164,20 @@ impl Embedder for OllamaEmbedder {
 /// Whether semantic retrieval is available, and why not.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SemanticAvailability {
-    Ready { model_id: String },
+    Ready {
+        model_id: String,
+    },
     /// Turned off, or the provider has no embedding backend yet.
     Off(String),
     /// The backend failed recently.
-    Failing { model_id: String, error: String },
+    Failing {
+        model_id: String,
+        error: String,
+    },
 }
 
-static LAST_FAILURE: Lazy<Mutex<Option<(String, Instant, String)>>> = Lazy::new(|| Mutex::new(None));
+static LAST_FAILURE: Lazy<Mutex<Option<(String, Instant, String)>>> =
+    Lazy::new(|| Mutex::new(None));
 
 fn record_failure(model_id: &str, error: &str) {
     if let Ok(mut f) = LAST_FAILURE.lock() {
@@ -188,7 +200,9 @@ fn recent_failure(model_id: &str) -> Option<String> {
 }
 
 /// The embedder for the current settings, or why there isn't one.
-pub async fn resolve_embedder(pool: &SqlitePool) -> Result<Arc<dyn Embedder>, SemanticAvailability> {
+pub async fn resolve_embedder(
+    pool: &SqlitePool,
+) -> Result<Arc<dyn Embedder>, SemanticAvailability> {
     let config = SettingsRepository::get_model_config(pool)
         .await
         .ok()
@@ -294,7 +308,10 @@ pub struct BackfillReport {
 /// Index every meeting whose transcript or embedding model changed since it
 /// was last indexed. Stops at the first backend error (recorded for the
 /// cooldown) and returns it.
-pub async fn backfill(pool: &SqlitePool, embedder: &dyn Embedder) -> Result<BackfillReport, String> {
+pub async fn backfill(
+    pool: &SqlitePool,
+    embedder: &dyn Embedder,
+) -> Result<BackfillReport, String> {
     let model_id = embedder.model_id();
     let signatures: Vec<(String, i64, i64, i64)> = sqlx::query_as(
         "SELECT m.id, COUNT(t.rowid), COALESCE(MAX(t.rowid), 0), COALESCE(SUM(LENGTH(t.transcript)), 0)
@@ -306,14 +323,15 @@ pub async fn backfill(pool: &SqlitePool, embedder: &dyn Embedder) -> Result<Back
     .fetch_all(pool)
     .await
     .map_err(|e| format!("failed to read transcript signatures: {e}"))?;
-    let state: HashMap<String, (String, String)> =
-        sqlx::query_as::<_, (String, String, String)>("SELECT meeting_id, model, signature FROM meeting_embedding_state")
-            .fetch_all(pool)
-            .await
-            .map_err(|e| format!("failed to read embedding state: {e}"))?
-            .into_iter()
-            .map(|(id, model, sig)| (id, (model, sig)))
-            .collect();
+    let state: HashMap<String, (String, String)> = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT meeting_id, model, signature FROM meeting_embedding_state",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("failed to read embedding state: {e}"))?
+    .into_iter()
+    .map(|(id, model, sig)| (id, (model, sig)))
+    .collect();
 
     let mut report = BackfillReport::default();
     for (meeting_id, count, max_rowid, total_len) in signatures {
@@ -438,10 +456,11 @@ pub async fn index_progress(pool: &SqlitePool, model_id: &str) -> Result<(i64, i
     .bind(model_id)
     .fetch_one(pool)
     .await?;
-    let total: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM meetings WHERE COALESCE(status, 'completed') != 'recording'")
-            .fetch_one(pool)
-            .await?;
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM meetings WHERE COALESCE(status, 'completed') != 'recording'",
+    )
+    .fetch_one(pool)
+    .await?;
     Ok((indexed, total))
 }
 
@@ -464,7 +483,8 @@ pub async fn search_vectors(
          WHERE e.model = ",
     );
     qb.push_bind(model_id.to_string());
-    qb.push(" AND e.dim = ").push_bind(query_vector.len() as i64);
+    qb.push(" AND e.dim = ")
+        .push_bind(query_vector.len() as i64);
     push_meeting_filters(&mut qb, filters);
     let rows: Vec<(String, String, i64, Vec<u8>)> = qb.build_query_as().fetch_all(pool).await?;
     let mut hits: Vec<ChunkHit> = rows
@@ -480,7 +500,11 @@ pub async fn search_vectors(
             })
         })
         .collect();
-    hits.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+    hits.sort_by(|a, b| {
+        b.similarity
+            .partial_cmp(&a.similarity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     hits.truncate(limit);
     Ok(hits)
 }
@@ -525,7 +549,11 @@ pub(crate) mod tests {
 
     impl Embedder for FakeEmbedder {
         fn model_id(&self) -> String {
-            if self.fail { "fake:failing".into() } else { "fake:bow".into() }
+            if self.fail {
+                "fake:failing".into()
+            } else {
+                "fake:bow".into()
+            }
         }
         fn embed<'a>(&'a self, texts: &'a [String], _kind: EmbedKind) -> EmbedFuture<'a> {
             Box::pin(async move {
@@ -586,7 +614,10 @@ pub(crate) mod tests {
     }
 
     fn fake() -> FakeEmbedder {
-        FakeEmbedder { vocab: vec!["budget", "finance", "money", "holiday", "travel"], fail: false }
+        FakeEmbedder {
+            vocab: vec!["budget", "finance", "money", "holiday", "travel"],
+            fail: false,
+        }
     }
 
     #[test]
@@ -598,7 +629,11 @@ pub(crate) mod tests {
             voice_profile_id: None,
             text: text.into(),
         };
-        let segs = vec![seg("1", &"x".repeat(30)), seg("2", &"y".repeat(30)), seg("3", &"z".repeat(30))];
+        let segs = vec![
+            seg("1", &"x".repeat(30)),
+            seg("2", &"y".repeat(30)),
+            seg("3", &"z".repeat(30)),
+        ];
         let chunks = chunk_for_embedding(&segs, 70);
         assert_eq!(chunks.len(), 2);
         assert_eq!((chunks[0].first_index, chunks[0].segment_count), (0, 2));
@@ -616,7 +651,12 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn backfill_is_incremental_and_search_ranks_by_meaning() {
         let pool = test_pool().await;
-        add(&pool, "fin", &["The budget is tight.", "Finance wants the money back."]).await;
+        add(
+            &pool,
+            "fin",
+            &["The budget is tight.", "Finance wants the money back."],
+        )
+        .await;
         add(&pool, "trip", &["Holiday travel plans for the team."]).await;
         let embedder = fake();
 
@@ -632,10 +672,20 @@ pub(crate) mod tests {
         assert_eq!((r.meetings_indexed, r.meetings_current), (1, 1));
         assert_eq!(index_progress(&pool, "fake:bow").await.unwrap(), (2, 2));
 
-        let hits = semantic_candidates(&pool, &embedder, "money and finance", &AskFilters::default(), 10)
-            .await
-            .unwrap();
-        assert_eq!(hits.len(), 1, "unrelated chunks fall below the similarity floor");
+        let hits = semantic_candidates(
+            &pool,
+            &embedder,
+            "money and finance",
+            &AskFilters::default(),
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "unrelated chunks fall below the similarity floor"
+        );
         assert_eq!(hits[0].meeting_id, "fin");
         assert_eq!(hits[0].first_transcript_id, "fin-0");
         assert_eq!(hits[0].segment_count, 2);
@@ -645,16 +695,21 @@ pub(crate) mod tests {
             from: Some(chrono::Utc::now()),
             ..Default::default()
         };
-        assert!(semantic_candidates(&pool, &embedder, "money", &none, 10).await.unwrap().is_empty());
+        assert!(semantic_candidates(&pool, &embedder, "money", &none, 10)
+            .await
+            .unwrap()
+            .is_empty());
 
         // Deleting a meeting removes its vectors.
         crate::database::repositories::meeting::MeetingsRepository::delete_meeting(&pool, "fin")
             .await
             .unwrap();
-        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transcript_chunk_embeddings WHERE meeting_id = 'fin'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let left: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM transcript_chunk_embeddings WHERE meeting_id = 'fin'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(left, 0);
     }
 
@@ -662,7 +717,10 @@ pub(crate) mod tests {
     async fn failing_backend_is_reported_and_cooled_down() {
         let pool = test_pool().await;
         add(&pool, "m", &["Budget talk."]).await;
-        let embedder = FakeEmbedder { vocab: vec!["budget"], fail: true };
+        let embedder = FakeEmbedder {
+            vocab: vec!["budget"],
+            fail: true,
+        };
         assert!(backfill(&pool, &embedder).await.is_err());
         assert!(recent_failure("fake:failing").is_some());
         let err = semantic_candidates(&pool, &embedder, "budget", &AskFilters::default(), 5)
@@ -674,15 +732,34 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn embedder_resolves_only_for_ollama() {
         let pool = test_pool().await;
-        assert!(matches!(resolve_embedder(&pool).await, Err(SemanticAvailability::Off(_))));
-        SettingsRepository::save_model_config(&pool, "ollama", "llama3", "large-v3", Some("http://host:1/"))
-            .await
-            .unwrap();
+        assert!(matches!(
+            resolve_embedder(&pool).await,
+            Err(SemanticAvailability::Off(_))
+        ));
+        SettingsRepository::save_model_config(
+            &pool,
+            "ollama",
+            "llama3",
+            "large-v3",
+            Some("http://host:1/"),
+        )
+        .await
+        .unwrap();
         let e = resolve_embedder(&pool).await.ok().unwrap();
         assert_eq!(e.model_id(), "ollama:nomic-embed-text");
-        SettingsRepository::set_setting(&pool, KEY_ASK_EMBEDDING_MODEL, &"").await.unwrap();
-        assert!(matches!(resolve_embedder(&pool).await, Err(SemanticAvailability::Off(_))));
-        SettingsRepository::save_model_config(&pool, "claude", "x", "large-v3", None).await.unwrap();
-        assert!(matches!(resolve_embedder(&pool).await, Err(SemanticAvailability::Off(_))));
+        SettingsRepository::set_setting(&pool, KEY_ASK_EMBEDDING_MODEL, &"")
+            .await
+            .unwrap();
+        assert!(matches!(
+            resolve_embedder(&pool).await,
+            Err(SemanticAvailability::Off(_))
+        ));
+        SettingsRepository::save_model_config(&pool, "claude", "x", "large-v3", None)
+            .await
+            .unwrap();
+        assert!(matches!(
+            resolve_embedder(&pool).await,
+            Err(SemanticAvailability::Off(_))
+        ));
     }
 }

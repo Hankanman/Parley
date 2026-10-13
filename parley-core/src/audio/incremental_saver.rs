@@ -581,8 +581,9 @@ mod tests {
 
         // Verify 2 raw-PCM checkpoints created
         assert_eq!(saver.checkpoint_count, 2);
-        let files = list_checkpoint_files(&meeting_folder.join(".checkpoints"), CHECKPOINT_EXTENSION)
-            .unwrap();
+        let files =
+            list_checkpoint_files(&meeting_folder.join(".checkpoints"), CHECKPOINT_EXTENSION)
+                .unwrap();
         assert_eq!(files.len(), 2);
         // 30 s mono f32 @ 48 kHz per checkpoint.
         assert_eq!(std::fs::metadata(&files[0]).unwrap().len(), 48_000 * 30 * 4);

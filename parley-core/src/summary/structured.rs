@@ -123,13 +123,9 @@ impl CoreField {
 
     fn default_instruction(self) -> &'static str {
         match self {
-            CoreField::Overview => {
-                "A brief, one-paragraph executive summary of the whole meeting"
-            }
+            CoreField::Overview => "A brief, one-paragraph executive summary of the whole meeting",
             CoreField::Decisions => "Decisions that were actually made in the meeting",
-            CoreField::ActionItems => {
-                "Concrete tasks someone committed to doing after the meeting"
-            }
+            CoreField::ActionItems => "Concrete tasks someone committed to doing after the meeting",
             CoreField::OpenQuestions => {
                 "Questions raised that were left unresolved at the end of the meeting"
             }
@@ -322,8 +318,7 @@ impl SummaryPlan {
                 for i in 0..self.notes.len() {
                     props.insert(note_key(i), json!({ "type": "string" }));
                 }
-                let required: Vec<Value> =
-                    props.keys().map(|k| Value::from(k.as_str())).collect();
+                let required: Vec<Value> = props.keys().map(|k| Value::from(k.as_str())).collect();
                 json!({
                     "type": "object",
                     "properties": props,
@@ -365,7 +360,10 @@ impl SummaryPlan {
             } else {
                 format!(" {}.", field.instruction.trim().trim_end_matches('.'))
             };
-            out.push_str(&format!("- \"{}\"{label} ({shape}):{instruction}\n", field.key));
+            out.push_str(&format!(
+                "- \"{}\"{label} ({shape}):{instruction}\n",
+                field.key
+            ));
             if !field.item_columns.is_empty() {
                 out.push_str(&format!(
                     "  Each item should cover: {}.\n",
@@ -679,7 +677,10 @@ pub struct StructuredSummary {
 
 impl StructuredSummary {
     fn section(&self, key: &str) -> Option<&SectionContent> {
-        self.sections.iter().find(|s| s.key == key).map(|s| &s.content)
+        self.sections
+            .iter()
+            .find(|s| s.key == key)
+            .map(|s| &s.content)
     }
 
     fn is_empty(&self) -> bool {
@@ -767,9 +768,7 @@ pub fn notes_block(notes: &[String]) -> String {
 /// expansions go).
 pub fn notes_instructions(structured: bool) -> String {
     let destination = if structured {
-        format!(
-            "Put each note's expansion in \"{KEY_NOTES}\" under its key (note_1, note_2, ...)"
-        )
+        format!("Put each note's expansion in \"{KEY_NOTES}\" under its key (note_1, note_2, ...)")
     } else {
         format!(
             "Add a final \"**{NOTES_HEADING}**\" section with one bullet per note: the note's exact \
@@ -834,7 +833,10 @@ impl<'p> StreamingRenderer<'p> {
         self.raw.push_str(delta);
         let value = parse_partial_json(&self.raw)?;
         let rendered = self.plan.render_partial(&value);
-        let keep = rendered.chars().count().saturating_sub(STREAM_HOLDBACK_CHARS);
+        let keep = rendered
+            .chars()
+            .count()
+            .saturating_sub(STREAM_HOLDBACK_CHARS);
         let stable: String = rendered.chars().take(keep).collect();
         if stable.len() <= self.emitted.len() || !stable.starts_with(&self.emitted) {
             return None;
@@ -872,7 +874,12 @@ pub fn parse_partial_json(raw: &str) -> Option<Value> {
                 }
             }
         }
-        let cut = scan.cut_points.iter().rev().find(|&&c| c < text.len()).copied()?;
+        let cut = scan
+            .cut_points
+            .iter()
+            .rev()
+            .find(|&&c| c < text.len())
+            .copied()?;
         text.truncate(cut);
     }
     None
@@ -1066,9 +1073,7 @@ fn as_action_items(value: &Value) -> Option<Vec<StructuredActionItem>> {
             _ => return None,
         };
         let text = strip_bullet(&collapse_ws(&text));
-        if text.chars().count() < 4
-            || out.iter().any(|o| o.text.eq_ignore_ascii_case(&text))
-        {
+        if text.chars().count() < 4 || out.iter().any(|o| o.text.eq_ignore_ascii_case(&text)) {
             continue;
         }
         out.push(StructuredActionItem {
@@ -1086,8 +1091,19 @@ fn as_action_items(value: &Value) -> Option<Vec<StructuredActionItem>> {
 /// Blank or "no value" sentinels ("none", "n/a", "unassigned", …) → `None`.
 fn clean_optional(value: Option<String>) -> Option<String> {
     const NULL_SENTINELS: &[&str] = &[
-        "none", "n/a", "na", "null", "unassigned", "unknown", "tbd", "tba", "not specified",
-        "unspecified", "not mentioned", "not stated", "-",
+        "none",
+        "n/a",
+        "na",
+        "null",
+        "unassigned",
+        "unknown",
+        "tbd",
+        "tba",
+        "not specified",
+        "unspecified",
+        "not mentioned",
+        "not stated",
+        "-",
     ];
     let v = collapse_ws(&value?);
     if v.is_empty() || NULL_SENTINELS.contains(&v.to_lowercase().as_str()) {
@@ -1277,7 +1293,11 @@ mod tests {
             assert!(props.contains_key("action_items"), "{id}");
             assert!(props.contains_key(KEY_NOTES), "{id}");
             // Keys are unique by construction (a Map), and all required.
-            assert_eq!(schema["required"].as_array().unwrap().len(), props.len(), "{id}");
+            assert_eq!(
+                schema["required"].as_array().unwrap().len(),
+                props.len(),
+                "{id}"
+            );
         }
     }
 
@@ -1326,7 +1346,10 @@ mod tests {
             "title": "Something", "overview": "", "decisions": [],
             "discussion_highlights": "", "action_items": [], "open_questions": []
         });
-        assert!(plan.parse(&empty.to_string()).unwrap_err().contains("empty"));
+        assert!(plan
+            .parse(&empty.to_string())
+            .unwrap_err()
+            .contains("empty"));
     }
 
     #[test]
@@ -1402,10 +1425,15 @@ mod tests {
             "Ask Bob about [the] lease".to_string(),
         ];
         let plan = SummaryPlan::new(&standard(), &notes);
-        assert_eq!(plan.notes(), ["Budget freeze?", "Ask Bob about [the] lease"]);
+        assert_eq!(
+            plan.notes(),
+            ["Budget freeze?", "Ask Bob about [the] lease"]
+        );
 
         let schema = plan.json_schema();
-        let note_props = schema["properties"][KEY_NOTES]["properties"].as_object().unwrap();
+        let note_props = schema["properties"][KEY_NOTES]["properties"]
+            .as_object()
+            .unwrap();
         assert_eq!(note_props.keys().collect::<Vec<_>>(), ["note_1", "note_2"]);
 
         let mut v: Value = serde_json::from_str(&standard_json()).unwrap();

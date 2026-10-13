@@ -149,7 +149,9 @@ mod tests {
             .await
             .unwrap();
 
-        let all = MeetingChatRepository::list_by_meeting(&pool, "m1").await.unwrap();
+        let all = MeetingChatRepository::list_by_meeting(&pool, "m1")
+            .await
+            .unwrap();
         let roles: Vec<&str> = all.iter().map(|m| m.role.as_str()).collect();
         assert_eq!(roles, vec!["user", "assistant", "user"]);
         assert_eq!(all[0].id, q.id);
@@ -166,44 +168,83 @@ mod tests {
         MeetingsRepository::create_recording_meeting(&pool, "m1", "Standup", None)
             .await
             .unwrap();
-        assert!(MeetingChatRepository::append(&pool, "m1", "system", "hi").await.is_err());
-        assert!(MeetingChatRepository::append(&pool, "m1", ROLE_USER, "   ").await.is_err());
+        assert!(MeetingChatRepository::append(&pool, "m1", "system", "hi")
+            .await
+            .is_err());
+        assert!(MeetingChatRepository::append(&pool, "m1", ROLE_USER, "   ")
+            .await
+            .is_err());
     }
 
     #[tokio::test]
     async fn delete_and_clear() {
         let pool = test_pool().await;
-        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None).await.unwrap();
-        MeetingsRepository::create_recording_meeting(&pool, "m2", "B", None).await.unwrap();
-        let a = MeetingChatRepository::append(&pool, "m1", ROLE_USER, "one").await.unwrap();
-        MeetingChatRepository::append(&pool, "m1", ROLE_ASSISTANT, "two").await.unwrap();
-        MeetingChatRepository::append(&pool, "m2", ROLE_USER, "keep").await.unwrap();
+        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None)
+            .await
+            .unwrap();
+        MeetingsRepository::create_recording_meeting(&pool, "m2", "B", None)
+            .await
+            .unwrap();
+        let a = MeetingChatRepository::append(&pool, "m1", ROLE_USER, "one")
+            .await
+            .unwrap();
+        MeetingChatRepository::append(&pool, "m1", ROLE_ASSISTANT, "two")
+            .await
+            .unwrap();
+        MeetingChatRepository::append(&pool, "m2", ROLE_USER, "keep")
+            .await
+            .unwrap();
 
         assert!(MeetingChatRepository::delete(&pool, &a.id).await.unwrap());
         assert!(!MeetingChatRepository::delete(&pool, &a.id).await.unwrap());
         assert_eq!(MeetingChatRepository::clear(&pool, "m1").await.unwrap(), 1);
-        assert!(MeetingChatRepository::list_by_meeting(&pool, "m1").await.unwrap().is_empty());
-        assert_eq!(MeetingChatRepository::list_by_meeting(&pool, "m2").await.unwrap().len(), 1);
+        assert!(MeetingChatRepository::list_by_meeting(&pool, "m1")
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            MeetingChatRepository::list_by_meeting(&pool, "m2")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
     async fn deleting_meeting_removes_chat() {
         let pool = test_pool().await;
-        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None).await.unwrap();
-        MeetingChatRepository::append(&pool, "m1", ROLE_USER, "hello").await.unwrap();
-        assert!(MeetingsRepository::delete_meeting(&pool, "m1").await.unwrap());
-        assert!(MeetingChatRepository::list_by_meeting(&pool, "m1").await.unwrap().is_empty());
+        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None)
+            .await
+            .unwrap();
+        MeetingChatRepository::append(&pool, "m1", ROLE_USER, "hello")
+            .await
+            .unwrap();
+        assert!(MeetingsRepository::delete_meeting(&pool, "m1")
+            .await
+            .unwrap());
+        assert!(MeetingChatRepository::list_by_meeting(&pool, "m1")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
     async fn cascade_removes_chat_on_raw_meeting_delete() {
         let pool = test_pool().await;
-        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None).await.unwrap();
-        MeetingChatRepository::append(&pool, "m1", ROLE_USER, "hello").await.unwrap();
+        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None)
+            .await
+            .unwrap();
+        MeetingChatRepository::append(&pool, "m1", ROLE_USER, "hello")
+            .await
+            .unwrap();
         sqlx::query("DELETE FROM meetings WHERE id = 'm1'")
             .execute(&pool)
             .await
             .unwrap();
-        assert!(MeetingChatRepository::list_by_meeting(&pool, "m1").await.unwrap().is_empty());
+        assert!(MeetingChatRepository::list_by_meeting(&pool, "m1")
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

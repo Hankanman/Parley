@@ -114,11 +114,7 @@ impl BookmarksRepository {
     }
 
     /// Set (or clear, with an empty string) a bookmark's label.
-    pub async fn update_label(
-        pool: &SqlitePool,
-        id: &str,
-        label: &str,
-    ) -> Result<bool, SqlxError> {
+    pub async fn update_label(pool: &SqlitePool, id: &str, label: &str) -> Result<bool, SqlxError> {
         let res = sqlx::query("UPDATE meeting_bookmarks SET label = ? WHERE id = ?")
             .bind(sanitize_label(label))
             .bind(id)
@@ -217,7 +213,9 @@ pub fn nearest_segment_index(spans: &[(Option<f64>, Option<f64>)], offset: f64) 
     let mut nearest: Option<(usize, f64)> = None;
     for (ix, (start, end)) in spans.iter().enumerate() {
         let (start, end) = (finite(*start), finite(*end));
-        let Some(anchor) = start.or(end) else { continue };
+        let Some(anchor) = start.or(end) else {
+            continue;
+        };
         let lo = start.unwrap_or(anchor);
         let hi = end.filter(|e| *e >= lo).unwrap_or(lo);
         if lo <= offset && offset <= hi && containing.is_none_or(|(_, best)| lo > best) {
@@ -290,18 +288,19 @@ pub fn bookmark_context(
 /// Load `meeting_id`'s bookmarks and transcript and build
 /// [`bookmark_context`]. Best-effort: any DB error just means no context.
 pub async fn load_bookmark_context(pool: &SqlitePool, meeting_id: &str) -> Option<String> {
-    let bookmarks = BookmarksRepository::list_by_meeting(pool, meeting_id).await.ok()?;
+    let bookmarks = BookmarksRepository::list_by_meeting(pool, meeting_id)
+        .await
+        .ok()?;
     if bookmarks.is_empty() {
         return None;
     }
-    let transcripts = crate::database::repositories::meeting::MeetingsRepository::get_meeting(
-        pool, meeting_id,
-    )
-    .await
-    .ok()
-    .flatten()
-    .map(|d| d.transcripts)
-    .unwrap_or_default();
+    let transcripts =
+        crate::database::repositories::meeting::MeetingsRepository::get_meeting(pool, meeting_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|d| d.transcripts)
+            .unwrap_or_default();
     bookmark_context(&bookmarks, &transcripts)
 }
 
@@ -357,61 +356,129 @@ mod tests {
     #[tokio::test]
     async fn add_list_rename_delete() {
         let pool = test_pool().await;
-        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None).await.unwrap();
-        MeetingsRepository::create_recording_meeting(&pool, "m2", "B", None).await.unwrap();
+        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None)
+            .await
+            .unwrap();
+        MeetingsRepository::create_recording_meeting(&pool, "m2", "B", None)
+            .await
+            .unwrap();
 
-        let late = BookmarksRepository::add(&pool, "m1", 90.5, Some("  Budget\n call ")).await.unwrap();
+        let late = BookmarksRepository::add(&pool, "m1", 90.5, Some("  Budget\n call "))
+            .await
+            .unwrap();
         assert_eq!(late.label.as_deref(), Some("Budget call"));
-        let early = BookmarksRepository::add(&pool, "m1", 12.0, None).await.unwrap();
-        BookmarksRepository::add(&pool, "m2", 1.0, Some("other")).await.unwrap();
+        let early = BookmarksRepository::add(&pool, "m1", 12.0, None)
+            .await
+            .unwrap();
+        BookmarksRepository::add(&pool, "m2", 1.0, Some("other"))
+            .await
+            .unwrap();
 
-        let list = BookmarksRepository::list_by_meeting(&pool, "m1").await.unwrap();
-        assert_eq!(list.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(), vec![early.id.as_str(), late.id.as_str()]);
+        let list = BookmarksRepository::list_by_meeting(&pool, "m1")
+            .await
+            .unwrap();
+        assert_eq!(
+            list.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(),
+            vec![early.id.as_str(), late.id.as_str()]
+        );
         assert_eq!(list[0].label, None);
 
-        assert!(BookmarksRepository::update_label(&pool, &early.id, "Decision").await.unwrap());
-        assert!(BookmarksRepository::update_label(&pool, &late.id, "   ").await.unwrap());
-        let list = BookmarksRepository::list_by_meeting(&pool, "m1").await.unwrap();
+        assert!(
+            BookmarksRepository::update_label(&pool, &early.id, "Decision")
+                .await
+                .unwrap()
+        );
+        assert!(BookmarksRepository::update_label(&pool, &late.id, "   ")
+            .await
+            .unwrap());
+        let list = BookmarksRepository::list_by_meeting(&pool, "m1")
+            .await
+            .unwrap();
         assert_eq!(list[0].label.as_deref(), Some("Decision"));
         assert_eq!(list[1].label, None);
-        assert!(!BookmarksRepository::update_label(&pool, "missing", "x").await.unwrap());
+        assert!(!BookmarksRepository::update_label(&pool, "missing", "x")
+            .await
+            .unwrap());
 
         assert!(BookmarksRepository::delete(&pool, &early.id).await.unwrap());
         assert!(!BookmarksRepository::delete(&pool, &early.id).await.unwrap());
-        assert_eq!(BookmarksRepository::list_by_meeting(&pool, "m1").await.unwrap().len(), 1);
-        assert_eq!(BookmarksRepository::list_by_meeting(&pool, "m2").await.unwrap().len(), 1);
+        assert_eq!(
+            BookmarksRepository::list_by_meeting(&pool, "m1")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            BookmarksRepository::list_by_meeting(&pool, "m2")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
     async fn rejects_bad_offsets() {
         let pool = test_pool().await;
-        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None).await.unwrap();
+        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None)
+            .await
+            .unwrap();
         for bad in [f64::NAN, f64::INFINITY, -1.0] {
-            assert!(BookmarksRepository::add(&pool, "m1", bad, None).await.is_err());
+            assert!(BookmarksRepository::add(&pool, "m1", bad, None)
+                .await
+                .is_err());
         }
         // Unknown meeting: FK violation.
-        assert!(BookmarksRepository::add(&pool, "nope", 1.0, None).await.is_err());
+        assert!(BookmarksRepository::add(&pool, "nope", 1.0, None)
+            .await
+            .is_err());
     }
 
     #[tokio::test]
     async fn deleting_meeting_removes_bookmarks() {
         let pool = test_pool().await;
-        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None).await.unwrap();
-        MeetingsRepository::create_recording_meeting(&pool, "m2", "B", None).await.unwrap();
-        BookmarksRepository::add(&pool, "m1", 1.0, None).await.unwrap();
-        BookmarksRepository::add(&pool, "m2", 1.0, None).await.unwrap();
-        assert!(MeetingsRepository::delete_meeting(&pool, "m1").await.unwrap());
-        assert!(BookmarksRepository::list_by_meeting(&pool, "m1").await.unwrap().is_empty());
-        sqlx::query("DELETE FROM meetings WHERE id = 'm2'").execute(&pool).await.unwrap();
-        assert!(BookmarksRepository::list_by_meeting(&pool, "m2").await.unwrap().is_empty());
+        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None)
+            .await
+            .unwrap();
+        MeetingsRepository::create_recording_meeting(&pool, "m2", "B", None)
+            .await
+            .unwrap();
+        BookmarksRepository::add(&pool, "m1", 1.0, None)
+            .await
+            .unwrap();
+        BookmarksRepository::add(&pool, "m2", 1.0, None)
+            .await
+            .unwrap();
+        assert!(MeetingsRepository::delete_meeting(&pool, "m1")
+            .await
+            .unwrap());
+        assert!(BookmarksRepository::list_by_meeting(&pool, "m1")
+            .await
+            .unwrap()
+            .is_empty());
+        sqlx::query("DELETE FROM meetings WHERE id = 'm2'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(BookmarksRepository::list_by_meeting(&pool, "m2")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
     fn label_sanitising() {
-        assert_eq!(sanitize_label("  hi \t there\u{0007} "), Some("hi there".into()));
+        assert_eq!(
+            sanitize_label("  hi \t there\u{0007} "),
+            Some("hi there".into())
+        );
         assert_eq!(sanitize_label("\n\r "), None);
         let long = "x".repeat(500);
-        assert_eq!(sanitize_label(&long).unwrap().chars().count(), MAX_LABEL_CHARS);
+        assert_eq!(
+            sanitize_label(&long).unwrap().chars().count(),
+            MAX_LABEL_CHARS
+        );
     }
 
     #[test]
@@ -442,7 +509,11 @@ mod tests {
     #[test]
     fn mapping_handles_overlap_unsorted_and_missing_times() {
         // Overlapping mic/system segments: the later-starting one wins.
-        let spans = [(Some(10.0), Some(30.0)), (Some(0.0), Some(5.0)), (Some(15.0), Some(25.0))];
+        let spans = [
+            (Some(10.0), Some(30.0)),
+            (Some(0.0), Some(5.0)),
+            (Some(15.0), Some(25.0)),
+        ];
         assert_eq!(nearest_segment_index(&spans, 20.0), Some(2));
         // Untimed rows are skipped; start-only rows act as points.
         let spans = [(None, None), (Some(8.0), None), (Some(f64::NAN), Some(2.0))];
@@ -450,14 +521,22 @@ mod tests {
         assert_eq!(nearest_segment_index(&spans, 1.0), Some(2));
         assert_eq!(nearest_segment_index(&[(None, None)], 1.0), None);
         assert_eq!(nearest_segment_index(&[], 1.0), None);
-        assert_eq!(nearest_segment_index(&[(Some(1.0), Some(2.0))], f64::NAN), None);
+        assert_eq!(
+            nearest_segment_index(&[(Some(1.0), Some(2.0))], f64::NAN),
+            None
+        );
     }
 
     #[test]
     fn context_lists_bookmarks_with_excerpts() {
         let transcripts = vec![
             seg("a", Some(0.0), Some(5.0), "Hello everyone."),
-            seg("b", Some(60.0), Some(70.0), "We agreed to   ship on Friday."),
+            seg(
+                "b",
+                Some(60.0),
+                Some(70.0),
+                "We agreed to   ship on Friday.",
+            ),
         ];
         let bookmark = |offset: f64, label: Option<&str>| MeetingBookmark {
             id: "x".into(),
@@ -472,18 +551,30 @@ mod tests {
             &transcripts,
         )
         .unwrap();
-        assert!(text.contains("[01:05] \"Ship date\" — near: We agreed to ship on Friday."), "{text}");
+        assert!(
+            text.contains("[01:05] \"Ship date\" — near: We agreed to ship on Friday."),
+            "{text}"
+        );
         assert!(text.contains("[00:02] — near: Hello everyone."), "{text}");
         // No transcript: still lists the moments.
-        assert!(bookmark_context(&[bookmark(3.0, None)], &[]).unwrap().contains("[00:03]"));
+        assert!(bookmark_context(&[bookmark(3.0, None)], &[])
+            .unwrap()
+            .contains("[00:03]"));
     }
 
     #[tokio::test]
     async fn custom_prompt_gets_context_appended() {
         let pool = test_pool().await;
-        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None).await.unwrap();
-        assert_eq!(with_bookmark_context(&pool, "m1", "Be brief".into()).await, "Be brief");
-        BookmarksRepository::add(&pool, "m1", 61.0, Some("Key point")).await.unwrap();
+        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            with_bookmark_context(&pool, "m1", "Be brief".into()).await,
+            "Be brief"
+        );
+        BookmarksRepository::add(&pool, "m1", 61.0, Some("Key point"))
+            .await
+            .unwrap();
         let out = with_bookmark_context(&pool, "m1", "Be brief".into()).await;
         assert!(out.starts_with("Be brief\n\nThe user bookmarked"), "{out}");
         assert!(out.contains("[01:01] \"Key point\""), "{out}");

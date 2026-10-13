@@ -74,12 +74,10 @@ impl SummaryProcessesRepository {
         pool: &SqlitePool,
         meeting_id: &str,
     ) -> Result<Option<SummaryProcess>, sqlx::Error> {
-        sqlx::query_as::<_, SummaryProcess>(
-            "SELECT * FROM summary_processes WHERE meeting_id = ?",
-        )
-        .bind(meeting_id)
-        .fetch_optional(pool)
-        .await
+        sqlx::query_as::<_, SummaryProcess>("SELECT * FROM summary_processes WHERE meeting_id = ?")
+            .bind(meeting_id)
+            .fetch_optional(pool)
+            .await
     }
 
     pub async fn create_or_reset_process(
@@ -265,10 +263,12 @@ mod tests {
         MeetingsRepository::create_recording_meeting(&pool, "m1", "Standup", Some("/tmp/m1"))
             .await
             .unwrap();
-        assert!(SummaryProcessesRepository::get_summary_data_for_meeting(&pool, "m1")
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            SummaryProcessesRepository::get_summary_data_for_meeting(&pool, "m1")
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         SummaryProcessesRepository::create_or_reset_process(&pool, "m1")
             .await
@@ -307,11 +307,15 @@ mod tests {
         )
         .await;
         assert!(done.is_err());
-        assert!(SummaryProcessesRepository::update_process_failed(&pool, "m1", "boom")
-            .await
-            .is_err());
-        assert!(SummaryProcessesRepository::update_process_cancelled(&pool, "m1")
-            .await
-            .is_err());
+        assert!(
+            SummaryProcessesRepository::update_process_failed(&pool, "m1", "boom")
+                .await
+                .is_err()
+        );
+        assert!(
+            SummaryProcessesRepository::update_process_cancelled(&pool, "m1")
+                .await
+                .is_err()
+        );
     }
 }

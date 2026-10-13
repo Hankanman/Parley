@@ -886,11 +886,7 @@ impl AudioPipeline {
 
     /// Send VAD segments to the transcription channel, preserving source identity
     /// on each emitted AudioChunk (chunk.device_type carries the speaker source).
-    fn dispatch_segments(
-        &mut self,
-        segments: Vec<super::vad::SpeechSegment>,
-        context: &str,
-    ) {
+    fn dispatch_segments(&mut self, segments: Vec<super::vad::SpeechSegment>, context: &str) {
         for segment in segments {
             let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
 
@@ -1119,11 +1115,7 @@ mod ring_buffer_tests {
                 // one window behind mic's — window 0 is entirely before it.
                 assert!(sys.iter().all(|&s| s == 0.0), "system window 0");
             } else {
-                assert_eq!(
-                    sys,
-                    pattern(sys_base + (k - 1) * W, W),
-                    "system window {k}"
-                );
+                assert_eq!(sys, pattern(sys_base + (k - 1) * W, W), "system window {k}");
             }
         }
         assert!(b.extract_window().is_none());
