@@ -54,8 +54,7 @@ fn apply_auth(rb: RequestBuilder, api_key: &str) -> RequestBuilder {
 }
 
 fn parse_response(bytes: &[u8]) -> Result<Vec<GroqModel>, String> {
-    let api_response: GroqApiResponse =
-        serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    let api_response: GroqApiResponse = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
 
     Ok(api_response
         .data

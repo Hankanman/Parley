@@ -50,10 +50,7 @@ impl EngineLease {
     /// waiting in `wait_until_free`.
     pub fn acquire_live(&'static self) -> EngineLeaseGuard {
         let previous = self.count.fetch_add(1, Ordering::SeqCst);
-        log::debug!(
-            "EngineLease: acquired (live holders now {})",
-            previous + 1
-        );
+        log::debug!("EngineLease: acquired (live holders now {})", previous + 1);
         EngineLeaseGuard { lease: self }
     }
 
@@ -156,9 +153,7 @@ mod tests {
         let guard = LEASE.acquire_live();
         assert!(LEASE.is_live_leased());
 
-        let wait_task = tokio::spawn(async {
-            LEASE.wait_until_free(Duration::from_secs(5)).await
-        });
+        let wait_task = tokio::spawn(async { LEASE.wait_until_free(Duration::from_secs(5)).await });
 
         // Give the waiter a moment to start waiting, then release.
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -178,6 +173,9 @@ mod tests {
 
         let _guard = LEASE.acquire_live();
         let freed = LEASE.wait_until_free(Duration::from_millis(50)).await;
-        assert!(!freed, "wait_until_free should time out while the lease is held");
+        assert!(
+            !freed,
+            "wait_until_free should time out while the lease is held"
+        );
     }
 }

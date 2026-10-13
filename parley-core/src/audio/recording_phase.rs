@@ -268,7 +268,9 @@ mod tests {
 
     #[test]
     fn any_phase_can_go_fatal() {
-        for phase in [Idle, Starting, Recording, Paused, Stopping, Finalising, Error] {
+        for phase in [
+            Idle, Starting, Recording, Paused, Stopping, Finalising, Error,
+        ] {
             assert_eq!(next_phase(phase, Error), Ok(Error));
         }
     }

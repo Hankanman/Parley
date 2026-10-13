@@ -57,7 +57,10 @@ fn device_id_is_valid(id: &str, kind: PwDeviceKind, available: &[PwDevice]) -> b
 /// Enumeration failures are not treated as validation failures — we don't
 /// want a flaky/slow registry roundtrip to block recording start; if the
 /// device id really is bad, `PwCaptureStream::open` will surface that.
-async fn validate_or_fallback(device: Arc<AudioDevice>, device_type: DeviceType) -> Arc<AudioDevice> {
+async fn validate_or_fallback(
+    device: Arc<AudioDevice>,
+    device_type: DeviceType,
+) -> Arc<AudioDevice> {
     if device.name == "default" {
         return device;
     }
@@ -333,8 +336,15 @@ impl AudioStreamManager {
     }
 
     pub fn active_stream_count(&self) -> usize {
-        self.microphone_stream.as_ref().map(AudioStream::is_active).unwrap_or(false) as usize
-            + self.system_stream.as_ref().map(AudioStream::is_active).unwrap_or(false) as usize
+        self.microphone_stream
+            .as_ref()
+            .map(AudioStream::is_active)
+            .unwrap_or(false) as usize
+            + self
+                .system_stream
+                .as_ref()
+                .map(AudioStream::is_active)
+                .unwrap_or(false) as usize
     }
 
     pub fn has_active_streams(&self) -> bool {

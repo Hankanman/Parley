@@ -115,7 +115,10 @@ impl ChannelAudio {
             let b = ((end_ms / 1000.0 * 16_000.0).max(0.0) as usize).min(track.len());
             a..b.max(a)
         };
-        let (mic, system) = (&self.mic[range(&self.mic)], &self.system[range(&self.system)]);
+        let (mic, system) = (
+            &self.mic[range(&self.mic)],
+            &self.system[range(&self.system)],
+        );
         let energy = |x: &[f32]| x.iter().map(|s| (*s as f64) * (*s as f64)).sum::<f64>();
         let source = SegmentSource::from_channel_energy(energy(mic), energy(system));
         let samples = match source {
@@ -591,7 +594,11 @@ pub(crate) fn log_vad_diagnostics(speech_segments: &[crate::audio::vad::SpeechSe
         let dur = seg.end_timestamp_ms - seg.start_timestamp_ms;
         debug!(
             "  Segment {}: {:.0}ms-{:.0}ms ({:.0}ms, {} samples)",
-            i, seg.start_timestamp_ms, seg.end_timestamp_ms, dur, seg.samples.len()
+            i,
+            seg.start_timestamp_ms,
+            seg.end_timestamp_ms,
+            dur,
+            seg.samples.len()
         );
     }
     if speech_segments.len() > 10 {
@@ -664,7 +671,10 @@ pub(crate) async fn run_batch_transcription(
     }
 
     let processable_count = processable_segments.len();
-    info!("Processing {} segments (after splitting)", processable_count);
+    info!(
+        "Processing {} segments (after splitting)",
+        processable_count
+    );
 
     // Pre-resolve each processable segment's offline-diarization hint (by
     // its position in `processable_segments`, the same `i` the main loop
@@ -680,10 +690,8 @@ pub(crate) async fn run_batch_transcription(
             .filter_map(|(i, seg)| {
                 let start_s = seg.start_timestamp_ms as f32 / 1000.0;
                 let end_s = seg.end_timestamp_ms as f32 / 1000.0;
-                crate::speaker_diarization::offline::speaker_index_for_range(
-                    turns, start_s, end_s,
-                )
-                .map(|idx| (i as u64, idx))
+                crate::speaker_diarization::offline::speaker_index_for_range(turns, start_s, end_s)
+                    .map(|idx| (i as u64, idx))
             })
             .collect(),
         None => HashMap::new(),
@@ -1148,7 +1156,10 @@ mod channel_tests {
         assert!(samples.is_none(), "crosstalk embeds the mixdown");
 
         // Out-of-range segments degrade to Unknown rather than panicking.
-        assert_eq!(channels.for_segment(9000.0, 9500.0).0, SegmentSource::Unknown);
+        assert_eq!(
+            channels.for_segment(9000.0, 9500.0).0,
+            SegmentSource::Unknown
+        );
     }
 
     #[test]
@@ -1191,7 +1202,10 @@ mod channel_tests {
             r#"{"origin":"import","audio_file":"audio.mp4"}"#,
         )
         .unwrap();
-        assert!(!has_split_capture_channels(dir.path()), "imports have no devices");
+        assert!(
+            !has_split_capture_channels(dir.path()),
+            "imports have no devices"
+        );
         std::fs::write(
             dir.path().join("metadata.json"),
             r#"{"origin":"retranscription","devices":{"microphone":"default","system_audio":"default"}}"#,

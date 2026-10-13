@@ -198,30 +198,28 @@ async fn fetch_model_info(
     // Each source returns None when it genuinely has no answer, so a model
     // whose real context happens to equal a fallback value is never
     // mistaken for "not found".
-    let context_size = extract_context_from_model_info(
-        &show_response.model_info,
-        &show_response.details.family,
-    )
-    .or_else(|| parse_num_ctx_from_modelfile(&show_response.modelfile))
-    .or_else(|| {
-        let family = if !show_response.details.family.is_empty() {
-            &show_response.details.family
-        } else {
-            model_name
-        };
-        DEFAULT_CONTEXT_SIZES
-            .iter()
-            .find(|(fam, _)| family.to_lowercase().contains(fam))
-            .map(|(_, size)| {
-                tracing::info!(
-                    "No num_ctx in modelfile for {}, using family-based default: {} tokens",
-                    model_name,
-                    size
-                );
-                *size
+    let context_size =
+        extract_context_from_model_info(&show_response.model_info, &show_response.details.family)
+            .or_else(|| parse_num_ctx_from_modelfile(&show_response.modelfile))
+            .or_else(|| {
+                let family = if !show_response.details.family.is_empty() {
+                    &show_response.details.family
+                } else {
+                    model_name
+                };
+                DEFAULT_CONTEXT_SIZES
+                    .iter()
+                    .find(|(fam, _)| family.to_lowercase().contains(fam))
+                    .map(|(_, size)| {
+                        tracing::info!(
+                            "No num_ctx in modelfile for {}, using family-based default: {} tokens",
+                            model_name,
+                            size
+                        );
+                        *size
+                    })
             })
-    })
-    .unwrap_or(ULTIMATE_FALLBACK);
+            .unwrap_or(ULTIMATE_FALLBACK);
 
     Ok(ModelMetadata {
         name: model_name.to_string(),

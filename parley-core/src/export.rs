@@ -265,9 +265,7 @@ fn render(data: &ExportedMeeting, format: ExportFormat) -> Result<Vec<u8>, Strin
         ExportFormat::Vtt => {
             subtitles::render_vtt(&subtitles::build_cues(&data.transcript)?).into_bytes()
         }
-        ExportFormat::Docx => {
-            docx::render_docx(&document::build_document(data), &data.created_at)?
-        }
+        ExportFormat::Docx => docx::render_docx(&document::build_document(data), &data.created_at)?,
         ExportFormat::Pdf => pdf::render_pdf(&document::build_document(data), &data.title)?,
     })
 }
@@ -324,10 +322,14 @@ async fn collect(pool: &SqlitePool, meeting_id: &str) -> Result<ExportedMeeting,
         .map_err(|e| format!("Failed to load meeting: {e}"))?
         .ok_or_else(|| format!("Meeting not found: {meeting_id}"))?;
 
-    let (segments, _total) =
-        MeetingsRepository::get_meeting_transcripts_paginated(pool, meeting_id, MAX_TRANSCRIPT_SEGMENTS, 0)
-            .await
-            .map_err(|e| format!("Failed to load transcripts: {e}"))?;
+    let (segments, _total) = MeetingsRepository::get_meeting_transcripts_paginated(
+        pool,
+        meeting_id,
+        MAX_TRANSCRIPT_SEGMENTS,
+        0,
+    )
+    .await
+    .map_err(|e| format!("Failed to load transcripts: {e}"))?;
 
     let action_items = ActionItemsRepository::list_by_meeting(pool, meeting_id)
         .await
@@ -337,14 +339,15 @@ async fn collect(pool: &SqlitePool, meeting_id: &str) -> Result<ExportedMeeting,
         .await
         .map_err(|e| format!("Failed to load notes: {e}"))?;
 
-    let summary_markdown = SummaryProcessesRepository::get_summary_data_for_meeting(pool, meeting_id)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|p| p.result)
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| extract_markdown(&v))
-        .filter(|m| !m.trim().is_empty());
+    let summary_markdown =
+        SummaryProcessesRepository::get_summary_data_for_meeting(pool, meeting_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|p| p.result)
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| extract_markdown(&v))
+            .filter(|m| !m.trim().is_empty());
 
     let calendar_event = CalendarRepository::get_event_for_meeting(pool, meeting_id)
         .await
@@ -373,7 +376,12 @@ async fn collect(pool: &SqlitePool, meeting_id: &str) -> Result<ExportedMeeting,
     // First-appearance order, not alphabetical: it reads as "who showed up".
     let mut speakers: Vec<String> = Vec::new();
     for s in &segments {
-        if let Some(name) = s.speaker.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        if let Some(name) = s
+            .speaker
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
             if !speakers.iter().any(|existing| existing.as_str() == name) {
                 speakers.push(name.to_string());
             }
@@ -465,12 +473,18 @@ fn render_markdown_body(m: &ExportedMeeting) -> String {
         if let Some(s) = &event.summary {
             out.push_str(&format!("- **Event:** {s}\n"));
         }
-        out.push_str(&format!("- **When:** {} → {}\n", event.start_at, event.end_at));
+        out.push_str(&format!(
+            "- **When:** {} → {}\n",
+            event.start_at, event.end_at
+        ));
         if let Some(l) = &event.location {
             out.push_str(&format!("- **Location:** {l}\n"));
         }
         if let Some(o) = &event.organizer_name {
-            out.push_str(&format!("- **Organizer:** {}\n", with_email(o, &event.organizer_email)));
+            out.push_str(&format!(
+                "- **Organizer:** {}\n",
+                with_email(o, &event.organizer_email)
+            ));
         }
         if !event.attendees.is_empty() {
             out.push_str("\n### Invited\n\n");
@@ -699,11 +713,19 @@ mod tests {
         assert!(ExportFormat::Srt.is_text());
         assert!(!ExportFormat::Pdf.is_text());
         assert_eq!(
-            export_filename("Weekly Sync", "2026-07-15T10:00:00+00:00", ExportFormat::Vtt),
+            export_filename(
+                "Weekly Sync",
+                "2026-07-15T10:00:00+00:00",
+                ExportFormat::Vtt
+            ),
             "weekly-sync-2026-07-15.vtt"
         );
         assert_eq!(
-            export_filename("Weekly Sync", "2026-07-15T10:00:00+00:00", ExportFormat::Markdown),
+            export_filename(
+                "Weekly Sync",
+                "2026-07-15T10:00:00+00:00",
+                ExportFormat::Markdown
+            ),
             "weekly-sync-2026-07-15.md"
         );
     }
@@ -780,7 +802,10 @@ mod tests {
         assert_eq!(headings, ["Summary", "Action Items", "Transcript"]);
         assert!(blocks.iter().any(|b| matches!(
             b,
-            document::Block::ListItem { marker: document::ListMarker::Task(true), .. }
+            document::Block::ListItem {
+                marker: document::ListMarker::Task(true),
+                ..
+            }
         )));
     }
 }

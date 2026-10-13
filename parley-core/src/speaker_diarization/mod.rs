@@ -49,10 +49,10 @@ pub(crate) mod clusterer;
 mod embedder;
 pub(crate) mod embedding_math;
 pub mod enrollment;
-pub mod model;
-pub mod offline;
 #[cfg(test)]
 mod measure;
+pub mod model;
+pub mod offline;
 mod profile_matcher;
 mod refinement;
 
@@ -270,7 +270,13 @@ impl Diarizer {
         samples_16k: &[f32],
         precomputed: Option<Vec<f32>>,
     ) -> Result<DiarizationResult> {
-        self.process_inner(sequence_id, samples_16k, precomputed, None, Segment::default())
+        self.process_inner(
+            sequence_id,
+            samples_16k,
+            precomputed,
+            None,
+            Segment::default(),
+        )
     }
 
     /// [`process`] for a caller that knows which capture channel the segment
@@ -331,7 +337,13 @@ impl Diarizer {
             source,
             duration_secs: None,
         };
-        self.process_inner(sequence_id, samples_16k, precomputed, forced_cluster, segment)
+        self.process_inner(
+            sequence_id,
+            samples_16k,
+            precomputed,
+            forced_cluster,
+            segment,
+        )
     }
 
     fn process_inner(
@@ -449,10 +461,7 @@ impl Diarizer {
 
     /// Snapshot of all embeddings produced this session.
     pub fn export_history(&self) -> Vec<EmbeddingRecord> {
-        self.history
-            .lock()
-            .map(|h| h.clone())
-            .unwrap_or_default()
+        self.history.lock().map(|h| h.clone()).unwrap_or_default()
     }
 
     /// Embeddings of every history record whose *current* label is `label`.

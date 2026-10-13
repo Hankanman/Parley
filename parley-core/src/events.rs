@@ -88,7 +88,10 @@ impl RecordingSink {
 
 impl EventSink for RecordingSink {
     fn emit_value(&self, event: &str, payload: serde_json::Value) -> Result<(), String> {
-        self.events.lock().unwrap().push((event.to_string(), payload));
+        self.events
+            .lock()
+            .unwrap()
+            .push((event.to_string(), payload));
         Ok(())
     }
 }

@@ -75,7 +75,10 @@ impl Debouncer {
     }
 
     fn live_streams(&self, app_id: &str) -> usize {
-        self.streams.values().filter(|id| id.as_str() == app_id).count()
+        self.streams
+            .values()
+            .filter(|id| id.as_str() == app_id)
+            .count()
     }
 
     /// A stream node `node_id` is (still) present and attributed to `app`.
@@ -153,11 +156,15 @@ impl Debouncer {
         for id in ids {
             let state = self.apps.get_mut(&id).expect("id from keys");
             match state.phase {
-                Phase::Pending { since } if now.saturating_duration_since(since) >= self.confirm_after => {
+                Phase::Pending { since }
+                    if now.saturating_duration_since(since) >= self.confirm_after =>
+                {
                     state.phase = Phase::Active;
                     events.push(DetectorEvent::Detected(state.app.clone()));
                 }
-                Phase::Ending { since } if now.saturating_duration_since(since) >= self.end_grace => {
+                Phase::Ending { since }
+                    if now.saturating_duration_since(since) >= self.end_grace =>
+                {
                     events.push(DetectorEvent::Ended(state.app.clone()));
                     ended.push(id.clone());
                 }
@@ -220,7 +227,9 @@ mod tests {
         while t <= until_ms {
             for step in steps {
                 match *step {
-                    Step::Add(at, node, id) if at == t => d.stream_present(node, app(id), t0 + ms(t)),
+                    Step::Add(at, node, id) if at == t => {
+                        d.stream_present(node, app(id), t0 + ms(t))
+                    }
                     Step::Gone(at, node) if at == t => d.stream_gone(node, t0 + ms(t)),
                     Step::Reset(at) if at == t => d.reset_streams(t0 + ms(t)),
                     _ => {}

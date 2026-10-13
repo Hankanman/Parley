@@ -260,7 +260,10 @@ mod tests {
             near_after - gap_after
         );
 
-        assert!(gap_before - gap_after > 6.0, "noise floor not reduced enough");
+        assert!(
+            gap_before - gap_after > 6.0,
+            "noise floor not reduced enough"
+        );
         assert!(erle > 10.0, "echo not reduced enough");
         assert!(
             near_after - gap_after > near_before - gap_before,

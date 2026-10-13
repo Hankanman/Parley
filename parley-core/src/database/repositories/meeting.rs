@@ -307,13 +307,12 @@ impl MeetingsRepository {
         meeting_id: &str,
     ) -> Result<bool, SqlxError> {
         let now = Utc::now();
-        let result = sqlx::query(
-            "UPDATE meetings SET status = 'interrupted', updated_at = ? WHERE id = ?",
-        )
-        .bind(now)
-        .bind(meeting_id)
-        .execute(pool)
-        .await?;
+        let result =
+            sqlx::query("UPDATE meetings SET status = 'interrupted', updated_at = ? WHERE id = ?")
+                .bind(now)
+                .bind(meeting_id)
+                .execute(pool)
+                .await?;
         Ok(result.rows_affected() > 0)
     }
 
@@ -420,7 +419,10 @@ async fn delete_meeting_with_transaction(
         .execute(&mut *transaction)
         .await?;
     sqlx::query("DELETE FROM meeting_briefs WHERE instr(sources_json, ?) > 0")
-        .bind(format!("\"meeting_id\":{}", serde_json::Value::from(meeting_id)))
+        .bind(format!(
+            "\"meeting_id\":{}",
+            serde_json::Value::from(meeting_id)
+        ))
         .execute(&mut *transaction)
         .await?;
 
@@ -480,10 +482,14 @@ mod lifecycle_tests {
             .unwrap();
         assert_eq!(status_of(&pool, "m1").await, "recording");
 
-        let updated =
-            MeetingsRepository::mark_meeting_completed(&pool, "m1", Some(123.5), Some("/tmp/m1/audio.mp4"))
-                .await
-                .unwrap();
+        let updated = MeetingsRepository::mark_meeting_completed(
+            &pool,
+            "m1",
+            Some(123.5),
+            Some("/tmp/m1/audio.mp4"),
+        )
+        .await
+        .unwrap();
         assert!(updated);
         assert_eq!(status_of(&pool, "m1").await, "completed");
 
@@ -508,15 +514,21 @@ mod lifecycle_tests {
             .await
             .unwrap();
 
-        assert!(MeetingsRepository::update_placeholder_title(&pool, "p", "Cloud Strategy")
-            .await
-            .unwrap());
-        assert!(!MeetingsRepository::update_placeholder_title(&pool, "n", "Something Else")
-            .await
-            .unwrap());
-        assert!(!MeetingsRepository::update_placeholder_title(&pool, "missing", "X")
-            .await
-            .unwrap());
+        assert!(
+            MeetingsRepository::update_placeholder_title(&pool, "p", "Cloud Strategy")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !MeetingsRepository::update_placeholder_title(&pool, "n", "Something Else")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !MeetingsRepository::update_placeholder_title(&pool, "missing", "X")
+                .await
+                .unwrap()
+        );
 
         let title = |id: &'static str| {
             let pool = pool.clone();

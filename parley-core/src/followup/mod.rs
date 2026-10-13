@@ -39,7 +39,9 @@ impl SelfIdentity {
         Ok(row
             .map(|(name, email)| Self {
                 name: Some(name.trim().to_string()).filter(|n| !n.is_empty()),
-                email: email.map(|e| e.trim().to_lowercase()).filter(|e| !e.is_empty()),
+                email: email
+                    .map(|e| e.trim().to_lowercase())
+                    .filter(|e| !e.is_empty()),
             })
             .unwrap_or_default())
     }
@@ -71,7 +73,11 @@ pub fn is_person(attendee: &Attendee) -> bool {
     {
         return false;
     }
-    let Some(email) = attendee.email.as_deref().map(|e| e.trim().to_ascii_lowercase()) else {
+    let Some(email) = attendee
+        .email
+        .as_deref()
+        .map(|e| e.trim().to_ascii_lowercase())
+    else {
         return true;
     };
     let local = email.split('@').next().unwrap_or_default();
@@ -88,7 +94,13 @@ pub fn attendee_label(attendee: &Attendee) -> Option<String> {
         .as_deref()
         .map(str::trim)
         .filter(|n| !n.is_empty())
-        .or_else(|| attendee.email.as_deref().map(str::trim).filter(|e| !e.is_empty()))
+        .or_else(|| {
+            attendee
+                .email
+                .as_deref()
+                .map(str::trim)
+                .filter(|e| !e.is_empty())
+        })
         .map(|s| one_line(s, 80))
 }
 
@@ -157,11 +169,17 @@ pub fn parse_summary_result(result: &str) -> StoredSummary {
         .filter(|s| s.is_object())
         .and_then(|s| serde_json::from_value::<StoredStructured>(s.clone()).ok())
         .filter(|s| !s.is_empty());
-    StoredSummary { structured, markdown }
+    StoredSummary {
+        structured,
+        markdown,
+    }
 }
 
 /// Load a meeting's stored summary (empty when it has none).
-pub async fn load_summary(pool: &SqlitePool, meeting_id: &str) -> Result<StoredSummary, sqlx::Error> {
+pub async fn load_summary(
+    pool: &SqlitePool,
+    meeting_id: &str,
+) -> Result<StoredSummary, sqlx::Error> {
     let row: Option<(Option<String>,)> =
         sqlx::query_as("SELECT result FROM summary_processes WHERE meeting_id = ?")
             .bind(meeting_id)
@@ -186,7 +204,10 @@ pub fn one_line(text: &str, max_chars: usize) -> String {
     if collapsed.chars().count() <= max_chars {
         collapsed
     } else {
-        let mut out: String = collapsed.chars().take(max_chars.saturating_sub(1)).collect();
+        let mut out: String = collapsed
+            .chars()
+            .take(max_chars.saturating_sub(1))
+            .collect();
         out.push('…');
         out
     }
@@ -205,7 +226,9 @@ pub fn fingerprint(text: &str) -> String {
 
 /// The summary provider/model's [`LlmConfig`](crate::summary::llm_client::LlmConfig),
 /// or a user-facing error when none is configured.
-pub(crate) async fn resolve_llm(pool: &SqlitePool) -> Result<crate::summary::llm_client::LlmConfig, String> {
+pub(crate) async fn resolve_llm(
+    pool: &SqlitePool,
+) -> Result<crate::summary::llm_client::LlmConfig, String> {
     use crate::database::repositories::setting::SettingsRepository;
     let model = SettingsRepository::get_model_config(pool)
         .await
@@ -261,7 +284,10 @@ mod tests {
         assert!(!is_person(&a("room1@resource.calendar.google.com", None)));
         assert!(!is_person(&a("noreply@example.com", None)));
         assert!(!is_person(&a("ann@example.com", Some("non-participant"))));
-        assert!(is_person(&Attendee { name: Some("Ann".into()), ..Default::default() }));
+        assert!(is_person(&Attendee {
+            name: Some("Ann".into()),
+            ..Default::default()
+        }));
     }
 
     #[test]

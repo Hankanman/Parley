@@ -538,7 +538,9 @@ impl WhisperEngine {
         };
 
         let mut pool = self.state_pool.write().await;
-        Ok(pool_get_or_insert(&mut pool, purpose, || ctx.create_state())?)
+        Ok(pool_get_or_insert(&mut pool, purpose, || {
+            ctx.create_state()
+        })?)
     }
 
     // Enhanced function to clean repetitive text patterns and meaningless outputs

@@ -94,7 +94,10 @@ fn sanitize_term(term: &str) -> String {
 /// without ever displacing a higher-priority term.
 ///
 /// Returns `None` when no term fits (or none were given).
-pub fn build_glossary_prompt<S: AsRef<str>>(terms: &[S], token_budget: usize) -> Option<BuiltPrompt> {
+pub fn build_glossary_prompt<S: AsRef<str>>(
+    terms: &[S],
+    token_budget: usize,
+) -> Option<BuiltPrompt> {
     let mut seen = std::collections::HashSet::new();
     let mut included: Vec<String> = Vec::new();
     let mut dropped: Vec<String> = Vec::new();
@@ -250,9 +253,11 @@ mod tests {
 
     #[test]
     fn builds_natural_sentence() {
-        let built =
-            build_glossary_prompt(&["Kingfisher", "SamPro", "TMU", "ECA"], GLOSSARY_TOKEN_BUDGET)
-                .unwrap();
+        let built = build_glossary_prompt(
+            &["Kingfisher", "SamPro", "TMU", "ECA"],
+            GLOSSARY_TOKEN_BUDGET,
+        )
+        .unwrap();
         assert_eq!(built.text, "Glossary: Kingfisher, SamPro, TMU, ECA.");
         assert_eq!(built.included.len(), 4);
         assert!(built.dropped.is_empty());
@@ -304,7 +309,10 @@ mod tests {
     #[test]
     fn tail_budget_shrinks_with_glossary() {
         let g = "Glossary: Kingfisher, SamPro, TMU, ECA.";
-        assert_eq!(tail_token_budget(g), TOTAL_PROMPT_TOKEN_BUDGET - estimate_tokens(g));
+        assert_eq!(
+            tail_token_budget(g),
+            TOTAL_PROMPT_TOKEN_BUDGET - estimate_tokens(g)
+        );
         assert_eq!(trim_tail_tokens("aaa bbb ccc", 2), "bbb ccc");
         assert_eq!(trim_tail_tokens("aaa bbb ccc", 0), "");
         assert_eq!(trim_tail_tokens("  aaa  ", 5), "aaa");
@@ -314,7 +322,10 @@ mod tests {
     #[test]
     fn compose_without_glossary_keeps_legacy_char_cap() {
         assert_eq!(compose(None, ""), None);
-        assert_eq!(compose(None, "  hello there "), Some("hello there".to_string()));
+        assert_eq!(
+            compose(None, "  hello there "),
+            Some("hello there".to_string())
+        );
         let tail = "word ".repeat(300);
         let prompt = compose(None, &tail).unwrap();
         assert!(prompt.len() <= DEFAULT_TAIL_CHARS);
@@ -323,7 +334,10 @@ mod tests {
 
     #[test]
     fn compose_puts_glossary_first_and_bounds_total() {
-        assert_eq!(compose(Some("Glossary: TMU."), ""), Some("Glossary: TMU.".to_string()));
+        assert_eq!(
+            compose(Some("Glossary: TMU."), ""),
+            Some("Glossary: TMU.".to_string())
+        );
 
         let g = build_glossary_prompt(
             &(0..200).map(|i| format!("Term{}", i)).collect::<Vec<_>>(),
@@ -370,7 +384,15 @@ mod tests {
                 let _ = compose(Some(&b.text), &format!("{long} {emoji} İİİ tail"));
             }
         }
-        for tail in ["", " ", "ß", "🚀🚀 🚀", long.as_str(), emoji.as_str(), "İ İ İ"] {
+        for tail in [
+            "",
+            " ",
+            "ß",
+            "🚀🚀 🚀",
+            long.as_str(),
+            emoji.as_str(),
+            "İ İ İ",
+        ] {
             let _ = compose(None, tail);
             let _ = compose(Some("Glossary: X."), tail);
             for n in [0, 1, 2, 3, 7, 600] {

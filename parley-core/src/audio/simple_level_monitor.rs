@@ -231,7 +231,8 @@ pub async fn start_monitoring(
     }
 
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(EMIT_INTERVAL_MS));
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_millis(EMIT_INTERVAL_MS));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         while is_generation_current(generation, GENERATION.load(Ordering::SeqCst)) {
             interval.tick().await;
@@ -262,7 +263,10 @@ pub async fn start_monitoring(
                 break;
             }
         }
-        debug!("level monitor: emit task exiting (generation {})", generation);
+        debug!(
+            "level monitor: emit task exiting (generation {})",
+            generation
+        );
     });
 
     Ok(())
@@ -287,10 +291,7 @@ fn stop_current_session() {
 }
 
 pub fn is_monitoring() -> bool {
-    session_slot()
-        .lock()
-        .map(|g| g.is_some())
-        .unwrap_or(false)
+    session_slot().lock().map(|g| g.is_some()).unwrap_or(false)
 }
 
 #[cfg(test)]

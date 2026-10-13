@@ -174,7 +174,9 @@ pub async fn migrate_legacy_recordings_folder_in(
 
     let legacy_meta = std::fs::symlink_metadata(&legacy).ok();
     let legacy_is_real_dir = legacy_meta.as_ref().is_some_and(|m| m.is_dir());
-    let legacy_is_symlink = legacy_meta.as_ref().is_some_and(|m| m.file_type().is_symlink());
+    let legacy_is_symlink = legacy_meta
+        .as_ref()
+        .is_some_and(|m| m.file_type().is_symlink());
 
     let moved = if legacy_is_real_dir {
         if current.exists() {
@@ -286,7 +288,9 @@ pub fn generate_recording_filename(format: &str) -> String {
 /// with its default serializer) so this module no longer depends on the
 /// plugin at all. The file is left in place afterward.
 fn import_legacy_recording_preferences() -> Option<RecordingPreferences> {
-    let path = crate::paths::app_data_dir().ok()?.join("recording_preferences.json");
+    let path = crate::paths::app_data_dir()
+        .ok()?
+        .join("recording_preferences.json");
     let content = std::fs::read_to_string(&path).ok()?;
     let root: serde_json::Value = serde_json::from_str(&content).ok()?;
     let value = root.get("preferences")?;
@@ -471,8 +475,14 @@ mod legacy_recordings_folder_tests {
             .unwrap();
         assert_eq!(moved, Some((legacy.clone(), current.clone())));
 
-        assert_eq!(std::fs::read(current.join("Standup/audio.mp4")).unwrap(), b"audio");
-        assert!(std::fs::symlink_metadata(&legacy).unwrap().file_type().is_symlink());
+        assert_eq!(
+            std::fs::read(current.join("Standup/audio.mp4")).unwrap(),
+            b"audio"
+        );
+        assert!(std::fs::symlink_metadata(&legacy)
+            .unwrap()
+            .file_type()
+            .is_symlink());
         assert_eq!(
             paths_of(&pool, "moved").await,
             (
@@ -480,7 +490,10 @@ mod legacy_recordings_folder_tests {
                 Some(format!("{docs_s}/parley-recordings/Standup/audio.mp4"))
             )
         );
-        assert_eq!(paths_of(&pool, "sibling").await.0, format!("{legacy_s}-old/x"));
+        assert_eq!(
+            paths_of(&pool, "sibling").await.0,
+            format!("{legacy_s}-old/x")
+        );
         assert_eq!(paths_of(&pool, "elsewhere").await.0, "/mnt/archive/y");
 
         let stored: serde_json::Value =
@@ -493,7 +506,9 @@ mod legacy_recordings_folder_tests {
 
         // Second launch: nothing left to do, nothing changes.
         assert_eq!(
-            migrate_legacy_recordings_folder_in(&pool, docs.path()).await.unwrap(),
+            migrate_legacy_recordings_folder_in(&pool, docs.path())
+                .await
+                .unwrap(),
             None
         );
         assert_eq!(
@@ -513,10 +528,18 @@ mod legacy_recordings_folder_tests {
         insert_meeting(&pool, "m", &folder, None).await;
 
         assert_eq!(
-            migrate_legacy_recordings_folder_in(&pool, docs.path()).await.unwrap(),
+            migrate_legacy_recordings_folder_in(&pool, docs.path())
+                .await
+                .unwrap(),
             None
         );
-        assert!(legacy.is_dir() && !std::fs::symlink_metadata(&legacy).unwrap().file_type().is_symlink());
+        assert!(
+            legacy.is_dir()
+                && !std::fs::symlink_metadata(&legacy)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+        );
         assert_eq!(paths_of(&pool, "m").await.0, folder);
     }
 
@@ -525,7 +548,9 @@ mod legacy_recordings_folder_tests {
         let pool = test_pool().await;
         let docs = tempfile::tempdir().unwrap();
         assert_eq!(
-            migrate_legacy_recordings_folder_in(&pool, docs.path()).await.unwrap(),
+            migrate_legacy_recordings_folder_in(&pool, docs.path())
+                .await
+                .unwrap(),
             None
         );
         assert!(!docs.path().join("parley-recordings").exists());
@@ -596,7 +621,11 @@ mod unload_after_stop_tests {
         let back: RecordingPreferences = serde_json::from_value(value).unwrap();
         assert_eq!(back.meeting_autodetect, MeetingAutoDetect::AutoRecord);
 
-        for mode in [MeetingAutoDetect::Off, MeetingAutoDetect::Notify, MeetingAutoDetect::AutoRecord] {
+        for mode in [
+            MeetingAutoDetect::Off,
+            MeetingAutoDetect::Notify,
+            MeetingAutoDetect::AutoRecord,
+        ] {
             assert_eq!(MeetingAutoDetect::parse(mode.as_str()), Some(mode));
         }
     }

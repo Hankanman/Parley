@@ -792,9 +792,10 @@ async fn create_meeting_with_transcripts(
     segments: &[TranscriptSegment],
     folder_path: String,
 ) -> Result<String> {
-    let meeting_id = TranscriptsRepository::save_transcript(pool, title, segments, Some(folder_path))
-        .await
-        .map_err(|e| anyhow!("Failed to create meeting: {}", e))?;
+    let meeting_id =
+        TranscriptsRepository::save_transcript(pool, title, segments, Some(folder_path))
+            .await
+            .map_err(|e| anyhow!("Failed to create meeting: {}", e))?;
 
     info!(
         "Created meeting '{}' with {} transcripts",

@@ -31,7 +31,6 @@ pub struct CustomOpenAIConfig {
 pub mod action_extraction;
 pub mod auto_summary;
 pub mod live_action_items;
-pub mod transcript_action_items;
 pub mod llm_client;
 pub mod markdown_export;
 pub mod processor;
@@ -39,6 +38,7 @@ pub mod service;
 pub mod structured;
 pub mod summary_engine;
 pub mod templates;
+pub mod transcript_action_items;
 
 // Re-export commonly used items
 pub use llm_client::LLMProvider;

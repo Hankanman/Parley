@@ -6,13 +6,13 @@ use crate::database::repositories::transcript::TranscriptsRepository;
 use crate::database::repositories::voice_profile::{bytes_to_floats, VoiceProfilesRepository};
 use crate::events::{EventSinkExt, SharedEventSink};
 use crate::speaker_diarization::embedding_math::{average_and_normalize, merge_centroids};
+use crate::speaker_diarization::model::{
+    pyannote_segmentation_download_url, pyannote_segmentation_path,
+};
 use crate::speaker_diarization::{
     current_diarizer, default_model_path, model::model_is_ready, model_download_url,
     set_current_diarizer, Diarizer, SpeakerEmbedder, SpeakerProfileMatcher,
     DEFAULT_CLUSTER_THRESHOLD, PROFILE_MATCH_THRESHOLD,
-};
-use crate::speaker_diarization::model::{
-    pyannote_segmentation_download_url, pyannote_segmentation_path,
 };
 use anyhow::{anyhow, Result};
 use futures_util::StreamExt;
@@ -40,7 +40,11 @@ pub async fn download_speaker_model(sink: SharedEventSink) -> Result<(), String>
     }
 
     let url = model_download_url();
-    log::info!("Downloading speaker model from {} -> {}", url, path.display());
+    log::info!(
+        "Downloading speaker model from {} -> {}",
+        url,
+        path.display()
+    );
 
     if let Err(e) = stream_download(&sink, &url, &path).await {
         let _ = std::fs::remove_file(&path); // partial-file cleanup
@@ -158,9 +162,9 @@ async fn build_profile_matcher(
     }
 
     let self_profile_id = profiles.iter().find(|p| p.is_self).map(|p| p.id.clone());
-    let entries = profiles.into_iter().filter_map(|p| {
-        bytes_to_floats(&p.embedding).map(|emb| (p.id, p.name, emb))
-    });
+    let entries = profiles
+        .into_iter()
+        .filter_map(|p| bytes_to_floats(&p.embedding).map(|emb| (p.id, p.name, emb)));
 
     let matcher = SpeakerProfileMatcher::new(dim, entries, PROFILE_MATCH_THRESHOLD)?
         .with_self_profile(self_profile_id);
@@ -171,11 +175,7 @@ async fn build_profile_matcher(
     }
 }
 
-async fn stream_download(
-    sink: &SharedEventSink,
-    url: &str,
-    dest: &std::path::Path,
-) -> Result<()> {
+async fn stream_download(sink: &SharedEventSink, url: &str, dest: &std::path::Path) -> Result<()> {
     let response = reqwest::get(url)
         .await
         .map_err(|e| anyhow!("HTTP error: {}", e))?;
@@ -230,7 +230,11 @@ pub async fn expected_speaker_count(pool: &SqlitePool, meeting_id: &str) -> Opti
         Ok(Some(event)) => head_count(&event),
         Ok(None) => None,
         Err(e) => {
-            log::warn!("Failed to load calendar event for meeting {}: {}", meeting_id, e);
+            log::warn!(
+                "Failed to load calendar event for meeting {}: {}",
+                meeting_id,
+                e
+            );
             None
         }
     }
@@ -253,8 +257,11 @@ fn head_count(event: &crate::calendar::models::CalendarEvent) -> Option<usize> {
     };
     // Shared calendars publish events with the calendar itself as organizer
     // (`…@group.calendar.google.com`); that's not a person in the room.
-    let organizer = key(event.organizer_name.as_deref(), event.organizer_email.as_deref())
-        .filter(|k| !k.ends_with("calendar.google.com"));
+    let organizer = key(
+        event.organizer_name.as_deref(),
+        event.organizer_email.as_deref(),
+    )
+    .filter(|k| !k.ends_with("calendar.google.com"));
     add(organizer);
     for a in &event.attendees {
         let declined = a
@@ -443,9 +450,14 @@ pub async fn promote_speaker_to_profile_core(
             old_label,
         );
         if existing.email.is_none() && normalised_email.is_some() {
-            VoiceProfilesRepository::update_profile(pool, &existing.id, &existing.name, normalised_email)
-                .await
-                .map_err(|e| format!("Failed to update voice profile: {}", e))?;
+            VoiceProfilesRepository::update_profile(
+                pool,
+                &existing.id,
+                &existing.name,
+                normalised_email,
+            )
+            .await
+            .map_err(|e| format!("Failed to update voice profile: {}", e))?;
         }
         let (renamed, _) =
             merge_cluster_into_profile_core(pool, meeting_id, old_label, &existing.id).await?;
@@ -657,7 +669,11 @@ mod head_count_tests {
     fn counts_organizer_and_attendees_once_each() {
         let e = event(
             Some("Ann@x.com"),
-            &[("ann@x.com", None), ("bob@x.com", None), ("cat@x.com", None)],
+            &[
+                ("ann@x.com", None),
+                ("bob@x.com", None),
+                ("cat@x.com", None),
+            ],
         );
         assert_eq!(head_count(&e), Some(3));
     }
@@ -666,7 +682,11 @@ mod head_count_tests {
     fn skips_declines_and_calendar_organizers() {
         let e = event(
             Some("team@group.calendar.google.com"),
-            &[("ann@x.com", None), ("bob@x.com", Some("DECLINED")), ("cat@x.com", Some("ACCEPTED"))],
+            &[
+                ("ann@x.com", None),
+                ("bob@x.com", Some("DECLINED")),
+                ("cat@x.com", Some("ACCEPTED")),
+            ],
         );
         assert_eq!(head_count(&e), Some(2));
     }
@@ -700,7 +720,11 @@ mod duplicate_profile_tests {
         .execute(&pool)
         .await
         .unwrap();
-        for (id, speaker) in [("t1", "Speaker 3"), ("t2", "Speaker 3"), ("t3", "Speaker 4")] {
+        for (id, speaker) in [
+            ("t1", "Speaker 3"),
+            ("t2", "Speaker 3"),
+            ("t3", "Speaker 4"),
+        ] {
             sqlx::query(
                 "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, speaker)
                  VALUES (?, 'm1', 'hi', '2026-10-01T00:00:00Z', ?)",
@@ -745,8 +769,14 @@ mod duplicate_profile_tests {
                 .fetch_all(&pool)
                 .await
                 .unwrap();
-        assert_eq!(rows[0], ("t1".into(), Some("Seb Burrell".into()), Some(me.clone())));
-        assert_eq!(rows[1], ("t2".into(), Some("Seb Burrell".into()), Some(me.clone())));
+        assert_eq!(
+            rows[0],
+            ("t1".into(), Some("Seb Burrell".into()), Some(me.clone()))
+        );
+        assert_eq!(
+            rows[1],
+            ("t2".into(), Some("Seb Burrell".into()), Some(me.clone()))
+        );
         assert_eq!(rows[2], ("t3".into(), Some("Speaker 4".into()), None));
     }
 }
@@ -762,7 +792,10 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .expect("in-memory sqlite pool");
-        sqlx::migrate!("./migrations").run(&pool).await.expect("run migrations");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("run migrations");
         sqlx::query(
             "INSERT INTO meetings (id, title, created_at, updated_at)
              VALUES ('m1', 'Meeting', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z')",
@@ -793,32 +826,61 @@ mod tests {
     async fn assigning_one_segment_leaves_the_rest_of_its_cluster() {
         let pool = pool_with_two_speaker_3_segments().await;
 
-        let label = assign_segment_speaker_core(&pool, "m1", "t2", "  Tom Hennell ", None).await.unwrap();
+        let label = assign_segment_speaker_core(&pool, "m1", "t2", "  Tom Hennell ", None)
+            .await
+            .unwrap();
 
         assert_eq!(label, "Tom Hennell");
-        assert_eq!(speaker_of(&pool, "t2").await, (Some("Tom Hennell".into()), None));
-        assert_eq!(speaker_of(&pool, "t1").await, (Some("Speaker 3".into()), None));
+        assert_eq!(
+            speaker_of(&pool, "t2").await,
+            (Some("Tom Hennell".into()), None)
+        );
+        assert_eq!(
+            speaker_of(&pool, "t1").await,
+            (Some("Speaker 3".into()), None)
+        );
     }
 
     #[tokio::test]
     async fn assigning_by_name_links_the_existing_profile() {
         let pool = pool_with_two_speaker_3_segments().await;
-        let id = VoiceProfilesRepository::create(&pool, "Tom Hennell", None, &[1.0, 0.0], 5).await.unwrap();
+        let id = VoiceProfilesRepository::create(&pool, "Tom Hennell", None, &[1.0, 0.0], 5)
+            .await
+            .unwrap();
 
-        let label = assign_segment_speaker_core(&pool, "m1", "t1", "tom hennell", None).await.unwrap();
+        let label = assign_segment_speaker_core(&pool, "m1", "t1", "tom hennell", None)
+            .await
+            .unwrap();
         assert_eq!(label, "Tom Hennell");
-        assert_eq!(speaker_of(&pool, "t1").await, (Some("Tom Hennell".into()), Some(id.clone())));
+        assert_eq!(
+            speaker_of(&pool, "t1").await,
+            (Some("Tom Hennell".into()), Some(id.clone()))
+        );
 
         // Picking the profile directly works the same way.
-        assign_segment_speaker_core(&pool, "m1", "t2", "", Some(&id)).await.unwrap();
-        assert_eq!(speaker_of(&pool, "t2").await, (Some("Tom Hennell".into()), Some(id)));
+        assign_segment_speaker_core(&pool, "m1", "t2", "", Some(&id))
+            .await
+            .unwrap();
+        assert_eq!(
+            speaker_of(&pool, "t2").await,
+            (Some("Tom Hennell".into()), Some(id))
+        );
     }
 
     #[tokio::test]
     async fn assigning_rejects_blank_names_and_missing_segments() {
         let pool = pool_with_two_speaker_3_segments().await;
-        assert!(assign_segment_speaker_core(&pool, "m1", "t1", "  ", None).await.is_err());
-        assert!(assign_segment_speaker_core(&pool, "m1", "nope", "Tom", None).await.is_err());
-        assert_eq!(speaker_of(&pool, "t1").await, (Some("Speaker 3".into()), None));
+        assert!(assign_segment_speaker_core(&pool, "m1", "t1", "  ", None)
+            .await
+            .is_err());
+        assert!(
+            assign_segment_speaker_core(&pool, "m1", "nope", "Tom", None)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            speaker_of(&pool, "t1").await,
+            (Some("Speaker 3".into()), None)
+        );
     }
 }

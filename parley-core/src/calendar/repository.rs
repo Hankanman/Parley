@@ -111,11 +111,12 @@ impl CalendarRepository {
     ) -> Result<usize, sqlx::Error> {
         let mut tx = pool.begin().await?;
 
-        let existing: Vec<(String, String, Option<String>)> =
-            sqlx::query_as("SELECT id, ics_uid, recurrence_id FROM calendar_events WHERE source_id = ?")
-                .bind(source_id)
-                .fetch_all(&mut *tx)
-                .await?;
+        let existing: Vec<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT id, ics_uid, recurrence_id FROM calendar_events WHERE source_id = ?",
+        )
+        .bind(source_id)
+        .fetch_all(&mut *tx)
+        .await?;
         let existing_ids: std::collections::HashMap<(String, String), String> = existing
             .into_iter()
             .map(|(id, uid, recurrence)| ((uid, recurrence.unwrap_or_default()), id))
@@ -134,7 +135,10 @@ impl CalendarRepository {
         for occ in occurrences {
             let recurrence_id = occ.recurrence_id.map(|dt| dt.to_rfc3339());
             let id = existing_ids
-                .get(&(occ.master.ics_uid.clone(), recurrence_id.clone().unwrap_or_default()))
+                .get(&(
+                    occ.master.ics_uid.clone(),
+                    recurrence_id.clone().unwrap_or_default(),
+                ))
                 .cloned()
                 .unwrap_or_else(|| Uuid::new_v4().to_string());
             let attendees_json =
@@ -236,14 +240,13 @@ impl CalendarRepository {
         event_id: Option<&str>,
     ) -> Result<bool, sqlx::Error> {
         let now = Utc::now();
-        let res = sqlx::query(
-            "UPDATE meetings SET calendar_event_id = ?, updated_at = ? WHERE id = ?",
-        )
-        .bind(event_id)
-        .bind(now)
-        .bind(meeting_id)
-        .execute(pool)
-        .await?;
+        let res =
+            sqlx::query("UPDATE meetings SET calendar_event_id = ?, updated_at = ? WHERE id = ?")
+                .bind(event_id)
+                .bind(now)
+                .bind(meeting_id)
+                .execute(pool)
+                .await?;
         Ok(res.rows_affected() > 0)
     }
 
@@ -335,9 +338,13 @@ mod tests {
             .unwrap();
 
         // The linked occurrence has aged out of the feed's window.
-        CalendarRepository::replace_events(&pool, &source.id, &[occ("standup", 20), occ("new", 25)])
-            .await
-            .unwrap();
+        CalendarRepository::replace_events(
+            &pool,
+            &source.id,
+            &[occ("standup", 20), occ("new", 25)],
+        )
+        .await
+        .unwrap();
         let after = ids(&pool).await;
         assert_eq!(after.len(), 3);
         assert_eq!(after[0], before[0], "linked event kept, with its id");
@@ -349,7 +356,9 @@ mod tests {
             .is_some());
 
         // Unlinked events not in the feed are still dropped.
-        CalendarRepository::replace_events(&pool, &source.id, &[]).await.unwrap();
+        CalendarRepository::replace_events(&pool, &source.id, &[])
+            .await
+            .unwrap();
         assert_eq!(ids(&pool).await, vec![before[0].clone()]);
     }
 }

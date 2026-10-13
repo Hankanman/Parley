@@ -168,12 +168,13 @@ mod tests {
             .expect("writer task should finish promptly")
             .expect("writer task should not panic");
 
-        let rows: Vec<(String,)> =
-            sqlx::query_as("SELECT transcript FROM transcripts WHERE meeting_id = ? ORDER BY sequence_id")
-                .bind("meeting-1")
-                .fetch_all(&pool)
-                .await
-                .unwrap();
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT transcript FROM transcripts WHERE meeting_id = ? ORDER BY sequence_id",
+        )
+        .bind("meeting-1")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
         assert_eq!(rows, vec![("hello".to_string(),), ("world".to_string(),)]);
     }
 

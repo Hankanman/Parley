@@ -154,7 +154,10 @@ mod tests {
         raw_tx.send(sample_chunk(1)).unwrap();
         drop(raw_tx); // simulate the pipeline dropping its sender at stop
 
-        let chunk = counted_rx.recv().await.expect("queued chunk still delivered");
+        let chunk = counted_rx
+            .recv()
+            .await
+            .expect("queued chunk still delivered");
         assert_eq!(chunk.chunk_id, 1);
         dequeued();
 

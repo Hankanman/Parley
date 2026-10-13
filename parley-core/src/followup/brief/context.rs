@@ -52,15 +52,28 @@ impl People {
     }
 
     /// The label of the person `attendee` is, if they're one of these.
-    fn matching_label(&self, attendee: &Attendee, by_key: &HashMap<String, String>) -> Option<String> {
-        let email = attendee.email.as_deref().map(|e| e.trim().to_lowercase()).filter(|e| !e.is_empty());
+    fn matching_label(
+        &self,
+        attendee: &Attendee,
+        by_key: &HashMap<String, String>,
+    ) -> Option<String> {
+        let email = attendee
+            .email
+            .as_deref()
+            .map(|e| e.trim().to_lowercase())
+            .filter(|e| !e.is_empty());
         if let Some(email) = email {
             if self.emails.contains(&email) {
                 return by_key.get(&email).cloned();
             }
         }
-        let name = attendee.name.as_deref().map(|n| n.trim().to_lowercase()).filter(|n| !n.is_empty());
-        name.filter(|n| self.names.contains(n)).and_then(|n| by_key.get(&n).cloned())
+        let name = attendee
+            .name
+            .as_deref()
+            .map(|n| n.trim().to_lowercase())
+            .filter(|n| !n.is_empty());
+        name.filter(|n| self.names.contains(n))
+            .and_then(|n| by_key.get(&n).cloned())
     }
 }
 
@@ -77,8 +90,16 @@ pub fn event_people(event: &CalendarEvent, me: &SelfIdentity) -> People {
     }
     let mut people = People::default();
     for attendee in everyone.iter().filter(|a| !me.is(a) && is_person(a)) {
-        let email = attendee.email.as_deref().map(|e| e.trim().to_lowercase()).filter(|e| !e.is_empty());
-        let name = attendee.name.as_deref().map(|n| n.trim().to_lowercase()).filter(|n| !n.is_empty());
+        let email = attendee
+            .email
+            .as_deref()
+            .map(|e| e.trim().to_lowercase())
+            .filter(|e| !e.is_empty());
+        let name = attendee
+            .name
+            .as_deref()
+            .map(|n| n.trim().to_lowercase())
+            .filter(|n| !n.is_empty());
         let known = email.as_ref().is_some_and(|e| people.emails.contains(e))
             || name.as_ref().is_some_and(|n| people.names.contains(n));
         if let Some(e) = email {
@@ -104,9 +125,19 @@ fn label_index(event: &CalendarEvent, me: &SelfIdentity) -> HashMap<String, Stri
         email: event.organizer_email.clone(),
         ..Default::default()
     };
-    for attendee in event.attendees.iter().chain(std::iter::once(&organizer)).filter(|a| !me.is(a) && is_person(a)) {
-        let Some(label) = attendee_label(attendee) else { continue };
-        for key in [attendee.email.as_deref(), attendee.name.as_deref()].into_iter().flatten() {
+    for attendee in event
+        .attendees
+        .iter()
+        .chain(std::iter::once(&organizer))
+        .filter(|a| !me.is(a) && is_person(a))
+    {
+        let Some(label) = attendee_label(attendee) else {
+            continue;
+        };
+        for key in [attendee.email.as_deref(), attendee.name.as_deref()]
+            .into_iter()
+            .flatten()
+        {
             let key = key.trim().to_lowercase();
             if !key.is_empty() {
                 index.entry(key).or_insert_with(|| label.clone());
@@ -158,7 +189,10 @@ impl BriefContext {
         self.meetings.iter().any(|m| {
             !m.open_items.is_empty()
                 || m.summary.structured.is_some()
-                || m.summary.markdown.as_deref().is_some_and(|s| !s.trim().is_empty())
+                || m.summary
+                    .markdown
+                    .as_deref()
+                    .is_some_and(|s| !s.trim().is_empty())
         })
     }
 }
@@ -205,7 +239,8 @@ pub async fn gather(pool: &SqlitePool, event: &CalendarEvent) -> Result<BriefCon
         .fetch_all(pool)
         .await?;
         for (id, attendees_json, organizer_name, organizer_email) in linked {
-            let mut attendees: Vec<Attendee> = serde_json::from_str(&attendees_json).unwrap_or_default();
+            let mut attendees: Vec<Attendee> =
+                serde_json::from_str(&attendees_json).unwrap_or_default();
             attendees.push(Attendee {
                 name: organizer_name,
                 email: organizer_email,
@@ -213,7 +248,11 @@ pub async fn gather(pool: &SqlitePool, event: &CalendarEvent) -> Result<BriefCon
             });
             for attendee in attendees.iter().filter(|a| !me.is(a)) {
                 if let Some(label) = people.matching_label(attendee, &labels) {
-                    candidates.entry(id.clone()).or_default().people.insert(label);
+                    candidates
+                        .entry(id.clone())
+                        .or_default()
+                        .people
+                        .insert(label);
                 }
             }
         }
@@ -246,7 +285,11 @@ pub async fn gather(pool: &SqlitePool, event: &CalendarEvent) -> Result<BriefCon
             let rows: Vec<(String, String)> = qb.build_query_as().fetch_all(pool).await?;
             for (meeting_id, profile_id) in rows {
                 if let Some(label) = profile_labels.get(&profile_id) {
-                    candidates.entry(meeting_id).or_default().people.insert(label.clone());
+                    candidates
+                        .entry(meeting_id)
+                        .or_default()
+                        .people
+                        .insert(label.clone());
                 }
             }
         }
@@ -262,7 +305,11 @@ pub async fn gather(pool: &SqlitePool, event: &CalendarEvent) -> Result<BriefCon
             let rows: Vec<(String, String)> = qb.build_query_as().fetch_all(pool).await?;
             for (meeting_id, name) in rows {
                 if let Some(label) = labels.get(&name) {
-                    candidates.entry(meeting_id).or_default().people.insert(label.clone());
+                    candidates
+                        .entry(meeting_id)
+                        .or_default()
+                        .people
+                        .insert(label.clone());
                 }
             }
         }
@@ -279,7 +326,9 @@ pub async fn gather(pool: &SqlitePool, event: &CalendarEvent) -> Result<BriefCon
         .bind(&before)
         .fetch_optional(pool)
         .await?;
-        let Some((title, created, status)) = row else { continue };
+        let Some((title, created, status)) = row else {
+            continue;
+        };
         if status.as_deref() == Some("recording") {
             continue;
         }
@@ -363,7 +412,8 @@ type Related = (String, String, Option<DateTime<Utc>>, Candidate);
 fn select(mut related: Vec<Related>) -> Vec<Related> {
     // Most recent first everywhere; undated last.
     related.sort_by(|a, b| b.2.cmp(&a.2));
-    let (series, others): (Vec<Related>, Vec<Related>) = related.into_iter().partition(|r| r.3.same_series);
+    let (series, others): (Vec<Related>, Vec<Related>) =
+        related.into_iter().partition(|r| r.3.same_series);
     let mut chosen: Vec<Related> = series.into_iter().take(MAX_SERIES_MEETINGS).collect();
     let mut others = others;
     // Stable: equal overlap keeps recency order.
@@ -401,7 +451,10 @@ mod tests {
         all.push(related("two-people-old", 2, false, &["Ann", "Bob"]));
         all.push(related("one-person-old", 1, false, &["Bob"]));
         let ids: Vec<String> = select(all).into_iter().map(|r| r.0).collect();
-        assert_eq!(ids, vec!["one-person-new", "s6", "s5", "s4", "s3", "two-people-old"]);
+        assert_eq!(
+            ids,
+            vec!["one-person-new", "s6", "s5", "s4", "s3", "two-people-old"]
+        );
     }
 
     #[test]
@@ -420,15 +473,37 @@ mod tests {
             end_at: Utc::now(),
             is_all_day: false,
             attendees: vec![
-                Attendee { name: Some("Ann Lee".into()), email: Some("ann@example.com".into()), ..Default::default() },
-                Attendee { name: None, email: Some("Ann@Example.com".into()), ..Default::default() },
-                Attendee { name: Some("Seb".into()), email: Some("seb@example.com".into()), ..Default::default() },
-                Attendee { name: None, email: Some("bob@example.com".into()), ..Default::default() },
+                Attendee {
+                    name: Some("Ann Lee".into()),
+                    email: Some("ann@example.com".into()),
+                    ..Default::default()
+                },
+                Attendee {
+                    name: None,
+                    email: Some("Ann@Example.com".into()),
+                    ..Default::default()
+                },
+                Attendee {
+                    name: Some("Seb".into()),
+                    email: Some("seb@example.com".into()),
+                    ..Default::default()
+                },
+                Attendee {
+                    name: None,
+                    email: Some("bob@example.com".into()),
+                    ..Default::default()
+                },
             ],
         };
-        let me = SelfIdentity { name: Some("Seb".into()), email: Some("seb@example.com".into()) };
+        let me = SelfIdentity {
+            name: Some("Seb".into()),
+            email: Some("seb@example.com".into()),
+        };
         let people = event_people(&event, &me);
-        assert_eq!(people.labels, vec!["Ann Lee".to_string(), "bob@example.com".to_string()]);
+        assert_eq!(
+            people.labels,
+            vec!["Ann Lee".to_string(), "bob@example.com".to_string()]
+        );
         assert!(people.emails.contains("ann@example.com"));
         assert!(!people.emails.contains("seb@example.com"));
         assert!(people.names.contains("ann lee"));

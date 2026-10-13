@@ -74,22 +74,37 @@ pub enum BriefBody {
 
 /// The cache key of an event instance.
 pub fn cache_key(event: &CalendarEvent) -> String {
-    format!("{}|{}|{}", event.source_id, event.ics_uid, event.start_at.to_rfc3339())
+    format!(
+        "{}|{}|{}",
+        event.source_id,
+        event.ics_uid,
+        event.start_at.to_rfc3339()
+    )
 }
 
 /// The brief for calendar event `event_id`, generating it when there's no
 /// up-to-date cached one (or `force` is set).
-pub async fn get_or_generate_brief(pool: SqlitePool, event_id: String, force: bool) -> Result<Brief, String> {
+pub async fn get_or_generate_brief(
+    pool: SqlitePool,
+    event_id: String,
+    force: bool,
+) -> Result<Brief, String> {
     let event = CalendarRepository::get_event(&pool, &event_id)
         .await
         .map_err(|e| format!("failed to load the calendar event: {e}"))?
-        .ok_or_else(|| "This event is no longer in your calendar. Try refreshing it in Settings.".to_string())?;
+        .ok_or_else(|| {
+            "This event is no longer in your calendar. Try refreshing it in Settings.".to_string()
+        })?;
     let ctx = context::gather(&pool, &event)
         .await
         .map_err(|e| format!("failed to gather past meetings: {e}"))?;
 
     if ctx.meetings.is_empty() || !ctx.has_substance() {
-        return Ok(brief_from(&ctx, BriefBody::NoHistory(prompt::no_history_message(&ctx)), Vec::new()));
+        return Ok(brief_from(
+            &ctx,
+            BriefBody::NoHistory(prompt::no_history_message(&ctx)),
+            Vec::new(),
+        ));
     }
 
     let config = super::resolve_llm(&pool).await?;
@@ -103,7 +118,8 @@ pub async fn get_or_generate_brief(pool: SqlitePool, event_id: String, force: bo
         ctx.total_related,
         built.sources.len()
     );
-    let (text, generated_at, from_cache) = cached_or_generate(&pool, &config, &event, &built, force).await?;
+    let (text, generated_at, from_cache) =
+        cached_or_generate(&pool, &config, &event, &built, force).await?;
     Ok(brief_from(
         &ctx,
         BriefBody::Generated {
@@ -150,10 +166,14 @@ pub async fn cached_or_generate<L: SummaryLlm>(
         }
     }
 
-    let raw = llm.complete(&built.system, &built.user, None, None, None).await?;
+    let raw = llm
+        .complete(&built.system, &built.user, None, None, None)
+        .await?;
     let text = prompt::validate_brief(&raw)?;
     let now = Utc::now().to_rfc3339();
-    if let Err(e) = BriefCacheRepository::save(pool, &key, event, &print, &text, &built.sources).await {
+    if let Err(e) =
+        BriefCacheRepository::save(pool, &key, event, &print, &text, &built.sources).await
+    {
         warn!("failed to cache brief: {e}");
     }
     Ok((text, now, false))
@@ -179,12 +199,14 @@ impl BriefCacheRepository {
         .bind(key)
         .fetch_optional(pool)
         .await?;
-        Ok(row.map(|(fingerprint, brief, sources_json, created_at)| CachedBrief {
-            fingerprint,
-            brief,
-            sources: serde_json::from_str(&sources_json).unwrap_or_default(),
-            created_at,
-        }))
+        Ok(row.map(
+            |(fingerprint, brief, sources_json, created_at)| CachedBrief {
+                fingerprint,
+                brief,
+                sources: serde_json::from_str(&sources_json).unwrap_or_default(),
+                created_at,
+            },
+        ))
     }
 
     /// Store (or replace) a brief, and prune briefs for long-past events.
@@ -301,11 +323,22 @@ mod tests {
         .execute(pool)
         .await
         .unwrap();
-        CalendarRepository::get_event(pool, id).await.unwrap().unwrap()
+        CalendarRepository::get_event(pool, id)
+            .await
+            .unwrap()
+            .unwrap()
     }
 
-    async fn add_meeting(pool: &SqlitePool, id: &str, title: &str, at: DateTime<Utc>, event_id: Option<&str>) {
-        MeetingsRepository::create_recording_meeting(pool, id, title, None).await.unwrap();
+    async fn add_meeting(
+        pool: &SqlitePool,
+        id: &str,
+        title: &str,
+        at: DateTime<Utc>,
+        event_id: Option<&str>,
+    ) {
+        MeetingsRepository::create_recording_meeting(pool, id, title, None)
+            .await
+            .unwrap();
         sqlx::query("UPDATE meetings SET created_at = ?, status = 'completed', calendar_event_id = ? WHERE id = ?")
             .bind(at.to_rfc3339())
             .bind(event_id)
@@ -377,7 +410,14 @@ mod tests {
         .unwrap();
 
         // Different event, Ann attending (by email).
-        add_event(&pool, "e-other", "other", day(5), &[me.clone(), attendee("Ann", "ANN@example.com")]).await;
+        add_event(
+            &pool,
+            "e-other",
+            "other",
+            day(5),
+            &[me.clone(), attendee("Ann", "ANN@example.com")],
+        )
+        .await;
         add_meeting(&pool, "m-ann", "Design review", day(5), Some("e-other")).await;
         add_summary(&pool, "m-ann", "Use the blue theme").await;
 
@@ -391,7 +431,14 @@ mod tests {
         add_meeting(&pool, "m-self", "Solo", day(9), None).await;
         add_summary(&pool, "m-self", "Nothing").await;
         // Only shares the calendar "attendee": unrelated.
-        add_event(&pool, "e-cal", "cal", day(10), &[me.clone(), calendar.clone()]).await;
+        add_event(
+            &pool,
+            "e-cal",
+            "cal",
+            day(10),
+            &[me.clone(), calendar.clone()],
+        )
+        .await;
         add_meeting(&pool, "m-cal", "Same calendar", day(10), Some("e-cal")).await;
         add_summary(&pool, "m-cal", "Nothing").await;
         // Related (Ann attends) but nothing to brief on: counted, not selected.
@@ -407,20 +454,43 @@ mod tests {
         .await
         .unwrap();
         // Same series but after the event starts: ignored.
-        add_event(&pool, "e-later", "weekly", Utc.with_ymd_and_hms(2026, 10, 7, 9, 0, 0).unwrap(), &[]).await;
-        add_meeting(&pool, "m-later", "Later", Utc.with_ymd_and_hms(2026, 10, 7, 9, 0, 0).unwrap(), Some("e-later")).await;
+        add_event(
+            &pool,
+            "e-later",
+            "weekly",
+            Utc.with_ymd_and_hms(2026, 10, 7, 9, 0, 0).unwrap(),
+            &[],
+        )
+        .await;
+        add_meeting(
+            &pool,
+            "m-later",
+            "Later",
+            Utc.with_ymd_and_hms(2026, 10, 7, 9, 0, 0).unwrap(),
+            Some("e-later"),
+        )
+        .await;
 
         let ctx = context::gather(&pool, &upcoming).await.unwrap();
-        assert_eq!(ctx.people, vec!["Ann Lee".to_string(), "bob@example.com".to_string()]);
+        assert_eq!(
+            ctx.people,
+            vec!["Ann Lee".to_string(), "bob@example.com".to_string()]
+        );
         let ids: Vec<&str> = ctx.meetings.iter().map(|m| m.meeting_id.as_str()).collect();
         assert_eq!(ids, vec!["m-label", "m-bob", "m-ann", "m-series"]);
-        assert_eq!(ctx.total_related, 5, "m-empty is related but has nothing to brief on");
+        assert_eq!(
+            ctx.total_related, 5,
+            "m-empty is related but has nothing to brief on"
+        );
 
         let series = &ctx.meetings[3];
         assert!(series.same_series);
         assert_eq!(series.open_items.len(), 1, "done items are left out");
         assert_eq!(series.open_items[0].text, "Send deck");
-        assert_eq!(series.summary.structured.as_ref().unwrap().decisions, vec!["Ship v2".to_string()]);
+        assert_eq!(
+            series.summary.structured.as_ref().unwrap().decisions,
+            vec!["Ship v2".to_string()]
+        );
         assert_eq!(ctx.meetings[2].people, vec!["Ann Lee".to_string()]);
         assert_eq!(ctx.meetings[1].people, vec!["bob@example.com".to_string()]);
         assert_eq!(ctx.meetings[0].people, vec!["Ann Lee".to_string()]);
@@ -430,18 +500,36 @@ mod tests {
     #[tokio::test]
     async fn no_history_skips_the_model() {
         let pool = pool().await;
-        add_event(&pool, "e-next", "weekly", day(30), &[attendee("Zed", "zed@example.com")]).await;
+        add_event(
+            &pool,
+            "e-next",
+            "weekly",
+            day(30),
+            &[attendee("Zed", "zed@example.com")],
+        )
+        .await;
         add_meeting(&pool, "m1", "Unrelated", day(1), None).await;
         // No model configured either: would error if it were called.
-        let brief = get_or_generate_brief(pool, "e-next".into(), false).await.unwrap();
-        assert!(matches!(brief.body, BriefBody::NoHistory(ref m) if m.contains("No past meetings")));
+        let brief = get_or_generate_brief(pool, "e-next".into(), false)
+            .await
+            .unwrap();
+        assert!(
+            matches!(brief.body, BriefBody::NoHistory(ref m) if m.contains("No past meetings"))
+        );
         assert!(brief.sources.is_empty());
     }
 
     #[tokio::test]
     async fn caches_per_event_instance_until_context_changes() {
         let pool = pool().await;
-        let event = add_event(&pool, "e-next", "weekly", Utc::now() + Duration::hours(1), &[]).await;
+        let event = add_event(
+            &pool,
+            "e-next",
+            "weekly",
+            Utc::now() + Duration::hours(1),
+            &[],
+        )
+        .await;
         let llm = CountingLlm {
             reply: "<think>hm</think>- Ship v2 was agreed [M1]".into(),
             calls: AtomicUsize::new(0),
@@ -452,18 +540,29 @@ mod tests {
             sources: vec![],
         };
 
-        let (text, _, cached) = cached_or_generate(&pool, &llm, &event, &built("u1"), false).await.unwrap();
+        let (text, _, cached) = cached_or_generate(&pool, &llm, &event, &built("u1"), false)
+            .await
+            .unwrap();
         assert_eq!(text, "- Ship v2 was agreed [M1]");
         assert!(!cached);
-        let (_, _, cached) = cached_or_generate(&pool, &llm, &event, &built("u1"), false).await.unwrap();
+        let (_, _, cached) = cached_or_generate(&pool, &llm, &event, &built("u1"), false)
+            .await
+            .unwrap();
         assert!(cached);
         assert_eq!(llm.calls.load(Ordering::SeqCst), 1);
 
         // Changed context, or forced: regenerate.
-        cached_or_generate(&pool, &llm, &event, &built("u2"), false).await.unwrap();
-        cached_or_generate(&pool, &llm, &event, &built("u2"), true).await.unwrap();
+        cached_or_generate(&pool, &llm, &event, &built("u2"), false)
+            .await
+            .unwrap();
+        cached_or_generate(&pool, &llm, &event, &built("u2"), true)
+            .await
+            .unwrap();
         assert_eq!(llm.calls.load(Ordering::SeqCst), 3);
-        let stored = BriefCacheRepository::get(&pool, &cache_key(&event)).await.unwrap().unwrap();
+        let stored = BriefCacheRepository::get(&pool, &cache_key(&event))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(stored.brief, "- Ship v2 was agreed [M1]");
     }
 
@@ -478,8 +577,15 @@ mod tests {
             title: "Cited".into(),
             created_at: None,
         }];
-        BriefCacheRepository::save(&pool, "k", &event, "f", "brief", &sources).await.unwrap();
-        MeetingsRepository::delete_meeting(&pool, "m1").await.unwrap();
-        assert!(BriefCacheRepository::get(&pool, "k").await.unwrap().is_none());
+        BriefCacheRepository::save(&pool, "k", &event, "f", "brief", &sources)
+            .await
+            .unwrap();
+        MeetingsRepository::delete_meeting(&pool, "m1")
+            .await
+            .unwrap();
+        assert!(BriefCacheRepository::get(&pool, "k")
+            .await
+            .unwrap()
+            .is_none());
     }
 }

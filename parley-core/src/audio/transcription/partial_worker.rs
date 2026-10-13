@@ -310,7 +310,10 @@ mod tests {
     fn prefix_of_growing_hypotheses() {
         // Second decode extends the first: agreed prefix is the whole first.
         assert_eq!(
-            common_prefix_len(&words("let us start the"), &words("let us start the meeting")),
+            common_prefix_len(
+                &words("let us start the"),
+                &words("let us start the meeting")
+            ),
             4
         );
     }
@@ -319,14 +322,20 @@ mod tests {
     fn prefix_stops_at_first_divergence() {
         // whisper revised "there" → "their"; only "we think" is agreed.
         assert_eq!(
-            common_prefix_len(&words("we think there is"), &words("we think their is time")),
+            common_prefix_len(
+                &words("we think there is"),
+                &words("we think their is time")
+            ),
             2
         );
     }
 
     #[test]
     fn no_agreement_and_empty() {
-        assert_eq!(common_prefix_len(&words("hello world"), &words("goodbye now")), 0);
+        assert_eq!(
+            common_prefix_len(&words("hello world"), &words("goodbye now")),
+            0
+        );
         assert_eq!(common_prefix_len(&[], &words("anything")), 0);
         assert_eq!(common_prefix_len(&words("anything"), &[]), 0);
     }

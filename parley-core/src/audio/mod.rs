@@ -1,11 +1,11 @@
 // src/audio/mod.rs
 pub mod audio_processing;
-pub mod mic_processor;
 pub mod clip;
 pub mod decoder;
-pub mod playback;
 pub mod encode;
 pub mod ffmpeg;
+pub mod mic_processor;
+pub mod playback;
 pub mod vad;
 
 // Device model + PipeWire-backed discovery
@@ -23,10 +23,10 @@ pub mod hardware_detector;
 pub mod incremental_saver;
 pub mod pipeline;
 pub mod recording_manager;
-pub mod recording_service;
 pub mod recording_phase;
 pub mod recording_preferences;
 pub mod recording_saver;
+pub mod recording_service;
 pub mod recording_state;
 pub mod simple_level_monitor;
 pub mod stream;
@@ -57,15 +57,17 @@ pub use devices::{list_audio_devices, trigger_audio_permission, AudioDevice, Dev
 
 pub use hardware_detector::{AdaptiveWhisperConfig, GpuType, HardwareProfile, PerformanceTier};
 pub use pipeline::AudioPipelineManager;
-pub use recording_service::{get_transcription_status, is_recording, RecordingArgs, TranscriptionStatus};
 pub use recording_manager::RecordingManager;
-pub use transcription::TranscriptUpdate;
 pub use recording_preferences::{get_default_recordings_folder, RecordingPreferences};
 pub use recording_saver::RecordingSaver;
+pub use recording_service::{
+    get_transcription_status, is_recording, RecordingArgs, TranscriptionStatus,
+};
 pub use recording_state::{
     AudioChunk, AudioError, DeviceType as RecordingDeviceType, ProcessedAudioChunk, RecordingState,
 };
 pub use stream::AudioStreamManager;
+pub use transcription::TranscriptUpdate;
 
 // Export decoder for retranscription
 pub use decoder::{decode_audio_file, DecodedAudio};

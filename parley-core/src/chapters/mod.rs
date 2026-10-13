@@ -202,18 +202,27 @@ pub async fn load_input(pool: &SqlitePool, meeting_id: &str) -> Result<ChapterIn
 }
 
 fn build_input(rows: Vec<Transcript>, stored_duration: Option<f64>) -> ChapterInput {
-    let mut duration = stored_duration.filter(|d| d.is_finite() && *d > 0.0).unwrap_or(0.0);
+    let mut duration = stored_duration
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .unwrap_or(0.0);
     let mut speakers: Vec<String> = Vec::new();
     let mut segments = Vec::new();
     for t in rows {
         let Some(start) = t.audio_start_time.filter(|s| s.is_finite() && *s >= 0.0) else {
             continue;
         };
-        let text = t.transcript.split_whitespace().collect::<Vec<_>>().join(" ");
+        let text = t
+            .transcript
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         if text.is_empty() {
             continue;
         }
-        let end = t.audio_end_time.filter(|e| e.is_finite() && *e >= start).unwrap_or(start);
+        let end = t
+            .audio_end_time
+            .filter(|e| e.is_finite() && *e >= start)
+            .unwrap_or(start);
         duration = duration.max(end);
         let speaker = t
             .speaker
@@ -266,7 +275,11 @@ pub fn build_chunks(input: &ChapterInput, max_chars: usize) -> Vec<ChapterChunk>
         .map(|(ix, c)| ChapterChunk {
             text: c.text,
             start: starts[ix],
-            end: starts.get(ix + 1).copied().unwrap_or(input.duration).max(starts[ix]),
+            end: starts
+                .get(ix + 1)
+                .copied()
+                .unwrap_or(input.duration)
+                .max(starts[ix]),
         })
         .collect()
 }
@@ -346,7 +359,10 @@ async fn run(pool: &SqlitePool, meeting_id: &str) -> Result<Vec<MeetingChapter>,
         model.provider,
         model.model,
         chunks.len(),
-        chunks.iter().map(|c| rough_token_count(&c.text)).sum::<usize>()
+        chunks
+            .iter()
+            .map(|c| rough_token_count(&c.text))
+            .sum::<usize>()
     );
 
     let mut parts = Vec::with_capacity(chunks.len());
@@ -393,7 +409,11 @@ fn is_auto_enabled(ui_config: Option<&str>) -> bool {
 /// After a recording: chapter the meeting when post-meeting AI is switched
 /// on (Settings → Summary → auto-generate) and it has no chapters yet.
 /// Best-effort; failures are logged and emitted, never raised.
-pub async fn maybe_auto_chapter(sink: SharedEventSink, pool: Option<SqlitePool>, meeting_id: String) {
+pub async fn maybe_auto_chapter(
+    sink: SharedEventSink,
+    pool: Option<SqlitePool>,
+    meeting_id: String,
+) {
     let Some(pool) = pool else { return };
     let ui_config = SettingsRepository::get_setting_json(&pool, KEY_UI_CONFIG)
         .await
@@ -439,45 +459,82 @@ mod tests {
     #[tokio::test]
     async fn replace_list_and_clear() {
         let pool = test_pool().await;
-        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None).await.unwrap();
-        MeetingsRepository::create_recording_meeting(&pool, "m2", "B", None).await.unwrap();
-
-        let stored = ChaptersRepository::replace(&pool, "m1", &[draft(0.0, "Intro"), draft(120.0, "Budget")], 300.0)
+        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None)
             .await
             .unwrap();
-        assert_eq!(stored.len(), 2);
-        ChaptersRepository::replace(&pool, "m2", &[draft(0.0, "Other")], 10.0).await.unwrap();
+        MeetingsRepository::create_recording_meeting(&pool, "m2", "B", None)
+            .await
+            .unwrap();
 
-        let list = ChaptersRepository::list_by_meeting(&pool, "m1").await.unwrap();
-        assert_eq!(list.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(), vec!["Intro", "Budget"]);
+        let stored = ChaptersRepository::replace(
+            &pool,
+            "m1",
+            &[draft(0.0, "Intro"), draft(120.0, "Budget")],
+            300.0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(stored.len(), 2);
+        ChaptersRepository::replace(&pool, "m2", &[draft(0.0, "Other")], 10.0)
+            .await
+            .unwrap();
+
+        let list = ChaptersRepository::list_by_meeting(&pool, "m1")
+            .await
+            .unwrap();
+        assert_eq!(
+            list.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(),
+            vec!["Intro", "Budget"]
+        );
         assert_eq!(list[1].position, 1);
         assert_eq!(list[1].start_seconds, 120.0);
 
         // Replacing swaps the whole set.
-        ChaptersRepository::replace(&pool, "m1", &[draft(5.0, "Only")], 300.0).await.unwrap();
-        let list = ChaptersRepository::list_by_meeting(&pool, "m1").await.unwrap();
+        ChaptersRepository::replace(&pool, "m1", &[draft(5.0, "Only")], 300.0)
+            .await
+            .unwrap();
+        let list = ChaptersRepository::list_by_meeting(&pool, "m1")
+            .await
+            .unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].title, "Only");
 
         assert_eq!(ChaptersRepository::clear(&pool, "m1").await.unwrap(), 1);
-        assert!(ChaptersRepository::list_by_meeting(&pool, "m1").await.unwrap().is_empty());
-        assert_eq!(ChaptersRepository::list_by_meeting(&pool, "m2").await.unwrap().len(), 1);
+        assert!(ChaptersRepository::list_by_meeting(&pool, "m1")
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            ChaptersRepository::list_by_meeting(&pool, "m2")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
     async fn replace_refuses_invalid_lists_and_keeps_old_rows() {
         let pool = test_pool().await;
-        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None).await.unwrap();
-        ChaptersRepository::replace(&pool, "m1", &[draft(0.0, "Keep")], 100.0).await.unwrap();
+        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None)
+            .await
+            .unwrap();
+        ChaptersRepository::replace(&pool, "m1", &[draft(0.0, "Keep")], 100.0)
+            .await
+            .unwrap();
         for bad in [
             vec![draft(50.0, "B"), draft(10.0, "A")],
             vec![draft(500.0, "Past end")],
             vec![draft(1.0, "[link](https://x.y)")],
             vec![draft(f64::NAN, "Nan")],
         ] {
-            assert!(ChaptersRepository::replace(&pool, "m1", &bad, 100.0).await.is_err());
+            assert!(ChaptersRepository::replace(&pool, "m1", &bad, 100.0)
+                .await
+                .is_err());
         }
-        let list = ChaptersRepository::list_by_meeting(&pool, "m1").await.unwrap();
+        let list = ChaptersRepository::list_by_meeting(&pool, "m1")
+            .await
+            .unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].title, "Keep");
     }
@@ -485,20 +542,41 @@ mod tests {
     #[tokio::test]
     async fn deleting_meeting_removes_chapters() {
         let pool = test_pool().await;
-        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None).await.unwrap();
-        MeetingsRepository::create_recording_meeting(&pool, "m2", "B", None).await.unwrap();
-        ChaptersRepository::replace(&pool, "m1", &[draft(0.0, "A")], 10.0).await.unwrap();
-        ChaptersRepository::replace(&pool, "m2", &[draft(0.0, "B")], 10.0).await.unwrap();
-        assert!(MeetingsRepository::delete_meeting(&pool, "m1").await.unwrap());
-        assert!(ChaptersRepository::list_by_meeting(&pool, "m1").await.unwrap().is_empty());
-        sqlx::query("DELETE FROM meetings WHERE id = 'm2'").execute(&pool).await.unwrap();
-        assert!(ChaptersRepository::list_by_meeting(&pool, "m2").await.unwrap().is_empty());
+        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None)
+            .await
+            .unwrap();
+        MeetingsRepository::create_recording_meeting(&pool, "m2", "B", None)
+            .await
+            .unwrap();
+        ChaptersRepository::replace(&pool, "m1", &[draft(0.0, "A")], 10.0)
+            .await
+            .unwrap();
+        ChaptersRepository::replace(&pool, "m2", &[draft(0.0, "B")], 10.0)
+            .await
+            .unwrap();
+        assert!(MeetingsRepository::delete_meeting(&pool, "m1")
+            .await
+            .unwrap());
+        assert!(ChaptersRepository::list_by_meeting(&pool, "m1")
+            .await
+            .unwrap()
+            .is_empty());
+        sqlx::query("DELETE FROM meetings WHERE id = 'm2'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(ChaptersRepository::list_by_meeting(&pool, "m2")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
     async fn loads_timed_segments_and_duration() {
         let pool = test_pool().await;
-        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None).await.unwrap();
+        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None)
+            .await
+            .unwrap();
         sqlx::query(
             "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, speaker, sequence_id)
              VALUES ('t2', 'm1', 'Second  part.', 'x', 60.0, 75.5, 'Bob', 2),
@@ -514,7 +592,10 @@ mod tests {
         assert_eq!(input.segments[0].text, "First.");
         assert_eq!(input.segments[1].text, "Second part.");
         assert_eq!(input.duration, 75.5);
-        assert_eq!(input.speakers, vec!["Speaker".to_string(), "Bob".to_string()]);
+        assert_eq!(
+            input.speakers,
+            vec!["Speaker".to_string(), "Bob".to_string()]
+        );
         assert!(load_input(&pool, "missing").await.is_err());
     }
 
@@ -559,14 +640,26 @@ mod tests {
     #[tokio::test]
     async fn generate_without_model_config_errors_and_keeps_rows() {
         let pool = test_pool().await;
-        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None).await.unwrap();
-        ChaptersRepository::replace(&pool, "m1", &[draft(0.0, "Keep")], 10.0).await.unwrap();
+        MeetingsRepository::create_recording_meeting(&pool, "m1", "A", None)
+            .await
+            .unwrap();
+        ChaptersRepository::replace(&pool, "m1", &[draft(0.0, "Keep")], 10.0)
+            .await
+            .unwrap();
         let sink = std::sync::Arc::new(crate::events::RecordingSink::default());
         let shared: SharedEventSink = sink.clone();
-        let err = generate_chapters(shared, pool.clone(), "m1".into()).await.unwrap_err();
+        let err = generate_chapters(shared, pool.clone(), "m1".into())
+            .await
+            .unwrap_err();
         assert!(err.contains("No model configured"), "{err}");
         assert!(!is_generating("m1"));
-        assert_eq!(ChaptersRepository::list_by_meeting(&pool, "m1").await.unwrap().len(), 1);
+        assert_eq!(
+            ChaptersRepository::list_by_meeting(&pool, "m1")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]

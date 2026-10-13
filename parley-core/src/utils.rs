@@ -43,7 +43,10 @@ pub fn language_preference_from_setting(primary_language: Option<&str>) -> Strin
             value
         }
         _ => {
-            log::warn!("Ignoring transcription language {:?}; using auto-detect", value);
+            log::warn!(
+                "Ignoring transcription language {:?}; using auto-detect",
+                value
+            );
             "auto".to_string()
         }
     }

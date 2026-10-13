@@ -92,7 +92,10 @@ fn probe_one(exe_dir: &Path, backend: &str, model_path: Option<&str>) -> Backend
             .stderr(Stdio::null())
             .spawn()?;
 
-        let stdin = child.stdin.as_mut().ok_or_else(|| anyhow::anyhow!("no stdin"))?;
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("no stdin"))?;
         let request = Request::Probe {
             model_path: model_path.map(|s| s.to_string()),
         };
@@ -101,7 +104,10 @@ fn probe_one(exe_dir: &Path, backend: &str, model_path: Option<&str>) -> Backend
         writeln!(stdin, "{line}")?;
 
         use std::io::{BufRead, BufReader};
-        let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("no stdout"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("no stdout"))?;
         let mut reader = BufReader::new(stdout);
         let mut resp_line = String::new();
         reader.read_line(&mut resp_line)?;
@@ -152,7 +158,11 @@ fn probe_one(exe_dir: &Path, backend: &str, model_path: Option<&str>) -> Backend
 /// request itself is meant to complete in ~1s; a production version should
 /// wrap the spawn+read in a thread with a hard timeout so a hung sidecar
 /// can't block the whole scan).
-pub fn scan_backends(exe_dir: &Path, model_path: Option<&str>, _timeout: Duration) -> BackendSelection {
+pub fn scan_backends(
+    exe_dir: &Path,
+    model_path: Option<&str>,
+    _timeout: Duration,
+) -> BackendSelection {
     let candidates: Vec<BackendCandidate> = CANDIDATE_ORDER
         .iter()
         .map(|backend| probe_one(exe_dir, backend, model_path))

@@ -61,23 +61,154 @@ const MIN_FUZZY_KEY_LEN: usize = 5;
 /// not eat "there"). Exact matches are unaffected — if the user adds
 /// "Could" to their glossary, that's on them.
 const COMMON_WORDS: &[&str] = &[
-    "about", "above", "after", "again", "against", "along", "already", "also", "always",
-    "among", "another", "answer", "anything", "around", "asked", "basically", "because",
-    "become", "before", "being", "believe", "below", "better", "between", "bring", "build",
-    "called", "cannot", "carry", "cause", "certain", "change", "check", "clear", "close",
-    "could", "course", "doing", "during", "early", "either", "enough", "every", "everyone",
-    "everything", "example", "exactly", "fine", "first", "follow", "found", "further",
-    "going", "gonna", "great", "group", "guess", "happen", "having", "heard", "issue",
-    "issues", "later", "least", "leave", "little", "looking", "maybe", "means", "might",
-    "money", "months", "never", "night", "nothing", "number", "often", "other", "others",
-    "people", "person", "place", "plans", "point", "pretty", "probably", "problem",
-    "process", "quite", "really", "right", "saying", "second", "seems", "should", "since",
-    "small", "something", "sorry", "sound", "sounds", "start", "still", "story", "stuff",
-    "sure", "taking", "talking", "thank", "thanks", "their", "there", "these", "thing",
-    "things", "think", "third", "those", "though", "thought", "three", "through", "today",
-    "together", "tomorrow", "totally", "trying", "under", "until", "using", "usually",
-    "versus", "wanna", "wanted", "watch", "water", "where", "whether", "which", "while",
-    "whole", "would", "write", "wrong", "years", "yesterday", "young", "yours",
+    "about",
+    "above",
+    "after",
+    "again",
+    "against",
+    "along",
+    "already",
+    "also",
+    "always",
+    "among",
+    "another",
+    "answer",
+    "anything",
+    "around",
+    "asked",
+    "basically",
+    "because",
+    "become",
+    "before",
+    "being",
+    "believe",
+    "below",
+    "better",
+    "between",
+    "bring",
+    "build",
+    "called",
+    "cannot",
+    "carry",
+    "cause",
+    "certain",
+    "change",
+    "check",
+    "clear",
+    "close",
+    "could",
+    "course",
+    "doing",
+    "during",
+    "early",
+    "either",
+    "enough",
+    "every",
+    "everyone",
+    "everything",
+    "example",
+    "exactly",
+    "fine",
+    "first",
+    "follow",
+    "found",
+    "further",
+    "going",
+    "gonna",
+    "great",
+    "group",
+    "guess",
+    "happen",
+    "having",
+    "heard",
+    "issue",
+    "issues",
+    "later",
+    "least",
+    "leave",
+    "little",
+    "looking",
+    "maybe",
+    "means",
+    "might",
+    "money",
+    "months",
+    "never",
+    "night",
+    "nothing",
+    "number",
+    "often",
+    "other",
+    "others",
+    "people",
+    "person",
+    "place",
+    "plans",
+    "point",
+    "pretty",
+    "probably",
+    "problem",
+    "process",
+    "quite",
+    "really",
+    "right",
+    "saying",
+    "second",
+    "seems",
+    "should",
+    "since",
+    "small",
+    "something",
+    "sorry",
+    "sound",
+    "sounds",
+    "start",
+    "still",
+    "story",
+    "stuff",
+    "sure",
+    "taking",
+    "talking",
+    "thank",
+    "thanks",
+    "their",
+    "there",
+    "these",
+    "thing",
+    "things",
+    "think",
+    "third",
+    "those",
+    "though",
+    "thought",
+    "three",
+    "through",
+    "today",
+    "together",
+    "tomorrow",
+    "totally",
+    "trying",
+    "under",
+    "until",
+    "using",
+    "usually",
+    "versus",
+    "wanna",
+    "wanted",
+    "watch",
+    "water",
+    "where",
+    "whether",
+    "which",
+    "while",
+    "whole",
+    "would",
+    "write",
+    "wrong",
+    "years",
+    "yesterday",
+    "young",
+    "yours",
 ];
 
 /// One spelling the corrector can recognise, mapped to the canonical term.
@@ -112,7 +243,11 @@ impl<'a> Token<'a> {
                 core: &word[s..e],
                 trail: &word[e..],
             },
-            _ => Token { lead: word, core: "", trail: "" },
+            _ => Token {
+                lead: word,
+                core: "",
+                trail: "",
+            },
         }
     }
 
@@ -204,7 +339,9 @@ pub fn edit_distance(a: &str, b: &str) -> usize {
     for i in 1..=n {
         for j in 1..=m {
             let cost = usize::from(a[i - 1] != b[j - 1]);
-            let mut v = (d[i - 1][j] + 1).min(d[i][j - 1] + 1).min(d[i - 1][j - 1] + cost);
+            let mut v = (d[i - 1][j] + 1)
+                .min(d[i][j - 1] + 1)
+                .min(d[i - 1][j - 1] + cost);
             if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
                 v = v.min(d[i - 2][j - 2] + 1);
             }
@@ -285,7 +422,10 @@ impl Corrector {
                 Some((MatchQuality::Exact, ""))
             } else if let Some(suffix) = possessive.filter(|_| word_diff <= 1).and_then(|p| {
                 let stem = normalize_key(&last_core[..last_core.len() - p.len()]);
-                let prefix: String = tokens[..n - 1].iter().map(|t| normalize_key(t.core)).collect();
+                let prefix: String = tokens[..n - 1]
+                    .iter()
+                    .map(|t| normalize_key(t.core))
+                    .collect();
                 (format!("{prefix}{stem}") == v.key).then_some(p)
             }) {
                 Some((MatchQuality::Suffixed, suffix))
@@ -295,7 +435,8 @@ impl Corrector {
             {
                 Some((MatchQuality::Suffixed, "s"))
             } else if n == v.words {
-                self.fuzzy(&window_key, v, n).map(|d| (MatchQuality::Fuzzy(d), ""))
+                self.fuzzy(&window_key, v, n)
+                    .map(|d| (MatchQuality::Fuzzy(d), ""))
             } else {
                 None
             };
@@ -456,15 +597,24 @@ mod tests {
     #[test]
     fn fuzzy_fixes_near_misses_of_long_terms() {
         let c = corrector(&[("Kingfisher", ""), ("Grafana", "")]);
-        assert_eq!(c.correct("the Kingfischer project"), "the Kingfisher project");
+        assert_eq!(
+            c.correct("the Kingfischer project"),
+            "the Kingfisher project"
+        );
         assert_eq!(c.correct("open grafanna now"), "open Grafana now");
     }
 
     #[test]
     fn sounds_like_hints_map_to_canonical() {
         let c = corrector(&[("Kubernetes", "cooper netties, cube natives")]);
-        assert_eq!(c.correct("deploy to cooper netties today"), "deploy to Kubernetes today");
-        assert_eq!(c.correct("deploy to cube natives."), "deploy to Kubernetes.");
+        assert_eq!(
+            c.correct("deploy to cooper netties today"),
+            "deploy to Kubernetes today"
+        );
+        assert_eq!(
+            c.correct("deploy to cube natives."),
+            "deploy to Kubernetes."
+        );
         // Fuzzy against a multi-word hint, same word count.
         assert_eq!(c.correct("on cooper nettys"), "on Kubernetes");
     }
@@ -479,7 +629,10 @@ mod tests {
     #[test]
     fn common_words_are_protected_from_fuzzy() {
         let c = corrector(&[("Thera", ""), ("Woulda", "")]);
-        assert_eq!(c.correct("there it is, would you"), "there it is, would you");
+        assert_eq!(
+            c.correct("there it is, would you"),
+            "there it is, would you"
+        );
         // ...but an exact (case-only) match still applies.
         assert_eq!(c.correct("thera is here"), "Thera is here");
     }
@@ -515,8 +668,14 @@ mod tests {
         assert_eq!(
             reps,
             vec![
-                Replacement { from: "tmu".into(), to: "TMU".into() },
-                Replacement { from: "kingfischer".into(), to: "Kingfisher".into() },
+                Replacement {
+                    from: "tmu".into(),
+                    to: "TMU".into()
+                },
+                Replacement {
+                    from: "kingfischer".into(),
+                    to: "Kingfisher".into()
+                },
             ]
         );
     }
@@ -524,7 +683,10 @@ mod tests {
     #[test]
     fn prefers_longer_terms() {
         let c = corrector(&[("Kingfisher", ""), ("Kingfisher Cloud", "")]);
-        assert_eq!(c.correct("on kingfisher cloud today"), "on Kingfisher Cloud today");
+        assert_eq!(
+            c.correct("on kingfisher cloud today"),
+            "on Kingfisher Cloud today"
+        );
         assert_eq!(c.correct("on kingfisher today"), "on Kingfisher today");
     }
 

@@ -58,7 +58,10 @@ pub struct Candidate {
 
 impl From<CalendarEvent> for Candidate {
     fn from(event: CalendarEvent) -> Self {
-        Candidate { event, raw_ics: None }
+        Candidate {
+            event,
+            raw_ics: None,
+        }
     }
 }
 
@@ -115,7 +118,12 @@ fn ics_props(raw: &str) -> impl Iterator<Item = (String, &str)> {
         let line = line.trim_end_matches('\r');
         let colon = line.find(':')?;
         let (head, value) = (&line[..colon], &line[colon + 1..]);
-        let name = head.split(';').next().unwrap_or(head).trim().to_ascii_uppercase();
+        let name = head
+            .split(';')
+            .next()
+            .unwrap_or(head)
+            .trim()
+            .to_ascii_uppercase();
         Some((name, value.trim()))
     })
 }
@@ -124,7 +132,13 @@ fn is_cancelled(c: &Candidate) -> bool {
     let by_status = c.raw_ics.as_deref().is_some_and(|raw| {
         ics_props(raw).any(|(n, v)| n == "STATUS" && v.eq_ignore_ascii_case("CANCELLED"))
     });
-    let summary = c.event.summary.as_deref().unwrap_or_default().trim_start().to_lowercase();
+    let summary = c
+        .event
+        .summary
+        .as_deref()
+        .unwrap_or_default()
+        .trim_start()
+        .to_lowercase();
     by_status || summary.starts_with("canceled:") || summary.starts_with("cancelled:")
 }
 
@@ -132,7 +146,9 @@ fn is_free(c: &Candidate) -> bool {
     c.raw_ics.as_deref().is_some_and(|raw| {
         ics_props(raw).any(|(n, v)| match n.as_str() {
             "TRANSP" => v.eq_ignore_ascii_case("TRANSPARENT"),
-            "X-MICROSOFT-CDO-BUSYSTATUS" | "X-MICROSOFT-CDO-INTENDEDSTATUS" => v.eq_ignore_ascii_case("FREE"),
+            "X-MICROSOFT-CDO-BUSYSTATUS" | "X-MICROSOFT-CDO-INTENDEDSTATUS" => {
+                v.eq_ignore_ascii_case("FREE")
+            }
             _ => false,
         })
     })
@@ -141,7 +157,9 @@ fn is_free(c: &Candidate) -> bool {
 fn self_declined(event: &CalendarEvent, ctx: &AutoLinkContext) -> bool {
     event.attendees.iter().any(|a| {
         attendee_key(a).is_some_and(|k| ctx.is_self(&k))
-            && a.status.as_deref().is_some_and(|s| s.eq_ignore_ascii_case("DECLINED"))
+            && a.status
+                .as_deref()
+                .is_some_and(|s| s.eq_ignore_ascii_case("DECLINED"))
     })
 }
 
@@ -149,11 +167,18 @@ fn self_declined(event: &CalendarEvent, ctx: &AutoLinkContext) -> bool {
 /// organizer. Zero when nobody was invited besides the organizer (a
 /// personal blocker, even when we don't know who the user is).
 pub fn other_attendee_count(event: &CalendarEvent, ctx: &AutoLinkContext) -> usize {
-    let organizer = key(event.organizer_email.as_deref(), event.organizer_name.as_deref());
+    let organizer = key(
+        event.organizer_email.as_deref(),
+        event.organizer_name.as_deref(),
+    );
     let mut invited: HashSet<String> = event
         .attendees
         .iter()
-        .filter(|a| !a.role.as_deref().is_some_and(|r| r.eq_ignore_ascii_case("NON-PARTICIPANT")))
+        .filter(|a| {
+            !a.role
+                .as_deref()
+                .is_some_and(|r| r.eq_ignore_ascii_case("NON-PARTICIPANT"))
+        })
         .filter_map(attendee_key)
         .collect();
     if let Some(org) = &organizer {
@@ -169,7 +194,11 @@ pub fn other_attendee_count(event: &CalendarEvent, ctx: &AutoLinkContext) -> usi
 
 /// Why `candidate` can't be auto-linked to a recording started at `at`, or
 /// `None` when it's eligible.
-pub fn exclusion(candidate: &Candidate, at: DateTime<Utc>, ctx: &AutoLinkContext) -> Option<Exclusion> {
+pub fn exclusion(
+    candidate: &Candidate,
+    at: DateTime<Utc>,
+    ctx: &AutoLinkContext,
+) -> Option<Exclusion> {
     let ev = &candidate.event;
     if ev.start_at > at + EARLY_START || ev.end_at < at - LATE_END {
         return Some(Exclusion::OutOfWindow);
@@ -207,27 +236,41 @@ fn app_markers(app_id: &str) -> &'static [&'static str] {
 
 /// Links any browser call could be: Meet is browser-only, and Teams / Zoom /
 /// Webex all have web clients.
-const WEB_MEETING_MARKERS: &[&str] =
-    &["meet.google.com", "teams.microsoft.com", "teams.live.com", "zoom.us", "webex.com", "meet.jit.si", "whereby.com"];
+const WEB_MEETING_MARKERS: &[&str] = &[
+    "meet.google.com",
+    "teams.microsoft.com",
+    "teams.live.com",
+    "zoom.us",
+    "webex.com",
+    "meet.jit.si",
+    "whereby.com",
+];
 
 /// How strongly the event's conferencing link matches the detected app:
 /// the weight to add, or 0.
 fn app_match(candidate: &Candidate, app: Option<&MeetingAppEvent>) -> f64 {
     let Some(app) = app else { return 0.0 };
     let ev = &candidate.event;
-    let haystack = [ev.location.as_deref(), ev.description.as_deref(), candidate.raw_ics.as_deref()]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join("\n")
-        .to_lowercase();
+    let haystack = [
+        ev.location.as_deref(),
+        ev.description.as_deref(),
+        candidate.raw_ics.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("\n")
+    .to_lowercase();
     if app.is_browser {
         if WEB_MEETING_MARKERS.iter().any(|m| haystack.contains(m)) {
             return WEIGHT_BROWSER_MATCH;
         }
         return 0.0;
     }
-    if app_markers(&app.app_id).iter().any(|m| haystack.contains(m)) {
+    if app_markers(&app.app_id)
+        .iter()
+        .any(|m| haystack.contains(m))
+    {
         WEIGHT_APP_MATCH
     } else {
         0.0
@@ -239,14 +282,21 @@ pub fn score(candidate: &Candidate, at: DateTime<Utc>, ctx: &AutoLinkContext) ->
     let ev = &candidate.event;
     let minutes_off = (ev.start_at - at).num_seconds().abs() as f64 / 60.0;
     let closeness = 1.0 - (minutes_off / CLOSENESS_HORIZON_MINUTES).min(1.0);
-    let others = other_attendee_count(ev, ctx).min(ATTENDEE_SATURATION) as f64 / ATTENDEE_SATURATION as f64;
-    WEIGHT_CLOSENESS * closeness + WEIGHT_ATTENDEES * others + app_match(candidate, ctx.app.as_ref())
+    let others =
+        other_attendee_count(ev, ctx).min(ATTENDEE_SATURATION) as f64 / ATTENDEE_SATURATION as f64;
+    WEIGHT_CLOSENESS * closeness
+        + WEIGHT_ATTENDEES * others
+        + app_match(candidate, ctx.app.as_ref())
 }
 
 /// The best event to link a recording started at `at` to, or `None` when
 /// no candidate is eligible. Ties go to the earlier start, then the id, so
 /// the choice is deterministic.
-pub fn pick_event<'a>(candidates: &'a [Candidate], at: DateTime<Utc>, ctx: &AutoLinkContext) -> Option<&'a Candidate> {
+pub fn pick_event<'a>(
+    candidates: &'a [Candidate],
+    at: DateTime<Utc>,
+    ctx: &AutoLinkContext,
+) -> Option<&'a Candidate> {
     candidates
         .iter()
         .filter(|c| exclusion(c, at, ctx).is_none())
@@ -292,7 +342,10 @@ pub fn infer_owner_emails(events: &[(String, Option<String>, Vec<Attendee>)]) ->
         if total < MIN_EVENTS {
             continue;
         }
-        if let Some((email, n)) = counts.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0))) {
+        if let Some((email, n)) = counts
+            .into_iter()
+            .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+        {
             if n as f64 >= OWNER_SHARE * total as f64 {
                 owners.insert(email);
             }
@@ -309,10 +362,17 @@ pub async fn load_context(
     at: DateTime<Utc>,
     app: Option<MeetingAppEvent>,
 ) -> Result<AutoLinkContext, sqlx::Error> {
-    let mut ctx = AutoLinkContext { app, ..Default::default() };
+    let mut ctx = AutoLinkContext {
+        app,
+        ..Default::default()
+    };
 
     if let Some(me) = VoiceProfilesRepository::get_self(pool).await? {
-        if let Some(email) = me.email.map(|e| e.trim().to_lowercase()).filter(|e| !e.is_empty()) {
+        if let Some(email) = me
+            .email
+            .map(|e| e.trim().to_lowercase())
+            .filter(|e| !e.is_empty())
+        {
             ctx.self_emails.insert(email);
         }
         let name = me.name.trim().to_lowercase();
@@ -332,7 +392,9 @@ pub async fn load_context(
     let events: Vec<(String, Option<String>, Vec<Attendee>)> = rows
         .into_iter()
         .filter_map(|(source, organizer, json)| {
-            serde_json::from_str::<Vec<Attendee>>(&json).ok().map(|a| (source, organizer, a))
+            serde_json::from_str::<Vec<Attendee>>(&json)
+                .ok()
+                .map(|a| (source, organizer, a))
         })
         .collect();
     ctx.self_emails.extend(infer_owner_emails(&events));
@@ -341,7 +403,10 @@ pub async fn load_context(
 
 /// Events overlapping a recording started at `at` (with the early/late
 /// grace), with their raw VEVENT text.
-pub async fn load_candidates(pool: &SqlitePool, at: DateTime<Utc>) -> Result<Vec<Candidate>, sqlx::Error> {
+pub async fn load_candidates(
+    pool: &SqlitePool,
+    at: DateTime<Utc>,
+) -> Result<Vec<Candidate>, sqlx::Error> {
     let rows = sqlx::query_as::<_, CalendarEventRow>(
         "SELECT id, source_id, ics_uid, recurrence_id, summary, description,
                 location, organizer_name, organizer_email, start_at, end_at,
@@ -359,7 +424,9 @@ pub async fn load_candidates(pool: &SqlitePool, at: DateTime<Utc>) -> Result<Vec
         .into_iter()
         .filter_map(|row| {
             let raw_ics = row.raw_ics.clone();
-            CalendarEvent::try_from(row).ok().map(|event| Candidate { event, raw_ics })
+            CalendarEvent::try_from(row)
+                .ok()
+                .map(|event| Candidate { event, raw_ics })
         })
         .collect())
 }
@@ -387,7 +454,10 @@ pub async fn find_event_for_recording(
     }
     let picked = pick_event(&candidates, at, &ctx).map(|c| c.event.clone());
     match &picked {
-        Some(ev) => log::info!("calendar auto-link: picked \"{}\"", ev.summary.as_deref().unwrap_or_default()),
+        Some(ev) => log::info!(
+            "calendar auto-link: picked \"{}\"",
+            ev.summary.as_deref().unwrap_or_default()
+        ),
         None if !candidates.is_empty() => log::info!(
             "calendar auto-link: none of {} overlapping event(s) look like a meeting",
             candidates.len()
@@ -417,7 +487,13 @@ mod tests {
     }
 
     /// An event starting `offset_min` from [`at`], lasting `len_min`.
-    fn event(id: &str, offset_min: i64, len_min: i64, organizer: Option<&str>, attendees: &[&str]) -> CalendarEvent {
+    fn event(
+        id: &str,
+        offset_min: i64,
+        len_min: i64,
+        organizer: Option<&str>,
+        attendees: &[&str],
+    ) -> CalendarEvent {
         let start = at() + Duration::minutes(offset_min);
         CalendarEvent {
             id: id.into(),
@@ -437,11 +513,17 @@ mod tests {
     }
 
     fn cand(event: CalendarEvent, raw: Option<&str>) -> Candidate {
-        Candidate { event, raw_ics: raw.map(str::to_string) }
+        Candidate {
+            event,
+            raw_ics: raw.map(str::to_string),
+        }
     }
 
     fn me() -> AutoLinkContext {
-        AutoLinkContext { self_emails: ["me@corp.com".to_string()].into(), ..Default::default() }
+        AutoLinkContext {
+            self_emails: ["me@corp.com".to_string()].into(),
+            ..Default::default()
+        }
     }
 
     const ME: &str = "me@corp.com";
@@ -450,14 +532,23 @@ mod tests {
         // The real shape: a recurring blocker with no organizer or attendees.
         let mut e = event("Lunch", 0, 60, None, &[]);
         e.summary = Some("Lunch".into());
-        cand(e, Some("BEGIN:VEVENT\nSUMMARY:Lunch\nSTATUS:CONFIRMED\nTRANSP:OPAQUE\nEND:VEVENT"))
+        cand(
+            e,
+            Some("BEGIN:VEVENT\nSUMMARY:Lunch\nSTATUS:CONFIRMED\nTRANSP:OPAQUE\nEND:VEVENT"),
+        )
     }
 
     #[test]
     fn lunch_blocker_is_never_picked() {
         let c = [lunch()];
-        assert_eq!(exclusion(&c[0], at(), &me()), Some(Exclusion::NoOtherAttendees));
-        assert_eq!(exclusion(&c[0], at(), &AutoLinkContext::default()), Some(Exclusion::NoOtherAttendees));
+        assert_eq!(
+            exclusion(&c[0], at(), &me()),
+            Some(Exclusion::NoOtherAttendees)
+        );
+        assert_eq!(
+            exclusion(&c[0], at(), &AutoLinkContext::default()),
+            Some(Exclusion::NoOtherAttendees)
+        );
         assert!(pick_event(&c, at(), &me()).is_none());
     }
 
@@ -466,7 +557,10 @@ mod tests {
         let unknown = AutoLinkContext::default();
         // Organizer invited only themself.
         let own = cand(event("focus", 0, 60, Some(ME), &[ME]), None);
-        assert_eq!(exclusion(&own, at(), &unknown), Some(Exclusion::NoOtherAttendees));
+        assert_eq!(
+            exclusion(&own, at(), &unknown),
+            Some(Exclusion::NoOtherAttendees)
+        );
         // Someone else's event with only me on it is a 1:1, not a blocker.
         let one_to_one = cand(event("1:1", 0, 30, Some("boss@corp.com"), &[ME]), None);
         assert_eq!(exclusion(&one_to_one, at(), &me()), None);
@@ -474,42 +568,76 @@ mod tests {
         // I organized it and invited only me + a room (non-participant).
         let mut room = event("room", 0, 30, Some(ME), &[ME, "room-1@corp.com"]);
         room.attendees[1].role = Some("NON-PARTICIPANT".into());
-        assert_eq!(exclusion(&cand(room, None), at(), &me()), Some(Exclusion::NoOtherAttendees));
+        assert_eq!(
+            exclusion(&cand(room, None), at(), &me()),
+            Some(Exclusion::NoOtherAttendees)
+        );
         // Only me listed as attendee, organizer unknown: needs the identity.
         let only_me = cand(event("hold", 0, 30, None, &[ME]), None);
-        assert_eq!(exclusion(&only_me, at(), &me()), Some(Exclusion::NoOtherAttendees));
+        assert_eq!(
+            exclusion(&only_me, at(), &me()),
+            Some(Exclusion::NoOtherAttendees)
+        );
     }
 
     #[test]
     fn all_day_cancelled_free_and_declined_are_excluded() {
-        let mut all_day = event("offsite", -720, 1440, Some("a@corp.com"), &[ME, "b@corp.com"]);
+        let mut all_day = event(
+            "offsite",
+            -720,
+            1440,
+            Some("a@corp.com"),
+            &[ME, "b@corp.com"],
+        );
         all_day.is_all_day = true;
-        assert_eq!(exclusion(&cand(all_day, None), at(), &me()), Some(Exclusion::AllDay));
+        assert_eq!(
+            exclusion(&cand(all_day, None), at(), &me()),
+            Some(Exclusion::AllDay)
+        );
 
         let cancelled_status = cand(
             event("sync", 0, 30, Some("a@corp.com"), &[ME, "b@corp.com"]),
             Some("BEGIN:VEVENT\r\nSTATUS:CANCELLED\r\nEND:VEVENT"),
         );
-        assert_eq!(exclusion(&cancelled_status, at(), &me()), Some(Exclusion::Cancelled));
+        assert_eq!(
+            exclusion(&cancelled_status, at(), &me()),
+            Some(Exclusion::Cancelled)
+        );
         let mut outlook = event("x", 0, 30, Some("a@corp.com"), &[ME, "b@corp.com"]);
         outlook.summary = Some("Canceled: Weekly sync".into());
-        assert_eq!(exclusion(&cand(outlook, None), at(), &me()), Some(Exclusion::Cancelled));
+        assert_eq!(
+            exclusion(&cand(outlook, None), at(), &me()),
+            Some(Exclusion::Cancelled)
+        );
 
         for raw in ["TRANSP:TRANSPARENT", "X-MICROSOFT-CDO-BUSYSTATUS:FREE"] {
-            let free = cand(event("ooo", 0, 30, Some("a@corp.com"), &[ME, "b@corp.com"]), Some(raw));
-            assert_eq!(exclusion(&free, at(), &me()), Some(Exclusion::Free), "{raw}");
+            let free = cand(
+                event("ooo", 0, 30, Some("a@corp.com"), &[ME, "b@corp.com"]),
+                Some(raw),
+            );
+            assert_eq!(
+                exclusion(&free, at(), &me()),
+                Some(Exclusion::Free),
+                "{raw}"
+            );
         }
 
         let mut declined = event("declined", 0, 30, Some("a@corp.com"), &[ME, "b@corp.com"]);
         declined.attendees[0].status = Some("DECLINED".into());
-        assert_eq!(exclusion(&cand(declined, None), at(), &me()), Some(Exclusion::Declined));
+        assert_eq!(
+            exclusion(&cand(declined, None), at(), &me()),
+            Some(Exclusion::Declined)
+        );
     }
 
     #[test]
     fn window_allows_early_join_and_overrun() {
         let soon = cand(event("soon", 4, 30, Some("a@x.com"), &["b@x.com"]), None);
         let later = cand(event("later", 10, 30, Some("a@x.com"), &["b@x.com"]), None);
-        let overran = cand(event("overran", -70, 60, Some("a@x.com"), &["b@x.com"]), None);
+        let overran = cand(
+            event("overran", -70, 60, Some("a@x.com"), &["b@x.com"]),
+            None,
+        );
         let over = cand(event("over", -90, 60, Some("a@x.com"), &["b@x.com"]), None);
         assert_eq!(exclusion(&soon, at(), &me()), None);
         assert_eq!(exclusion(&later, at(), &me()), Some(Exclusion::OutOfWindow));
@@ -522,12 +650,30 @@ mod tests {
         let mut all_day = event("holiday", -720, 1440, None, &[]);
         all_day.is_all_day = true;
         let cancelled = cand(
-            event("cancelled", 0, 60, Some("a@corp.com"), &[ME, "b@corp.com", "c@corp.com"]),
+            event(
+                "cancelled",
+                0,
+                60,
+                Some("a@corp.com"),
+                &[ME, "b@corp.com", "c@corp.com"],
+            ),
             Some("STATUS:CANCELLED"),
         );
-        let real = cand(event("Project review", 0, 30, Some("a@corp.com"), &[ME, "b@corp.com"]), None);
+        let real = cand(
+            event(
+                "Project review",
+                0,
+                30,
+                Some("a@corp.com"),
+                &[ME, "b@corp.com"],
+            ),
+            None,
+        );
         let c = [lunch(), cand(all_day, None), cancelled, real];
-        assert_eq!(pick_event(&c, at(), &me()).unwrap().event.id, "Project review");
+        assert_eq!(
+            pick_event(&c, at(), &me()).unwrap().event.id,
+            "Project review"
+        );
     }
 
     #[test]
@@ -535,7 +681,10 @@ mod tests {
         // An all-hands that started 50 min ago vs a 1:1 starting now.
         let many: Vec<String> = (0..20).map(|i| format!("p{i}@corp.com")).collect();
         let many_refs: Vec<&str> = many.iter().map(String::as_str).collect();
-        let all_hands = cand(event("all-hands", -50, 90, Some("ceo@corp.com"), &many_refs), None);
+        let all_hands = cand(
+            event("all-hands", -50, 90, Some("ceo@corp.com"), &many_refs),
+            None,
+        );
         let one_to_one = cand(event("1:1", 0, 30, Some("boss@corp.com"), &[ME]), None);
         let c = [all_hands, one_to_one];
         assert_eq!(pick_event(&c, at(), &me()).unwrap().event.id, "1:1");
@@ -543,9 +692,18 @@ mod tests {
 
     #[test]
     fn overlapping_meetings_same_start_prefer_more_attendees() {
-        let small = cand(event("small", 0, 30, Some("a@corp.com"), &[ME, "b@corp.com"]), None);
+        let small = cand(
+            event("small", 0, 30, Some("a@corp.com"), &[ME, "b@corp.com"]),
+            None,
+        );
         let big = cand(
-            event("big", 0, 30, Some("a@corp.com"), &[ME, "b@corp.com", "c@corp.com", "d@corp.com"]),
+            event(
+                "big",
+                0,
+                30,
+                Some("a@corp.com"),
+                &[ME, "b@corp.com", "c@corp.com", "d@corp.com"],
+            ),
             None,
         );
         let c = [small, big];
@@ -554,7 +712,13 @@ mod tests {
 
     #[test]
     fn overlapping_meetings_prefer_detected_app() {
-        let mut zoom = event("zoom call", 0, 30, Some("a@corp.com"), &[ME, "b@corp.com", "c@corp.com"]);
+        let mut zoom = event(
+            "zoom call",
+            0,
+            30,
+            Some("a@corp.com"),
+            &[ME, "b@corp.com", "c@corp.com"],
+        );
         zoom.location = Some("https://corp.zoom.us/j/123".into());
         let teams = cand(
             event("teams call", 0, 30, Some("a@corp.com"), &[ME, "b@corp.com"]),
@@ -565,7 +729,11 @@ mod tests {
         assert_eq!(pick_event(&c, at(), &me()).unwrap().event.id, "zoom call");
         // …but a live Teams call points at the Teams meeting.
         let ctx = AutoLinkContext {
-            app: Some(MeetingAppEvent { app_id: "teams".into(), app_name: "Microsoft Teams".into(), is_browser: false }),
+            app: Some(MeetingAppEvent {
+                app_id: "teams".into(),
+                app_name: "Microsoft Teams".into(),
+                is_browser: false,
+            }),
             ..me()
         };
         assert_eq!(pick_event(&c, at(), &ctx).unwrap().event.id, "teams call");
@@ -574,7 +742,11 @@ mod tests {
     #[test]
     fn infers_calendar_owner() {
         let ev = |source: &str, org: &str, att: &[&str]| {
-            (source.to_string(), Some(org.to_string()), att.iter().map(|e| person(e)).collect::<Vec<_>>())
+            (
+                source.to_string(),
+                Some(org.to_string()),
+                att.iter().map(|e| person(e)).collect::<Vec<_>>(),
+            )
         };
         let events = vec![
             ev("work", "a@corp.com", &["Me@Corp.com", "b@corp.com"]),

@@ -30,10 +30,7 @@ impl VoiceProfilesRepository {
         .await
     }
 
-    pub async fn get_by_id(
-        pool: &SqlitePool,
-        id: &str,
-    ) -> Result<Option<VoiceProfile>, SqlxError> {
+    pub async fn get_by_id(pool: &SqlitePool, id: &str) -> Result<Option<VoiceProfile>, SqlxError> {
         sqlx::query_as::<_, VoiceProfile>(&format!(
             "SELECT {PROFILE_COLUMNS} FROM voice_profiles WHERE id = ?"
         ))
@@ -62,10 +59,11 @@ impl VoiceProfilesRepository {
     /// transaction.
     pub async fn clear_self(pool: &SqlitePool) -> Result<u64, SqlxError> {
         let now = Utc::now().to_rfc3339();
-        let res = sqlx::query("UPDATE voice_profiles SET is_self = 0, updated_at = ? WHERE is_self = 1")
-            .bind(&now)
-            .execute(pool)
-            .await?;
+        let res =
+            sqlx::query("UPDATE voice_profiles SET is_self = 0, updated_at = ? WHERE is_self = 1")
+                .bind(&now)
+                .execute(pool)
+                .await?;
         Ok(res.rows_affected())
     }
 
@@ -321,7 +319,9 @@ impl VoiceProfilesRepository {
             bytes_to_floats(&winner.embedding),
             bytes_to_floats(&loser.embedding),
         ) {
-            (Some(w), Some(l)) if winner.embedding_dim == loser.embedding_dim && w.len() == l.len() => {
+            (Some(w), Some(l))
+                if winner.embedding_dim == loser.embedding_dim && w.len() == l.len() =>
+            {
                 Some(crate::speaker_diarization::embedding_math::merge_centroids(
                     &w,
                     winner.sample_count.max(0) as usize,
@@ -333,7 +333,10 @@ impl VoiceProfilesRepository {
         };
         let centroid_updated = merged.is_some();
         let (embedding, sample_count) = match merged {
-            Some(m) => (floats_to_bytes(&m), winner.sample_count + loser.sample_count),
+            Some(m) => (
+                floats_to_bytes(&m),
+                winner.sample_count + loser.sample_count,
+            ),
             None => (winner.embedding.clone(), winner.sample_count),
         };
         let is_self = winner.is_self || loser.is_self;
@@ -502,7 +505,9 @@ mod tests {
         transcript(&pool, "t2", "Seb Burrell", Some(&me)).await;
         transcript(&pool, "t3", "Speaker 1", None).await;
 
-        let outcome = VoiceProfilesRepository::merge_into(&pool, &me, &dup).await.unwrap();
+        let outcome = VoiceProfilesRepository::merge_into(&pool, &me, &dup)
+            .await
+            .unwrap();
         assert_eq!(
             outcome,
             ProfileMergeOutcome {
@@ -525,7 +530,10 @@ mod tests {
         let c = bytes_to_floats(&merged.embedding).unwrap();
         let (x, y) = (0.25f32, 0.75f32);
         let n = (x * x + y * y).sqrt();
-        assert!((c[0] - x / n).abs() < 1e-5 && (c[1] - y / n).abs() < 1e-5, "{c:?}");
+        assert!(
+            (c[0] - x / n).abs() < 1e-5 && (c[1] - y / n).abs() < 1e-5,
+            "{c:?}"
+        );
 
         assert_eq!(
             links(&pool).await,
@@ -548,9 +556,14 @@ mod tests {
             .unwrap();
         transcript(&pool, "t1", "Me", Some(&me)).await;
 
-        let outcome = VoiceProfilesRepository::merge_into(&pool, &other, &me).await.unwrap();
+        let outcome = VoiceProfilesRepository::merge_into(&pool, &other, &me)
+            .await
+            .unwrap();
         assert!(outcome.is_self);
-        let survivor = VoiceProfilesRepository::get_self(&pool).await.unwrap().unwrap();
+        let survivor = VoiceProfilesRepository::get_self(&pool)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(survivor.id, other);
         assert_eq!(survivor.name, "Seb");
         assert_eq!(
@@ -569,13 +582,21 @@ mod tests {
             .await
             .unwrap();
         transcript(&pool, "t1", "B", Some(&b)).await;
-        let outcome = VoiceProfilesRepository::merge_into(&pool, &a, &b).await.unwrap();
+        let outcome = VoiceProfilesRepository::merge_into(&pool, &a, &b)
+            .await
+            .unwrap();
         assert!(!outcome.centroid_updated);
         assert_eq!(outcome.sample_count, 3);
         assert_eq!(outcome.relinked_transcripts, 1);
-        let a_row = VoiceProfilesRepository::get_by_id(&pool, &a).await.unwrap().unwrap();
+        let a_row = VoiceProfilesRepository::get_by_id(&pool, &a)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(bytes_to_floats(&a_row.embedding).unwrap(), vec![1.0, 0.0]);
-        assert!(VoiceProfilesRepository::get_by_id(&pool, &b).await.unwrap().is_none());
+        assert!(VoiceProfilesRepository::get_by_id(&pool, &b)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -584,9 +605,16 @@ mod tests {
         let a = VoiceProfilesRepository::create(&pool, "A", None, &[1.0], 1)
             .await
             .unwrap();
-        assert!(VoiceProfilesRepository::merge_into(&pool, &a, &a).await.is_err());
-        assert!(VoiceProfilesRepository::merge_into(&pool, &a, "nope").await.is_err());
-        assert!(VoiceProfilesRepository::get_by_id(&pool, &a).await.unwrap().is_some());
+        assert!(VoiceProfilesRepository::merge_into(&pool, &a, &a)
+            .await
+            .is_err());
+        assert!(VoiceProfilesRepository::merge_into(&pool, &a, "nope")
+            .await
+            .is_err());
+        assert!(VoiceProfilesRepository::get_by_id(&pool, &a)
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]

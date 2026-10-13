@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use llama_protocol::{Request, Response};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
 use tokio::sync::{Mutex, RwLock};
 
 use super::models;
@@ -292,7 +292,11 @@ impl SidecarManager {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit()); // Log stderr to main process
+            // Piped, not inherited: when Parley is launched from a desktop
+            // entry its own stderr can be a pipe nobody reads any more, and
+            // the helper (which restores the default SIGPIPE action) would
+            // die on its first diagnostic line.
+            .stderr(Stdio::piped());
 
         let mut child = command.spawn().with_context(|| {
             format!(
@@ -309,6 +313,9 @@ impl SidecarManager {
             .stdout
             .take()
             .ok_or_else(|| anyhow!("Failed to get stdout"))?;
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(forward_helper_stderr(stderr));
+        }
 
         // Store handles
         {
@@ -398,10 +405,7 @@ impl SidecarManager {
                     // Timeout reached - shutdown sidecar to stop generation
                     log::error!("Request timeout after {:?}, shutting down sidecar", timeout);
                     if let Err(shutdown_err) = self.shutdown().await {
-                        log::error!(
-                            "Failed to shutdown sidecar after timeout: {}",
-                            shutdown_err
-                        );
+                        log::error!("Failed to shutdown sidecar after timeout: {}", shutdown_err);
                     }
                     return Err(anyhow!("Request timed out after {:?}", timeout));
                 }
@@ -417,13 +421,7 @@ impl SidecarManager {
                     self.update_activity().await;
                     return Ok(terminal);
                 }
-                Err(e) => {
-                    return Err(anyhow!(
-                        "Unparseable sidecar response: {} ({})",
-                        line,
-                        e
-                    ))
-                }
+                Err(e) => return Err(anyhow!("Unparseable sidecar response: {} ({})", line, e)),
             }
         }
     }
@@ -696,6 +694,35 @@ impl SidecarManager {
 
             log::debug!("Idle check loop exited (generation {})", generation);
         });
+    }
+}
+
+/// Drain the helper's stderr into the log until it exits. llama.cpp is
+/// chatty, so ordinary lines go to debug; anything that looks like a
+/// failure is a warning so a crash leaves its reason in `parley.log`.
+/// Reads raw bytes so a non-UTF-8 line can't stop the drain and leave the
+/// helper blocked on a full pipe.
+async fn forward_helper_stderr(stderr: ChildStderr) {
+    let mut reader = BufReader::new(stderr);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line).await {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let text = String::from_utf8_lossy(&line);
+                let text = text.trim_end();
+                if text.is_empty() {
+                    continue;
+                }
+                let lower = text.to_ascii_lowercase();
+                if lower.contains("error") || lower.contains("panic") || lower.contains("fail") {
+                    log::warn!("llama-helper: {}", text);
+                } else {
+                    log::debug!("llama-helper: {}", text);
+                }
+            }
+        }
     }
 }
 

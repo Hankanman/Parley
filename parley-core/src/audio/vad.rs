@@ -78,7 +78,11 @@ impl ContinuousVadProcessor {
     /// Create a VAD processor with no specific source tag (defaults to Mic for
     /// backward compatibility with helpers that operate on a single mixed stream).
     pub fn new(input_sample_rate: u32, redemption_time_ms: u32) -> Result<Self> {
-        Self::new_with_source(input_sample_rate, redemption_time_ms, DeviceType::Microphone)
+        Self::new_with_source(
+            input_sample_rate,
+            redemption_time_ms,
+            DeviceType::Microphone,
+        )
     }
 
     /// Create a VAD processor that tags every emitted segment with `source`.
@@ -140,8 +144,8 @@ impl ContinuousVadProcessor {
                 // speech register as silence — needed for meeting audio that
                 // has continuous low-level room noise.
                 threshold: 0.45,
-                min_silence_duration,           // From caller (typically 400ms live, 800ms batch).
-                min_speech_duration: 0.25,      // Reject segments shorter than 250ms.
+                min_silence_duration, // From caller (typically 400ms live, 800ms batch).
+                min_speech_duration: 0.25, // Reject segments shorter than 250ms.
                 window_size: VAD_WINDOW_SIZE as i32, // 32 ms at 16 kHz, silero-vad's expected window.
                 max_speech_duration,
             },
@@ -259,7 +263,9 @@ impl ContinuousVadProcessor {
     fn drain_segments(&mut self) -> Vec<SpeechSegment> {
         let mut out = Vec::new();
         while !self.detector.is_empty() {
-            let Some(seg) = self.detector.front() else { break };
+            let Some(seg) = self.detector.front() else {
+                break;
+            };
             let start_sample = seg.start();
             let samples_slice = seg.samples();
             let n_samples = samples_slice.len();
@@ -288,7 +294,6 @@ impl ContinuousVadProcessor {
         }
         out
     }
-
 }
 
 /// Stateful, anti-aliased sample-rate converter used to bring pipeline audio
@@ -336,8 +341,14 @@ impl StreamingDownsampler {
             oversampling_factor: 128,
             window: WindowFunction::BlackmanHarris2,
         };
-        let resampler = SincFixedIn::<f32>::new(ratio, 1.0, params, block_in, 1)
-            .map_err(|e| anyhow!("failed to create {}→{} Hz downsampler: {}", input_rate, output_rate, e))?;
+        let resampler = SincFixedIn::<f32>::new(ratio, 1.0, params, block_in, 1).map_err(|e| {
+            anyhow!(
+                "failed to create {}→{} Hz downsampler: {}",
+                input_rate,
+                output_rate,
+                e
+            )
+        })?;
         Ok(Self {
             resampler,
             block_in,
@@ -530,7 +541,11 @@ mod downsampler_tests {
         // ≈ 21 output samples) in the very first call; every window after
         // that maps 2400 → 800 exactly, which keeps VAD timestamps aligned.
         let first = ds.process(&vec![0.1; 2400]).unwrap();
-        assert!((760..=800).contains(&first.len()), "first window: {}", first.len());
+        assert!(
+            (760..=800).contains(&first.len()),
+            "first window: {}",
+            first.len()
+        );
         for _ in 0..20 {
             let out = ds.process(&vec![0.1; 2400]).unwrap();
             assert_eq!(out.len(), 800);
@@ -570,8 +585,18 @@ mod downsampler_tests {
         let p = rms(&out_pass[4_000..]);
         let s = rms(&out_stop[4_000..]);
         let in_rms = rms(&in_pass);
-        assert!((p - in_rms).abs() / in_rms < 0.05, "passband rms {} vs {}", p, in_rms);
-        assert!(s < in_rms * 0.01, "stopband leak rms {} (input {})", s, in_rms);
+        assert!(
+            (p - in_rms).abs() / in_rms < 0.05,
+            "passband rms {} vs {}",
+            p,
+            in_rms
+        );
+        assert!(
+            s < in_rms * 0.01,
+            "stopband leak rms {} (input {})",
+            s,
+            in_rms
+        );
     }
 }
 
@@ -657,10 +682,7 @@ mod tests {
         let audio = generate_test_audio_with_speech(120.0, 16_000);
         let result = get_speech_chunks_with_progress(&audio, 2000, |progress, _| progress < 50);
         assert!(result.is_err(), "expected cancellation error");
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("cancelled"));
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
     }
 
     #[test]

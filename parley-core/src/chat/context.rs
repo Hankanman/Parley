@@ -38,7 +38,8 @@ Rules:\n\
 
 /// Repeated after the question: small local models weigh the end of a long
 /// prompt most, and without this they tend to drop the citations.
-pub const ANSWER_REMINDER: &str = "Answer concisely. Cite the transcript timestamp for each point, e.g. [12:34]. \
+pub const ANSWER_REMINDER: &str =
+    "Answer concisely. Cite the transcript timestamp for each point, e.g. [12:34]. \
 If the transcript doesn't contain the answer, say so.";
 
 /// One transcript segment, reduced to what the chat context needs.
@@ -71,7 +72,10 @@ pub struct MeetingContext {
 pub enum TranscriptCoverage {
     Full,
     /// Only `selected` of `total` chunks, chosen by keyword relevance.
-    Excerpts { selected: usize, total: usize },
+    Excerpts {
+        selected: usize,
+        total: usize,
+    },
     Empty,
 }
 
@@ -146,16 +150,116 @@ pub fn chunk_segments(segments: &[ContextSegment], max_chars: usize) -> Vec<Tran
 
 static STOPWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     [
-        "the", "and", "for", "are", "but", "not", "you", "all", "any", "can", "had", "her", "was",
-        "one", "our", "out", "has", "have", "him", "his", "how", "its", "may", "new", "now", "old",
-        "see", "two", "who", "did", "does", "get", "got", "let", "say", "said", "she", "too", "use",
-        "that", "this", "with", "from", "they", "them", "then", "than", "what", "when", "where",
-        "which", "while", "will", "would", "could", "should", "there", "their", "about", "into",
-        "over", "were", "been", "being", "some", "such", "just", "like", "also", "very", "much",
-        "more", "most", "only", "your", "yours", "mine", "ours", "here", "these", "those", "why",
-        "yes", "yeah", "okay", "really", "think", "know", "going", "want", "meeting", "tell",
-        "talk", "talked", "discuss", "discussed", "please", "anything", "something", "thing",
-        "things", "make", "made", "well", "right", "good", "kind", "sort", "lot", "gonna",
+        "the",
+        "and",
+        "for",
+        "are",
+        "but",
+        "not",
+        "you",
+        "all",
+        "any",
+        "can",
+        "had",
+        "her",
+        "was",
+        "one",
+        "our",
+        "out",
+        "has",
+        "have",
+        "him",
+        "his",
+        "how",
+        "its",
+        "may",
+        "new",
+        "now",
+        "old",
+        "see",
+        "two",
+        "who",
+        "did",
+        "does",
+        "get",
+        "got",
+        "let",
+        "say",
+        "said",
+        "she",
+        "too",
+        "use",
+        "that",
+        "this",
+        "with",
+        "from",
+        "they",
+        "them",
+        "then",
+        "than",
+        "what",
+        "when",
+        "where",
+        "which",
+        "while",
+        "will",
+        "would",
+        "could",
+        "should",
+        "there",
+        "their",
+        "about",
+        "into",
+        "over",
+        "were",
+        "been",
+        "being",
+        "some",
+        "such",
+        "just",
+        "like",
+        "also",
+        "very",
+        "much",
+        "more",
+        "most",
+        "only",
+        "your",
+        "yours",
+        "mine",
+        "ours",
+        "here",
+        "these",
+        "those",
+        "why",
+        "yes",
+        "yeah",
+        "okay",
+        "really",
+        "think",
+        "know",
+        "going",
+        "want",
+        "meeting",
+        "tell",
+        "talk",
+        "talked",
+        "discuss",
+        "discussed",
+        "please",
+        "anything",
+        "something",
+        "thing",
+        "things",
+        "make",
+        "made",
+        "well",
+        "right",
+        "good",
+        "kind",
+        "sort",
+        "lot",
+        "gonna",
     ]
     .into_iter()
     .collect()
@@ -196,7 +300,10 @@ pub fn select_relevant_chunks(
     if chunks.is_empty() || budget_tokens == 0 {
         return Vec::new();
     }
-    let costs: Vec<usize> = chunks.iter().map(|c| rough_token_count(&c.text) + 1).collect();
+    let costs: Vec<usize> = chunks
+        .iter()
+        .map(|c| rough_token_count(&c.text) + 1)
+        .collect();
 
     let query_terms: HashSet<String> = keywords(query).into_iter().collect();
     let chunk_terms: Vec<HashSet<String>> = chunks
@@ -482,16 +589,17 @@ pub enum AnswerSpan {
     Text(String),
     /// `label` is the citation as written (brackets included); `seconds` is
     /// its start time.
-    Citation { label: String, seconds: f64 },
+    Citation {
+        label: String,
+        seconds: f64,
+    },
 }
 
 static CITATION_RE: Lazy<Regex> = Lazy::new(|| {
     // [mm:ss], [h:mm:ss], and ranges like [12:34-13:10] / [12:34–13:10]
     // (cited by their start).
-    Regex::new(
-        r"\[(?:(\d{1,2}):)?(\d{1,3}):([0-5]\d)(?:\s*[-–]\s*(?:\d{1,2}:)?\d{1,3}:[0-5]\d)?\]",
-    )
-    .expect("valid citation regex")
+    Regex::new(r"\[(?:(\d{1,2}):)?(\d{1,3}):([0-5]\d)(?:\s*[-–]\s*(?:\d{1,2}:)?\d{1,3}:[0-5]\d)?\]")
+        .expect("valid citation regex")
 });
 
 /// Split an answer into text and timestamp citations, so the UI can make
@@ -501,7 +609,9 @@ pub fn parse_citations(answer: &str) -> Vec<AnswerSpan> {
     let mut last = 0;
     for caps in CITATION_RE.captures_iter(answer) {
         let whole = caps.get(0).expect("match");
-        let hours: f64 = caps.get(1).map_or(0.0, |m| m.as_str().parse().unwrap_or(0.0));
+        let hours: f64 = caps
+            .get(1)
+            .map_or(0.0, |m| m.as_str().parse().unwrap_or(0.0));
         let minutes: f64 = caps[2].parse().unwrap_or(0.0);
         let secs: f64 = caps[3].parse().unwrap_or(0.0);
         if whole.start() > last {
@@ -596,7 +706,10 @@ mod tests {
                 prev_bs = if c == '\\' { prev_bs + 1 } else { 0 };
             }
             // The citation is still a link.
-            assert!(linked.starts_with("Done [\\[12:34\\]](parley-time:754)."), "{linked}");
+            assert!(
+                linked.starts_with("Done [\\[12:34\\]](parley-time:754)."),
+                "{linked}"
+            );
         }
     }
 
@@ -626,7 +739,10 @@ mod tests {
 
     #[test]
     fn segment_lines_carry_speaker_and_time() {
-        assert_eq!(segment_line(&seg(65.0, "Alice", " Hi all ")), "[01:05] Alice: Hi all");
+        assert_eq!(
+            segment_line(&seg(65.0, "Alice", " Hi all ")),
+            "[01:05] Alice: Hi all"
+        );
         let untimed = ContextSegment {
             start: None,
             speaker: "Bob".into(),
@@ -647,7 +763,10 @@ mod tests {
                 seg(20.0, "Bob", "   "),
             ],
         };
-        let history = vec![turn(true, "Who is Bob?"), turn(false, "A participant [00:12].")];
+        let history = vec![
+            turn(true, "Who is Bob?"),
+            turn(false, "A participant [00:12]."),
+        ];
         let prompt = build_prompt(&meeting, &history, "  What was approved? ", 8_000);
 
         assert_eq!(prompt.coverage, TranscriptCoverage::Full);
@@ -658,8 +777,12 @@ mod tests {
         assert!(u.contains("<notes>\n- Check with finance\n</notes>"));
         assert!(u.contains("[00:05] Alice: Let's review the budget.\n[00:12] Bob: Q3 is approved."));
         assert!(!u.contains("[00:20]"), "blank segments are dropped");
-        assert!(u.contains("<conversation>\nUser: Who is Bob?\nAssistant: A participant [00:12].\n</conversation>"));
-        assert!(u.ends_with(&format!("Question: What was approved?\n\n{ANSWER_REMINDER}")));
+        assert!(u.contains(
+            "<conversation>\nUser: Who is Bob?\nAssistant: A participant [00:12].\n</conversation>"
+        ));
+        assert!(u.ends_with(&format!(
+            "Question: What was approved?\n\n{ANSWER_REMINDER}"
+        )));
         // Order: summary, notes, transcript, conversation, question.
         let pos = |s: &str| u.find(s).unwrap();
         assert!(pos("<summary>") < pos("<notes>"));
@@ -683,11 +806,12 @@ mod tests {
             .collect();
         let prompt = build_prompt(&MeetingContext::default(), &history, "q", 50_000);
         assert!(prompt.user.contains("message number 29"));
-        assert!(prompt.user.contains(&format!("message number {}", 30 - MAX_HISTORY_MESSAGES)));
-        assert!(!prompt.user.contains(&format!(
-            "message number {}",
-            30 - MAX_HISTORY_MESSAGES - 1
-        )));
+        assert!(prompt
+            .user
+            .contains(&format!("message number {}", 30 - MAX_HISTORY_MESSAGES)));
+        assert!(!prompt
+            .user
+            .contains(&format!("message number {}", 30 - MAX_HISTORY_MESSAGES - 1)));
     }
 
     #[test]
@@ -713,7 +837,9 @@ mod tests {
             }
             other => panic!("expected excerpts, got {other:?}"),
         }
-        assert!(prompt.user.contains("[41:40] Bob: The zeppelin launch slips to November."));
+        assert!(prompt
+            .user
+            .contains("[41:40] Bob: The zeppelin launch slips to November."));
         assert!(prompt.user.contains("…"));
         assert!(rough_token_count(&prompt.user) + rough_token_count(&prompt.system) < 3_000);
     }
@@ -722,14 +848,21 @@ mod tests {
     fn follow_up_uses_previous_question_for_relevance() {
         let mut segments = Vec::new();
         for i in 0..400 {
-            segments.push(seg(i as f64 * 10.0, "Alice", "Routine chatter about nothing in particular here."));
+            segments.push(seg(
+                i as f64 * 10.0,
+                "Alice",
+                "Routine chatter about nothing in particular here.",
+            ));
         }
         segments[100] = seg(1000.0, "Carol", "Carol owns the zeppelin budget.");
         let meeting = MeetingContext {
             segments,
             ..Default::default()
         };
-        let history = vec![turn(true, "Tell me about the zeppelin."), turn(false, "It slips.")];
+        let history = vec![
+            turn(true, "Tell me about the zeppelin."),
+            turn(false, "It slips."),
+        ];
         let prompt = build_prompt(&meeting, &history, "Who owns it?", 3_000);
         assert!(prompt.user.contains("Carol owns the zeppelin budget."));
     }
@@ -748,7 +881,11 @@ mod tests {
 
         let huge = vec![seg(0.0, "S", &"y".repeat(500)), seg(1.0, "S", "short")];
         let chunks = chunk_segments(&huge, 100);
-        assert_eq!(chunks.len(), 2, "an oversized segment stays whole in its own chunk");
+        assert_eq!(
+            chunks.len(),
+            2,
+            "an oversized segment stays whole in its own chunk"
+        );
     }
 
     #[test]

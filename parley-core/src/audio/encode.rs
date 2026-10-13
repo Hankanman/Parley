@@ -20,9 +20,9 @@ fn spawn_pcm_to_aac(
     let ffmpeg_path = find_ffmpeg_path().ok_or_else(|| {
         anyhow::anyhow!("FFmpeg not found. Please install FFmpeg to save recordings.")
     })?;
-    let output = output_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("output path is not valid UTF-8: {}", output_path.display()))?;
+    let output = output_path.to_str().ok_or_else(|| {
+        anyhow::anyhow!("output path is not valid UTF-8: {}", output_path.display())
+    })?;
 
     let mut command = Command::new(ffmpeg_path);
     command
@@ -88,7 +88,11 @@ fn finish_ffmpeg(
     let stderr = stderr_reader.join().unwrap_or_default();
 
     if let Err(e) = write_result {
-        error!("Writing PCM to FFmpeg failed: {} (stderr: {})", e, stderr.trim());
+        error!(
+            "Writing PCM to FFmpeg failed: {} (stderr: {})",
+            e,
+            stderr.trim()
+        );
         return Err(anyhow::anyhow!(
             "failed to feed audio to FFmpeg: {} ({})",
             e,

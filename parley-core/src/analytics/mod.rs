@@ -7,8 +7,8 @@
 pub mod compute;
 
 pub use compute::{
-    compute, format_clock, format_span, segments_from_rows, speaker_display_name, Channel, MeetingStats, Monologue,
-    Segment, SpeakerStats, StoredSegment,
+    compute, format_clock, format_span, segments_from_rows, speaker_display_name, Channel,
+    MeetingStats, Monologue, Segment, SpeakerStats, StoredSegment,
 };
 
 use sqlx::{Row, SqlitePool};
@@ -19,11 +19,12 @@ pub async fn load_meeting_segments(
     pool: &SqlitePool,
     meeting_id: &str,
 ) -> Result<(Vec<Segment>, Option<f64>), sqlx::Error> {
-    let duration: Option<f64> = sqlx::query_scalar("SELECT duration_seconds FROM meetings WHERE id = ?")
-        .bind(meeting_id)
-        .fetch_optional(pool)
-        .await?
-        .flatten();
+    let duration: Option<f64> =
+        sqlx::query_scalar("SELECT duration_seconds FROM meetings WHERE id = ?")
+            .bind(meeting_id)
+            .fetch_optional(pool)
+            .await?
+            .flatten();
 
     // Same order as the transcript view / MCP: sequence id (authoritative
     // for live recordings), then start time, then the wall-clock stamp.
@@ -66,7 +67,10 @@ pub async fn load_meeting_segments(
 }
 
 /// Load and compute a meeting's stats in one go.
-pub async fn meeting_stats(pool: &SqlitePool, meeting_id: &str) -> Result<MeetingStats, sqlx::Error> {
+pub async fn meeting_stats(
+    pool: &SqlitePool,
+    meeting_id: &str,
+) -> Result<MeetingStats, sqlx::Error> {
     let (segments, duration) = load_meeting_segments(pool, meeting_id).await?;
     Ok(compute(&segments, duration))
 }
@@ -78,13 +82,18 @@ mod tests {
     use std::str::FromStr;
 
     async fn test_pool() -> SqlitePool {
-        let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap().foreign_keys(true);
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(true);
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(options)
             .await
             .expect("in-memory sqlite pool");
-        sqlx::migrate!("./migrations").run(&pool).await.expect("run migrations");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("run migrations");
         pool
     }
 
@@ -134,13 +143,46 @@ mod tests {
         .await
         .unwrap();
 
-        insert(&pool, "t2", Some(2), "Sounds good?", Some("Speaker 1"), Some("system"), Some("vp1"), (Some(10.0), Some(20.0))).await;
-        insert(&pool, "t1", Some(1), "Hi all", Some("Me"), Some("mic"), None, (Some(0.0), Some(10.0))).await;
-        insert(&pool, "t3", None, "legacy row", Some("system"), None, None, (None, None)).await;
+        insert(
+            &pool,
+            "t2",
+            Some(2),
+            "Sounds good?",
+            Some("Speaker 1"),
+            Some("system"),
+            Some("vp1"),
+            (Some(10.0), Some(20.0)),
+        )
+        .await;
+        insert(
+            &pool,
+            "t1",
+            Some(1),
+            "Hi all",
+            Some("Me"),
+            Some("mic"),
+            None,
+            (Some(0.0), Some(10.0)),
+        )
+        .await;
+        insert(
+            &pool,
+            "t3",
+            None,
+            "legacy row",
+            Some("system"),
+            None,
+            None,
+            (None, None),
+        )
+        .await;
 
         let (segments, duration) = load_meeting_segments(&pool, "m1").await.unwrap();
         assert_eq!(duration, Some(60.0));
-        let names: Vec<_> = segments.iter().map(|s| s.speaker.clone().unwrap()).collect();
+        let names: Vec<_> = segments
+            .iter()
+            .map(|s| s.speaker.clone().unwrap())
+            .collect();
         assert_eq!(names, vec!["Me", "Alice", "Others"]);
         assert_eq!(
             segments.iter().map(|s| s.channel).collect::<Vec<_>>(),

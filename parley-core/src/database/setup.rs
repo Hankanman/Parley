@@ -49,7 +49,10 @@ pub async fn prepare_database_on_startup() -> Result<StartupOutcome, String> {
             "Marked {} meeting(s) left 'recording' by a previous run as 'interrupted'",
             n
         ),
-        Err(e) => warn!("Failed to sweep stale 'recording' meetings at startup: {}", e),
+        Err(e) => warn!(
+            "Failed to sweep stale 'recording' meetings at startup: {}",
+            e
+        ),
     }
 
     Ok(StartupOutcome::Initialized(db_manager))

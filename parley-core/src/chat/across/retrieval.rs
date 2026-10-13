@@ -123,11 +123,16 @@ impl AskFilters {
             parts.push(format!("passages where {} speaks", p.name.trim()));
         }
         if let Some(s) = &self.series {
-            parts.push(format!("the meeting series \"{}\"", s.title.trim().replace('"', "'")));
+            parts.push(format!(
+                "the meeting series \"{}\"",
+                s.title.trim().replace('"', "'")
+            ));
         }
         let day = |d: &DateTime<Utc>| super::prompt::format_meeting_date(d);
         match (&self.from, &self.to) {
-            (Some(f), Some(t)) => parts.push(format!("meetings from {} to before {}", day(f), day(t))),
+            (Some(f), Some(t)) => {
+                parts.push(format!("meetings from {} to before {}", day(f), day(t)))
+            }
             (Some(f), None) => parts.push(format!("meetings since {}", day(f))),
             (None, Some(t)) => parts.push(format!("meetings before {}", day(t))),
             (None, None) => {}
@@ -173,13 +178,17 @@ pub struct PersonOption {
 
 /// Voice profiles, by name.
 pub async fn list_people(pool: &SqlitePool) -> Result<Vec<PersonOption>, sqlx::Error> {
-    let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT id, name FROM voice_profiles WHERE TRIM(name) != '' ORDER BY name COLLATE NOCASE")
-            .fetch_all(pool)
-            .await?;
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, name FROM voice_profiles WHERE TRIM(name) != '' ORDER BY name COLLATE NOCASE",
+    )
+    .fetch_all(pool)
+    .await?;
     Ok(rows
         .into_iter()
-        .map(|(voice_profile_id, name)| PersonOption { voice_profile_id, name })
+        .map(|(voice_profile_id, name)| PersonOption {
+            voice_profile_id,
+            name,
+        })
         .collect())
 }
 
@@ -261,16 +270,18 @@ pub async fn load_segments(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(id, start, speaker, voice_profile_id, text)| RetrievedSegment {
-            id,
-            start,
-            speaker: speaker
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "Speaker".to_string()),
-            voice_profile_id,
-            text: text.trim().to_string(),
-        })
+        .map(
+            |(id, start, speaker, voice_profile_id, text)| RetrievedSegment {
+                id,
+                start,
+                speaker: speaker
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "Speaker".to_string()),
+                voice_profile_id,
+                text: text.trim().to_string(),
+            },
+        )
         .collect())
 }
 
@@ -281,7 +292,10 @@ pub struct MeetingMeta {
     pub created_at: Option<DateTime<Utc>>,
 }
 
-async fn load_meeting_meta(pool: &SqlitePool, id: &str) -> Result<Option<MeetingMeta>, sqlx::Error> {
+async fn load_meeting_meta(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<MeetingMeta>, sqlx::Error> {
     // strftime normalises both stored formats ('T' or ' ' separator, any
     // offset) to UTC.
     let row: Option<(String, String, Option<String>)> = sqlx::query_as(
@@ -365,8 +379,13 @@ pub async fn fts_candidates(
     );
     qb.push_bind(expression.to_string());
     push_meeting_filters(&mut qb, filters);
-    qb.push(" ORDER BY transcripts_fts.rank LIMIT ").push_bind(limit);
-    match qb.build_query_as::<(String, String)>().fetch_all(pool).await {
+    qb.push(" ORDER BY transcripts_fts.rank LIMIT ")
+        .push_bind(limit);
+    match qb
+        .build_query_as::<(String, String)>()
+        .fetch_all(pool)
+        .await
+    {
         Ok(rows) => Ok(rows
             .into_iter()
             .map(|(transcript_id, meeting_id)| SegmentHit {
@@ -374,8 +393,13 @@ pub async fn fts_candidates(
                 meeting_id,
             })
             .collect()),
-        Err(sqlx::Error::Database(db)) if db.message().contains("fts5") || db.message().contains("MATCH") => {
-            log::warn!("FTS5 rejected ask expression {expression:?}: {}", db.message());
+        Err(sqlx::Error::Database(db))
+            if db.message().contains("fts5") || db.message().contains("MATCH") =>
+        {
+            log::warn!(
+                "FTS5 rejected ask expression {expression:?}: {}",
+                db.message()
+            );
             Ok(Vec::new())
         }
         Err(e) => Err(e),
@@ -390,7 +414,8 @@ async fn recent_meetings(
 ) -> Result<Vec<String>, sqlx::Error> {
     let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new("SELECT m.id FROM meetings m WHERE 1 = 1");
     push_meeting_filters(&mut qb, filters);
-    qb.push(" ORDER BY julianday(m.created_at) DESC LIMIT ").push_bind(limit);
+    qb.push(" ORDER BY julianday(m.created_at) DESC LIMIT ")
+        .push_bind(limit);
     let rows: Vec<(String,)> = qb.build_query_as().fetch_all(pool).await?;
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
@@ -414,7 +439,11 @@ fn segment_chars(s: &RetrievedSegment) -> usize {
 
 /// Segment range of the passage around hit `ix`: one segment of lead-in,
 /// then following segments until about `target_chars`.
-pub fn passage_around(segments: &[RetrievedSegment], ix: usize, target_chars: usize) -> (usize, usize) {
+pub fn passage_around(
+    segments: &[RetrievedSegment],
+    ix: usize,
+    target_chars: usize,
+) -> (usize, usize) {
     if segments.is_empty() {
         return (0, 0);
     }
@@ -514,7 +543,12 @@ pub fn select_passages(
         if new_meeting && per_meeting.len() >= limits.max_meetings {
             continue;
         }
-        let c_cost = cost(&c) + if new_meeting { MEETING_SCAFFOLD_TOKENS } else { 2 };
+        let c_cost = cost(&c)
+            + if new_meeting {
+                MEETING_SCAFFOLD_TOKENS
+            } else {
+                2
+            };
         if used + c_cost > budget_tokens {
             continue;
         }
@@ -590,9 +624,12 @@ pub async fn retrieve(
     let mut seen = HashSet::new();
     let max_len = fts_hits.len().max(semantic_hits.len());
     for i in 0..max_len {
-        for id in [fts_hits.get(i).map(|h| &h.meeting_id), semantic_hits.get(i).map(|h| &h.meeting_id)]
-            .into_iter()
-            .flatten()
+        for id in [
+            fts_hits.get(i).map(|h| &h.meeting_id),
+            semantic_hits.get(i).map(|h| &h.meeting_id),
+        ]
+        .into_iter()
+        .flatten()
         {
             if seen.insert(id.clone()) {
                 meeting_order.push(id.clone());
@@ -608,24 +645,43 @@ pub async fn retrieve(
 
     let mut candidates = Vec::new();
     for (rank, hit) in fts_hits.iter().enumerate() {
-        let Some(segs) = segments.get(&hit.meeting_id) else { continue };
-        let Some(ix) = segs.iter().position(|s| s.id == hit.transcript_id) else { continue };
+        let Some(segs) = segments.get(&hit.meeting_id) else {
+            continue;
+        };
+        let Some(ix) = segs.iter().position(|s| s.id == hit.transcript_id) else {
+            continue;
+        };
         let (lo, hi) = passage_around(segs, ix, PASSAGE_CHARS);
-        candidates.push(Candidate { meeting_id: hit.meeting_id.clone(), lo, hi, score: rrf(rank) });
+        candidates.push(Candidate {
+            meeting_id: hit.meeting_id.clone(),
+            lo,
+            hi,
+            score: rrf(rank),
+        });
     }
     for (rank, hit) in semantic_hits.iter().enumerate() {
-        let Some(segs) = segments.get(&hit.meeting_id) else { continue };
-        let Some(lo) = segs.iter().position(|s| s.id == hit.first_transcript_id) else { continue };
+        let Some(segs) = segments.get(&hit.meeting_id) else {
+            continue;
+        };
+        let Some(lo) = segs.iter().position(|s| s.id == hit.first_transcript_id) else {
+            continue;
+        };
         let hi = (lo + hit.segment_count.max(1) - 1).min(segs.len() - 1);
-        candidates.push(Candidate { meeting_id: hit.meeting_id.clone(), lo, hi, score: rrf(rank) });
+        candidates.push(Candidate {
+            meeting_id: hit.meeting_id.clone(),
+            lo,
+            hi,
+            score: rrf(rank),
+        });
     }
 
-    let person_ok = |c: &Candidate, segs: &HashMap<String, Vec<RetrievedSegment>>| match &filters.person {
-        None => true,
-        Some(p) => segs
-            .get(&c.meeting_id)
-            .is_some_and(|s| s[c.lo..=c.hi].iter().any(|seg| p.matches(seg))),
-    };
+    let person_ok =
+        |c: &Candidate, segs: &HashMap<String, Vec<RetrievedSegment>>| match &filters.person {
+            None => true,
+            Some(p) => segs
+                .get(&c.meeting_id)
+                .is_some_and(|s| s[c.lo..=c.hi].iter().any(|seg| p.matches(seg))),
+        };
     candidates.retain(|c| person_ok(c, &segments));
 
     if candidates.is_empty() {
@@ -640,17 +696,29 @@ pub async fn retrieve(
                 Some(p) => {
                     let theirs: Vec<usize> =
                         (0..segs.len()).filter(|&i| p.matches(&segs[i])).collect();
-                    spread(theirs.len(), 2).into_iter().map(|k| theirs[k]).collect()
+                    spread(theirs.len(), 2)
+                        .into_iter()
+                        .map(|k| theirs[k])
+                        .collect()
                 }
                 None => spread(segs.len(), 2),
             };
             for (k, ix) in anchors.into_iter().enumerate() {
                 let (lo, hi) = passage_around(segs, ix, PASSAGE_CHARS);
-                candidates.push(Candidate { meeting_id: id.clone(), lo, hi, score: rrf(mrank * 2 + k) });
+                candidates.push(Candidate {
+                    meeting_id: id.clone(),
+                    lo,
+                    hi,
+                    score: rrf(mrank * 2 + k),
+                });
             }
         }
     }
-    stats.meetings_considered = candidates.iter().map(|c| &c.meeting_id).collect::<HashSet<_>>().len();
+    stats.meetings_considered = candidates
+        .iter()
+        .map(|c| &c.meeting_id)
+        .collect::<HashSet<_>>()
+        .len();
 
     let merged = merge_candidates(candidates);
     let cost = |c: &Candidate| {
@@ -666,11 +734,16 @@ pub async fn retrieve(
     // Group by meeting; meetings chronological, passages in transcript order.
     let mut grouped: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
     for c in &picked {
-        grouped.entry(c.meeting_id.clone()).or_default().push((c.lo, c.hi));
+        grouped
+            .entry(c.meeting_id.clone())
+            .or_default()
+            .push((c.lo, c.hi));
     }
     let mut meetings = Vec::new();
     for (id, mut ranges) in grouped {
-        let Some(meta) = load_meeting_meta(pool, &id).await? else { continue };
+        let Some(meta) = load_meeting_meta(pool, &id).await? else {
+            continue;
+        };
         ranges.sort_unstable();
         let segs = &segments[&id];
         meetings.push(MeetingExcerpts {
@@ -679,11 +752,20 @@ pub async fn retrieve(
             created_at: meta.created_at,
             passages: ranges
                 .into_iter()
-                .map(|(lo, hi)| segs[lo..=hi].iter().map(RetrievedSegment::to_context).collect())
+                .map(|(lo, hi)| {
+                    segs[lo..=hi]
+                        .iter()
+                        .map(RetrievedSegment::to_context)
+                        .collect()
+                })
                 .collect(),
         });
     }
-    meetings.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.meeting_id.cmp(&b.meeting_id)));
+    meetings.sort_by(|a, b| {
+        a.created_at
+            .cmp(&b.created_at)
+            .then_with(|| a.meeting_id.cmp(&b.meeting_id))
+    });
 
     Ok(Retrieved { meetings, stats })
 }
@@ -732,24 +814,48 @@ mod tests {
 
     async fn seed(pool: &SqlitePool) {
         meeting(pool, "aug", "Platform sync", "2026-08-14T10:00:00+00:00").await;
-        meeting(pool, "sep", "Platform sync", "2026-09-11 10:00:00.000+00:00").await;
+        meeting(
+            pool,
+            "sep",
+            "Platform sync",
+            "2026-09-11 10:00:00.000+00:00",
+        )
+        .await;
         meeting(pool, "jul", "Offsite", "2026-07-01T10:00:00Z").await;
         for (id, lines) in [
-            ("aug", vec![
-                ("Alice", "Morning everyone."),
-                ("Alice", "Kingfisher, where are we on the database migration?"),
-                ("Kingfisher", "We start migrating the orders table next week."),
-                ("Bob", "Lunch is at noon."),
-            ]),
-            ("sep", vec![
-                ("Bob", "Quick status round."),
-                ("Kingfisher", "The migration finished; rollback plan was not needed."),
-                ("Alice", "Great."),
-            ]),
-            ("jul", vec![
-                ("Bob", "We should plan the migration eventually."),
-                ("Alice", "Budget review is due."),
-            ]),
+            (
+                "aug",
+                vec![
+                    ("Alice", "Morning everyone."),
+                    (
+                        "Alice",
+                        "Kingfisher, where are we on the database migration?",
+                    ),
+                    (
+                        "Kingfisher",
+                        "We start migrating the orders table next week.",
+                    ),
+                    ("Bob", "Lunch is at noon."),
+                ],
+            ),
+            (
+                "sep",
+                vec![
+                    ("Bob", "Quick status round."),
+                    (
+                        "Kingfisher",
+                        "The migration finished; rollback plan was not needed.",
+                    ),
+                    ("Alice", "Great."),
+                ],
+            ),
+            (
+                "jul",
+                vec![
+                    ("Bob", "We should plan the migration eventually."),
+                    ("Alice", "Budget review is due."),
+                ],
+            ),
         ] {
             for (seq, (speaker, text)) in lines.into_iter().enumerate() {
                 segment(pool, id, seq as i64, speaker, text).await;
@@ -764,20 +870,35 @@ mod tests {
             Some("\"kingfish\"* OR \"migrat\"*")
         );
         assert_eq!(
-            expand_query("What did Kingfisher say about the migrations?", &["Kingfisher".into()]).as_deref(),
+            expand_query(
+                "What did Kingfisher say about the migrations?",
+                &["Kingfisher".into()]
+            )
+            .as_deref(),
             Some("\"migrat\"*")
         );
-        assert_eq!(expand_query("API cost", &[]).as_deref(), Some("\"api\" OR \"cost\"*"));
+        assert_eq!(
+            expand_query("API cost", &[]).as_deref(),
+            Some("\"api\" OR \"cost\"*")
+        );
         assert_eq!(expand_query("what is it?", &[]), None);
         // Repeated words collapse.
-        assert_eq!(expand_query("budget budget budgets", &[]).as_deref(), Some("\"budget\"*"));
+        assert_eq!(
+            expand_query("budget budget budgets", &[]).as_deref(),
+            Some("\"budget\"*")
+        );
     }
 
     #[tokio::test]
     async fn expanded_queries_are_valid_fts5() {
         let pool = test_pool().await;
         seed(&pool).await;
-        for q in ["\"quoted\" NEAR(x) AND", "migration's \"rollback\"", "日本語 テスト", "o'brien c++ x*y"] {
+        for q in [
+            "\"quoted\" NEAR(x) AND",
+            "migration's \"rollback\"",
+            "日本語 テスト",
+            "o'brien c++ x*y",
+        ] {
             if let Some(expr) = expand_query(q, &[]) {
                 fts_candidates(&pool, &expr, &AskFilters::default(), 10)
                     .await
@@ -791,7 +912,9 @@ mod tests {
         let pool = test_pool().await;
         seed(&pool).await;
         let expr = expand_query("migration rollback", &[]).unwrap();
-        let hits = fts_candidates(&pool, &expr, &AskFilters::default(), 50).await.unwrap();
+        let hits = fts_candidates(&pool, &expr, &AskFilters::default(), 50)
+            .await
+            .unwrap();
         let ids: Vec<&str> = hits.iter().map(|h| h.transcript_id.as_str()).collect();
         // "migration" + "rollback" beats single-term hits; "migrating" found via the stem prefix.
         assert_eq!(ids[0], "sep-1");
@@ -821,15 +944,27 @@ mod tests {
         };
         let utc = |s: &str| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc);
 
-        assert_eq!(meetings(AskFilters::default()).await, vec!["aug", "jul", "sep"]);
+        assert_eq!(
+            meetings(AskFilters::default()).await,
+            vec!["aug", "jul", "sep"]
+        );
         // Date range, across both stored timestamp formats.
-        let since_aug = AskFilters { from: Some(utc("2026-08-01T00:00:00Z")), ..Default::default() };
+        let since_aug = AskFilters {
+            from: Some(utc("2026-08-01T00:00:00Z")),
+            ..Default::default()
+        };
         assert_eq!(meetings(since_aug).await, vec!["aug", "sep"]);
-        let before_sep = AskFilters { to: Some(utc("2026-09-11T09:00:00Z")), ..Default::default() };
+        let before_sep = AskFilters {
+            to: Some(utc("2026-09-11T09:00:00Z")),
+            ..Default::default()
+        };
         assert_eq!(meetings(before_sep).await, vec!["aug", "jul"]);
         // Person: only meetings where they speak (by name; profile link below).
         let kingfisher = AskFilters {
-            person: Some(PersonFilter { voice_profile_id: Some("vp-k".into()), name: "kingfisher".into() }),
+            person: Some(PersonFilter {
+                voice_profile_id: Some("vp-k".into()),
+                name: "kingfisher".into(),
+            }),
             ..Default::default()
         };
         assert_eq!(meetings(kingfisher.clone()).await, vec!["aug", "sep"]);
@@ -859,7 +994,10 @@ mod tests {
         assert_eq!(series.len(), 1);
         assert_eq!(series[0].meeting_count, 2);
         assert_eq!(series[0].filter.title, "Platform sync");
-        let in_series = AskFilters { series: Some(series[0].filter.clone()), ..Default::default() };
+        let in_series = AskFilters {
+            series: Some(series[0].filter.clone()),
+            ..Default::default()
+        };
         assert_eq!(meetings(in_series).await, vec!["aug", "sep"]);
         // Combined: series + date.
         let combined = AskFilters {
@@ -881,12 +1019,22 @@ mod tests {
             .await
             .unwrap();
         let filters = AskFilters {
-            person: Some(PersonFilter { voice_profile_id: Some("vp-k".into()), name: "Kingfisher".into() }),
+            person: Some(PersonFilter {
+                voice_profile_id: Some("vp-k".into()),
+                name: "Kingfisher".into(),
+            }),
             ..Default::default()
         };
-        let r = retrieve(&pool, "What has Kingfisher said about the migration?", &filters, &[], 2_000, SelectionLimits::default())
-            .await
-            .unwrap();
+        let r = retrieve(
+            &pool,
+            "What has Kingfisher said about the migration?",
+            &filters,
+            &[],
+            2_000,
+            SelectionLimits::default(),
+        )
+        .await
+        .unwrap();
         assert!(!r.stats.fallback);
         let ids: Vec<&str> = r.meetings.iter().map(|m| m.meeting_id.as_str()).collect();
         // July has "migration" but Kingfisher isn't in it.
@@ -895,7 +1043,10 @@ mod tests {
         assert_eq!(aug.title, "Platform sync");
         assert!(aug.created_at.is_some());
         let lines: Vec<&str> = aug.passages[0].iter().map(|s| s.text.as_str()).collect();
-        assert!(lines.contains(&"We start migrating the orders table next week."), "{lines:?}");
+        assert!(
+            lines.contains(&"We start migrating the orders table next week."),
+            "{lines:?}"
+        );
         // The lead-in question is kept for context.
         assert!(lines.contains(&"Kingfisher, where are we on the database migration?"));
     }
@@ -911,21 +1062,40 @@ mod tests {
             segment_count: 1,
             similarity: 0.8,
         }];
-        let r = retrieve(&pool, "finances", &AskFilters::default(), &semantic, 2_000, SelectionLimits::default())
-            .await
-            .unwrap();
+        let r = retrieve(
+            &pool,
+            "finances",
+            &AskFilters::default(),
+            &semantic,
+            2_000,
+            SelectionLimits::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(r.stats.semantic_hits, 1);
         assert_eq!(r.meetings.len(), 1);
-        assert!(r.meetings[0].passages[0].iter().any(|s| s.text == "Budget review is due."));
+        assert!(r.meetings[0].passages[0]
+            .iter()
+            .any(|s| s.text == "Budget review is due."));
 
         // Nothing at all: recent meetings are sampled, newest considered first.
-        let r = retrieve(&pool, "what happened?", &AskFilters::default(), &[], 2_000, SelectionLimits::default())
-            .await
-            .unwrap();
+        let r = retrieve(
+            &pool,
+            "what happened?",
+            &AskFilters::default(),
+            &[],
+            2_000,
+            SelectionLimits::default(),
+        )
+        .await
+        .unwrap();
         assert!(r.stats.fallback);
         assert!(!r.meetings.is_empty());
         // Chronological output order.
-        assert!(r.meetings.windows(2).all(|w| w[0].created_at <= w[1].created_at));
+        assert!(r
+            .meetings
+            .windows(2)
+            .all(|w| w[0].created_at <= w[1].created_at));
     }
 
     fn rseg(id: &str, text: &str) -> RetrievedSegment {
@@ -940,7 +1110,9 @@ mod tests {
 
     #[test]
     fn passages_take_lead_in_and_following_context() {
-        let segs: Vec<RetrievedSegment> = (0..20).map(|i| rseg(&i.to_string(), &"x".repeat(90))).collect();
+        let segs: Vec<RetrievedSegment> = (0..20)
+            .map(|i| rseg(&i.to_string(), &"x".repeat(90)))
+            .collect();
         // ~100 chars per segment, target 700 → 1 before + hit + 5 after.
         assert_eq!(passage_around(&segs, 10, 700), (9, 15));
         assert_eq!(passage_around(&segs, 0, 700), (0, 6));
@@ -951,9 +1123,22 @@ mod tests {
 
     #[test]
     fn merging_sums_overlapping_scores_and_keeps_meetings_apart() {
-        let c = |m: &str, lo, hi, score| Candidate { meeting_id: m.into(), lo, hi, score };
-        let merged = merge_candidates(vec![c("a", 0, 4, 1.0), c("b", 2, 5, 1.0), c("a", 3, 8, 0.5), c("a", 20, 22, 0.1)]);
-        assert_eq!(merged, vec![c("a", 0, 8, 1.5), c("a", 20, 22, 0.1), c("b", 2, 5, 1.0)]);
+        let c = |m: &str, lo, hi, score| Candidate {
+            meeting_id: m.into(),
+            lo,
+            hi,
+            score,
+        };
+        let merged = merge_candidates(vec![
+            c("a", 0, 4, 1.0),
+            c("b", 2, 5, 1.0),
+            c("a", 3, 8, 0.5),
+            c("a", 20, 22, 0.1),
+        ]);
+        assert_eq!(
+            merged,
+            vec![c("a", 0, 8, 1.5), c("a", 20, 22, 0.1), c("b", 2, 5, 1.0)]
+        );
         // Over-long merges are split instead.
         let merged = merge_candidates(vec![c("a", 0, 10, 1.0), c("a", 9, 30, 1.0)]);
         assert_eq!(merged, vec![c("a", 0, 10, 1.0), c("a", 11, 30, 1.0)]);
@@ -961,7 +1146,12 @@ mod tests {
 
     #[test]
     fn selection_ranks_and_respects_caps_and_budget() {
-        let c = |m: &str, lo, score| Candidate { meeting_id: m.into(), lo, hi: lo, score };
+        let c = |m: &str, lo, score| Candidate {
+            meeting_id: m.into(),
+            lo,
+            hi: lo,
+            score,
+        };
         let cands = vec![
             c("a", 0, 0.9),
             c("a", 10, 0.8),
@@ -970,14 +1160,29 @@ mod tests {
             c("c", 0, 0.5),
             c("d", 0, 0.4),
         ];
-        let limits = SelectionLimits { max_passages: 10, max_per_meeting: 2, max_meetings: 2 };
+        let limits = SelectionLimits {
+            max_passages: 10,
+            max_per_meeting: 2,
+            max_meetings: 2,
+        };
         let picked = select_passages(cands.clone(), |_| 10, 10_000, limits);
-        let got: Vec<(&str, usize)> = picked.iter().map(|c| (c.meeting_id.as_str(), c.lo)).collect();
+        let got: Vec<(&str, usize)> = picked
+            .iter()
+            .map(|c| (c.meeting_id.as_str(), c.lo))
+            .collect();
         assert_eq!(got, vec![("a", 0), ("a", 10), ("b", 0)]);
 
         // Budget: 2 meetings' scaffolding + passages at 10 tokens each.
         let budget = 2 * (10 + MEETING_SCAFFOLD_TOKENS);
-        let picked = select_passages(cands, |_| 10, budget, SelectionLimits { max_per_meeting: 1, ..SelectionLimits::default() });
+        let picked = select_passages(
+            cands,
+            |_| 10,
+            budget,
+            SelectionLimits {
+                max_per_meeting: 1,
+                ..SelectionLimits::default()
+            },
+        );
         let got: Vec<&str> = picked.iter().map(|c| c.meeting_id.as_str()).collect();
         assert_eq!(got, vec!["a", "b"]);
     }
@@ -993,9 +1198,15 @@ mod tests {
     fn filter_description() {
         assert_eq!(AskFilters::default().describe(), None);
         let f = AskFilters {
-            person: Some(PersonFilter { voice_profile_id: None, name: " Kingfisher ".into() }),
+            person: Some(PersonFilter {
+                voice_profile_id: None,
+                name: " Kingfisher ".into(),
+            }),
             ..Default::default()
         };
-        assert_eq!(f.describe().as_deref(), Some("passages where Kingfisher speaks"));
+        assert_eq!(
+            f.describe().as_deref(),
+            Some("passages where Kingfisher speaks")
+        );
     }
 }

@@ -259,7 +259,6 @@ impl HardwareProfile {
             },
         }
     }
-
 }
 
 #[cfg(test)]

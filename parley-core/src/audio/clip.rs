@@ -102,7 +102,13 @@ pub async fn extract_clip_wav(
                 }
             }
             cmd.args([
-                "-ar", "16000", "-c:a", "pcm_s16le", "-f", "wav", &tmp_path_str,
+                "-ar",
+                "16000",
+                "-c:a",
+                "pcm_s16le",
+                "-f",
+                "wav",
+                &tmp_path_str,
             ]);
             Ok(cmd.status()?.success())
         };
@@ -146,8 +152,12 @@ pub fn parse_wav_pcm16(bytes: &[u8]) -> Result<(Vec<i16>, u32, u16), String> {
     let mut pos = 12;
     while pos + 8 <= bytes.len() {
         let id = &bytes[pos..pos + 4];
-        let size = u32::from_le_bytes([bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]])
-            as usize;
+        let size = u32::from_le_bytes([
+            bytes[pos + 4],
+            bytes[pos + 5],
+            bytes[pos + 6],
+            bytes[pos + 7],
+        ]) as usize;
         let body_start = pos + 8;
         let body_end = body_start.saturating_add(size).min(bytes.len());
 
@@ -195,7 +205,10 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .expect("in-memory sqlite pool");
-        sqlx::migrate!("./migrations").run(&pool).await.expect("run migrations");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("run migrations");
         pool
     }
 
