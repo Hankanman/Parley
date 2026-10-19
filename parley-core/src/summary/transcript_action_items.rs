@@ -202,6 +202,100 @@ fn is_echoed_quote(text: &str, quote: &str) -> bool {
     !normalized.is_empty() && normalized == normalize_phrase(quote)
 }
 
+/// Word sequences that mark a spoken sentence as someone taking on or handing
+/// out a task. Matched as whole words, so "can you" doesn't hit "can't".
+const PERSONAL_CUES: &[&str] = &[
+    // Taking a task on.
+    "i'll",
+    "i will",
+    "we'll",
+    "we will",
+    "you'll",
+    "he'll",
+    "she'll",
+    "they'll",
+    "i'm going to",
+    "i am going to",
+    "we're going to",
+    "we are going to",
+    "i'm gonna",
+    "we're gonna",
+    "let me",
+    "i can send",
+    "i can get",
+    "i can take",
+    // Handing one out.
+    "can you",
+    "could you",
+    "would you",
+    "will you",
+    "need you to",
+    "you need to",
+];
+
+/// Word sequences that name a task or its deadline in any voice — so they also
+/// count in the model's rewritten task, where "I'll" has been dropped. Matched
+/// as whole words, so "action" doesn't hit "transaction".
+const TASK_CUES: &[&str] = &[
+    "please",
+    "make sure",
+    "remember to",
+    "don't forget",
+    "need to",
+    "needs to",
+    "have to",
+    "has to",
+    "got to",
+    "follow up",
+    "action",
+    "actions",
+    "next step",
+    "next steps",
+    "take that away",
+    "take it away",
+    "to do list",
+    // Deadlines. A bare "tomorrow" is as often chat as a due date.
+    "by monday",
+    "by tuesday",
+    "by wednesday",
+    "by thursday",
+    "by friday",
+    "by tomorrow",
+    "by end of",
+    "by the end of",
+    "by next",
+    "eod",
+];
+
+/// True when a spoken sentence takes on, hands out or sets a deadline for a
+/// task. Small local models flag most sentences in a meeting as tasks whatever
+/// the prompt says, so the live preview requires this before showing an item.
+pub(crate) fn states_commitment(quote: &str) -> bool {
+    has_cue(quote, PERSONAL_CUES) || has_cue(quote, TASK_CUES)
+}
+
+/// True when a rewritten task names its action or deadline explicitly ("Follow
+/// up with Gareth", "Send it by Friday"). Stricter than [`states_commitment`]:
+/// a bare "We'll see." is not a task.
+pub(crate) fn names_task(text: &str) -> bool {
+    has_cue(text, TASK_CUES)
+}
+
+fn has_cue(text: &str, cues: &[&str]) -> bool {
+    let words: Vec<String> = text
+        .replace('\u{2019}', "'")
+        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
+        .map(|w| w.trim_matches('\'').to_lowercase())
+        .filter(|w| !w.is_empty())
+        .collect();
+    cues.iter().any(|cue| {
+        let cue: Vec<&str> = cue.split(' ').collect();
+        words
+            .windows(cue.len())
+            .any(|w| w.iter().zip(&cue).all(|(a, b)| a == b))
+    })
+}
+
 /// Lowercase, collapse every run of non-alphanumeric characters to a single
 /// space, and trim — a punctuation-insensitive form for comparing two phrases.
 fn normalize_phrase(text: &str) -> String {
@@ -479,6 +573,43 @@ mod tests {
             "Amanda updates this list",
             "I'm going to ask that only Amanda updates this list.",
         ));
+    }
+
+    #[test]
+    fn commitments_and_requests_count_as_tasks() {
+        for quote in [
+            "I'll send the Q3 budget over to Finance by Friday.",
+            "Can you get the deck to Amanda?",
+            "We need to book the follow up with IBM.",
+            "I\u{2019}m going to chase Patrick on that.",
+            "Let me check with the clinical safety officer.",
+            "Action on Dave to call them back.",
+        ] {
+            assert!(states_commitment(quote), "{quote}");
+        }
+    }
+
+    #[test]
+    fn chatter_is_not_a_task() {
+        for quote in [
+            "I was like, HP doesn't exist. They don't love me.",
+            "I can't believe this. They reached out to us.",
+            "Let's talk about the Power 25 list.",
+            "That transaction went through last quarter.",
+            "Honestly, I don't know what more I can do to help here.",
+            "We discussed the weather and had coffee.",
+            "Sort of today, tomorrow, really, whether we're in with that.",
+        ] {
+            assert!(!states_commitment(quote), "{quote}");
+        }
+    }
+
+    #[test]
+    fn a_rewritten_task_needs_explicit_task_wording() {
+        assert!(names_task("Follow up with Gareth in the US."));
+        assert!(names_task("Get a call together by Wednesday afternoon."));
+        assert!(!names_task("We'll see."));
+        assert!(!names_task("If we manage to negotiate that down to"));
     }
 
     #[test]
