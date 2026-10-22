@@ -28,7 +28,20 @@ While Parley is below 1.0:
    the tag already exists. It creates a draft release `v<version>` with
    generated notes, builds the CPU AppImage on `ubuntu-22.04`, and uploads
    `Parley-<version>-x86_64.AppImage` and its `.sha256`.
-4. Edit the notes if needed and publish the draft. The install script
+4. Optional but recommended: attach a Vulkan (GPU) build, which CI can't
+   make. On a machine with `glslc` installed, at the release commit:
+
+   ```bash
+   ./build.sh vulkan
+   v=$(scripts/version.sh)
+   mv "Parley-$v-x86_64.AppImage" "Parley-$v-vulkan-x86_64.AppImage"
+   sha256sum "Parley-$v-vulkan-x86_64.AppImage" > "Parley-$v-vulkan-x86_64.AppImage.sha256"
+   gh release upload "v$v" Parley-$v-vulkan-x86_64.AppImage*
+   ```
+
+   The installer picks the Vulkan build on machines with an NVIDIA, AMD or
+   Intel GPU and a Vulkan driver, and the CPU build otherwise.
+5. Edit the notes if needed and publish the draft. The install script
    (`curl -fsSL https://meetparley.app/install.sh | sh`) and the in-app
    update check both follow the latest published release.
 

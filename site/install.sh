@@ -10,6 +10,8 @@
 #   curl -fsSL https://meetparley.app/install.sh | sh -s -- --uninstall
 #                                       remove Parley (keeps your meetings and settings)
 #   PARLEY_VERSION=0.5.0 sh install.sh  install a specific version
+#   PARLEY_VARIANT=cpu sh install.sh    pick the build: vulkan (GPU) or cpu;
+#                                       default is vulkan if a Vulkan driver is present
 #   PARLEY_BIN_DIR=/opt/bin sh install.sh
 #
 # Source: https://github.com/Hankanman/Parley/blob/main/site/install.sh
@@ -59,14 +61,50 @@ else
 fi
 say "Looking up the release"
 RELEASE="$(fetch "$API")" || die "couldn't reach GitHub ($API)"
-URL="$(printf '%s' "$RELEASE" | grep -o '"browser_download_url": *"[^"]*Parley-[^"]*-x86_64\.AppImage"' | head -n1 | sed 's/.*"\(https[^"]*\)"/\1/')"
-[ -n "$URL" ] || die "no Parley AppImage found in that release. See https://github.com/$REPO/releases"
+asset_url() { # asset_url <file-name regex>
+    printf '%s' "$RELEASE" | grep -o "\"browser_download_url\": *\"[^\"]*/$1\"" | head -n1 | sed 's/.*"\(https[^"]*\)"/\1/'
+}
+CPU_URL="$(asset_url 'Parley-[0-9][^/"]*[0-9]-x86_64\.AppImage')"
+VULKAN_URL="$(asset_url 'Parley-[0-9][^/"]*-vulkan-x86_64\.AppImage')"
+
+# The Vulkan build runs Whisper on any GPU with a Vulkan driver (NVIDIA, AMD,
+# Intel); the CPU build works everywhere. PARLEY_VARIANT=cpu|vulkan overrides.
+# True if this machine has an NVIDIA, AMD or Intel GPU with a Vulkan driver
+# for it. Mesa installs driver manifests for every vendor (and a software
+# renderer), so a manifest on its own proves nothing; match it to the GPU.
+has_vulkan() {
+    for vendor_file in /sys/class/drm/card*/device/vendor; do
+        [ -r "$vendor_file" ] || continue
+        case "$(cat "$vendor_file")" in
+            0x10de) pattern='nvidia_icd* nouveau_icd*' ;;
+            0x1002) pattern='radeon_icd* amd_icd*' ;;
+            0x8086) pattern='intel_icd*' ;;
+            *) continue ;;
+        esac
+        for dir in /usr/share/vulkan/icd.d /etc/vulkan/icd.d; do
+            for p in $pattern; do
+                for icd in "$dir"/$p; do
+                    [ -e "$icd" ] && return 0
+                done
+            done
+        done
+    done
+    return 1
+}
+case "${PARLEY_VARIANT:-auto}" in
+    cpu) URL="$CPU_URL" ;;
+    vulkan) URL="$VULKAN_URL" ;;
+    auto) if [ -n "$VULKAN_URL" ] && has_vulkan; then URL="$VULKAN_URL"; else URL="${CPU_URL:-$VULKAN_URL}"; fi ;;
+    *) die "PARLEY_VARIANT must be cpu or vulkan" ;;
+esac
+[ -n "$URL" ] || die "no matching Parley AppImage found in that release. See https://github.com/$REPO/releases"
 NAME="${URL##*/}"
-VERSION="$(printf '%s' "$NAME" | sed 's/^Parley-\(.*\)-x86_64\.AppImage$/\1/')"
+VERSION="$(printf '%s' "$NAME" | sed 's/^Parley-\([0-9][0-9.]*[0-9]\).*/\1/')"
+case "$NAME" in *-vulkan-*) BUILD="Vulkan (GPU)" ;; *) BUILD="CPU" ;; esac
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT INT TERM
-say "Downloading Parley $VERSION"
+say "Downloading Parley $VERSION, $BUILD build"
 fetch "$URL" "$TMP/$NAME"
 
 if fetch "$URL.sha256" "$TMP/$NAME.sha256" 2>/dev/null; then
@@ -96,7 +134,7 @@ if [ -f "$TMP/squashfs-root/usr/share/applications/$APP_ID.desktop" ]; then
     refresh_menus
 fi
 
-say "Installed Parley $VERSION to $BIN_DIR/parley"
+say "Installed Parley $VERSION ($BUILD build) to $BIN_DIR/parley"
 
 # AppImages need FUSE 2 to mount themselves.
 if ! ls /usr/lib*/libfuse.so.2* /usr/lib/*/libfuse.so.2* /lib*/libfuse.so.2* /lib/*/libfuse.so.2* >/dev/null 2>&1; then
