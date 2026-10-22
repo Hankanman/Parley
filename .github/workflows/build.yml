@@ -59,10 +59,19 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
+          # GPUI (fontconfig, freetype, xkbcommon, wayland, x11/xcb), audio
+          # (ALSA, PipeWire), whisper/llama (cmake, clang), openssl, AppImage (fuse)
           sudo apt-get install -y \
-            patchelf libasound2-dev libx11-dev libxtst-dev libxrandr-dev \
-            libpipewire-0.3-dev libclang-dev meson ninja-build \
+            build-essential cmake pkg-config clang libclang-dev patchelf ninja-build \
+            libasound2-dev libpipewire-0.3-dev \
+            libfontconfig-dev libfreetype-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev libxtst-dev libxrandr-dev \
+            libvulkan-dev libssl-dev libzstd-dev libsqlite3-dev \
             fuse libfuse2
+          # webrtc-audio-processing-sys runs `meson setup --reconfigure` on a
+          # fresh build dir, which Ubuntu 22.04's meson 0.61 rejects.
+          pipx install meson
+          meson --version
 
       - name: Build AppImage (CPU)
         run: ./build.sh cpu

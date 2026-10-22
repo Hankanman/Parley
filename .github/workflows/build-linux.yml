@@ -72,8 +72,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            patchelf libasound2-dev libx11-dev libxtst-dev libxrandr-dev \
-            libpipewire-0.3-dev libclang-dev meson ninja-build
+            build-essential cmake pkg-config clang libclang-dev patchelf ninja-build \
+            libasound2-dev libpipewire-0.3-dev \
+            libfontconfig-dev libfreetype-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev libxtst-dev libxrandr-dev \
+            libvulkan-dev libssl-dev libzstd-dev libsqlite3-dev
+          pipx install meson  # Ubuntu 22.04's meson 0.61 is too old for webrtc-audio-processing-sys
 
       - name: Install FUSE for AppImage
         run: |
