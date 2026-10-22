@@ -778,6 +778,8 @@ impl AudioPipeline {
         if let Some(ref mut mp) = self.mic_processor {
             mp.process(&mut mic_window, &sys_window);
         }
+        // Live meter on the Recording page, when it's open: post-chain mic.
+        super::simple_level_monitor::tap_pipeline_window(&mic_window, &sys_window);
 
         // STEP 3: Source-tagged VAD on each stream independently
         self.run_vad_for_source(&mic_window, DeviceType::Microphone);

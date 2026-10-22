@@ -6,12 +6,17 @@
 //! the `audio-levels` event, keyed by **role** (`"mic"` / `"system"`)
 //! — the UI renders exactly one meter per role, so role keys avoid
 //! making the frontend track device-id changes.
+//!
+//! During a recording the meter opens no streams of its own: the
+//! recording pipeline feeds it through [`tap_pipeline_window`], so the mic
+//! level is the cleaned signal (echo cancellation, noise suppression, AGC)
+//! that is actually transcribed. See [`start_pipeline_monitoring`].
 
 use anyhow::Result;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use super::pw::{PwCaptureStream, PwStreamEvent};
@@ -99,6 +104,30 @@ struct MonitorSession {
 
 static SESSION: OnceLock<Mutex<Option<MonitorSession>>> = OnceLock::new();
 
+type SharedLevels = Arc<Mutex<HashMap<&'static str, LevelAccumulator>>>;
+
+/// Whether the recording pipeline should feed [`PIPELINE_LEVELS`] — set
+/// only while a [`start_pipeline_monitoring`] session is live, so an
+/// unwatched recording pays one atomic load per window.
+static PIPELINE_TAP_ON: AtomicBool = AtomicBool::new(false);
+static PIPELINE_LEVELS: OnceLock<SharedLevels> = OnceLock::new();
+
+fn pipeline_levels() -> &'static SharedLevels {
+    PIPELINE_LEVELS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+/// Called by the recording pipeline once per aligned window, after the mic
+/// voice chain has run. A no-op unless the meter is watching.
+pub fn tap_pipeline_window(mic: &[f32], system: &[f32]) {
+    if !PIPELINE_TAP_ON.load(Ordering::Relaxed) {
+        return;
+    }
+    if let Ok(mut map) = pipeline_levels().lock() {
+        map.entry("mic").or_default().push(mic);
+        map.entry("system").or_default().push(system);
+    }
+}
+
 fn session_slot() -> &'static Mutex<Option<MonitorSession>> {
     SESSION.get_or_init(|| Mutex::new(None))
 }
@@ -159,9 +188,9 @@ pub async fn start_monitoring(
     // which is how we notice — after our (slow, blocking) stream-open
     // completes — that we've been superseded and must not touch SESSION.
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    PIPELINE_TAP_ON.store(false, Ordering::SeqCst);
 
-    let levels: Arc<Mutex<HashMap<&'static str, LevelAccumulator>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let levels: SharedLevels = Arc::new(Mutex::new(HashMap::new()));
 
     // Opening streams blocks on the PipeWire roundtrip — keep it off
     // the async runtime.
@@ -230,6 +259,32 @@ pub async fn start_monitoring(
         return Ok(());
     }
 
+    spawn_emit_loop(sink, generation, levels);
+
+    Ok(())
+}
+
+/// Meter a running recording: drop any device streams and emit levels fed
+/// by the recording pipeline instead (see [`tap_pipeline_window`]). Opens
+/// nothing — with no recording running the meters simply stay at zero.
+pub async fn start_pipeline_monitoring(sink: SharedEventSink) -> Result<()> {
+    info!("level monitor: start (recording pipeline)");
+    let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    tokio::task::spawn_blocking(stop_current_session).await?;
+    if !is_generation_current(generation, GENERATION.load(Ordering::SeqCst)) {
+        return Ok(());
+    }
+    if let Ok(mut map) = pipeline_levels().lock() {
+        map.clear();
+    }
+    PIPELINE_TAP_ON.store(true, Ordering::SeqCst);
+    spawn_emit_loop(sink, generation, pipeline_levels().clone());
+    Ok(())
+}
+
+/// Emit `audio-levels` from `levels` every [`EMIT_INTERVAL_MS`] until
+/// `generation` is superseded.
+fn spawn_emit_loop(sink: SharedEventSink, generation: u64, levels: SharedLevels) {
     tokio::spawn(async move {
         let mut interval =
             tokio::time::interval(std::time::Duration::from_millis(EMIT_INTERVAL_MS));
@@ -268,12 +323,11 @@ pub async fn start_monitoring(
             generation
         );
     });
-
-    Ok(())
 }
 
 pub async fn stop_monitoring() -> Result<()> {
     GENERATION.fetch_add(1, Ordering::SeqCst);
+    PIPELINE_TAP_ON.store(false, Ordering::SeqCst);
     // Stream teardown joins the PipeWire loop threads — keep it off
     // the async runtime.
     tokio::task::spawn_blocking(stop_current_session).await?;

@@ -130,6 +130,30 @@ fn is_active_phase(phase: RecordingPhase) -> bool {
     matches!(phase, RecordingPhase::Recording | RecordingPhase::Paused)
 }
 
+/// Where the level meters read from. Device streams hold the mic open, so
+/// the meters only run while the audio panel is open on a visible page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MeterSource {
+    Off,
+    /// Raw capture streams on the selected devices (no recording running).
+    Devices { mic: String, system: String },
+    /// The running recording's pipeline: the mic after echo cancellation,
+    /// noise suppression and gain — what's actually transcribed.
+    Pipeline,
+}
+
+fn desired_meter_source(on_screen: bool, panel_open: bool, phase: RecordingPhase, mic: String, system: String) -> MeterSource {
+    if !on_screen || !panel_open {
+        return MeterSource::Off;
+    }
+    match phase {
+        RecordingPhase::Idle | RecordingPhase::Error => MeterSource::Devices { mic, system },
+        RecordingPhase::Recording | RecordingPhase::Paused => MeterSource::Pipeline,
+        // Mid start/stop: leave the devices to the recording.
+        RecordingPhase::Starting | RecordingPhase::Stopping | RecordingPhase::Finalising => MeterSource::Off,
+    }
+}
+
 /// Tracks the server-reported active recording duration so the header can
 /// tick locally between `recording-state` events instead of only updating
 /// on phase transitions. Re-based on every snapshot.
@@ -173,10 +197,14 @@ pub struct RecordingView {
     displayed_levels: Levels,
     /// Time of the last meter animation step; `None` while the meters are settled.
     meter_tick: Option<std::time::Instant>,
-    /// Whether the level meter's capture streams should be open — only while
-    /// this page is the one on screen. The meter holds the microphone open,
-    /// which desktop "mic in use" indicators report as Parley listening.
-    meter_active: bool,
+    /// This page is the one on screen (see `on_show` / `on_leave`).
+    on_screen: bool,
+    /// The "Audio" panel (device pickers + level meters) is expanded.
+    /// Closed by default: open meters hold the microphone, which desktop
+    /// "mic in use" indicators report as Parley listening.
+    audio_panel_open: bool,
+    /// What the meters are currently reading from — see `sync_level_monitor`.
+    meter_source: MeterSource,
     refining: bool,
     pending_toasts: Vec<(NotificationType, String)>,
     /// Provisional action items from the beta live extractor — see
@@ -243,7 +271,9 @@ impl RecordingView {
             levels: Levels::default(),
             displayed_levels: Levels::default(),
             meter_tick: None,
-            meter_active: true,
+            on_screen: true,
+            audio_panel_open: false,
+            meter_source: MeterSource::Off,
             refining: false,
             pending_toasts: Vec::new(),
             live_action_items: Vec::new(),
@@ -255,12 +285,11 @@ impl RecordingView {
         this.load_devices(window, cx);
         this.subscribe_to_core_events(cx);
         this.subscribe_to_selects(cx);
-        this.restart_level_monitor(cx);
         this.start_elapsed_ticker(cx);
         // Closing to tray removes the window and drops this view, but the
         // monitor session lives in core — close its streams with the view.
         cx.on_release(|this, cx| {
-            if this.meter_active {
+            if this.meter_source != MeterSource::Off {
                 stop_level_monitor(cx);
             }
         })
@@ -353,7 +382,7 @@ impl RecordingView {
                 select.set_selected_value(&id.clone().into(), window, cx);
             }
         });
-        self.restart_level_monitor(cx);
+        self.sync_level_monitor(cx);
     }
 
     fn subscribe_to_selects(&mut self, cx: &mut Context<Self>) {
@@ -368,7 +397,7 @@ impl RecordingView {
     }
 
     fn on_device_selection_changed(&mut self, cx: &mut Context<Self>) {
-        self.restart_level_monitor(cx);
+        self.sync_level_monitor(cx);
 
         let mic_id = self.mic_selection(cx);
         let system_id = self.system_selection(cx);
@@ -406,36 +435,53 @@ impl RecordingView {
             .unwrap_or_else(|| DEFAULT_DEVICE_ID.to_string())
     }
 
-    /// The page came on screen: open the level meter.
+    /// The page came on screen.
     pub fn on_show(&mut self, cx: &mut Context<Self>) {
-        if !self.meter_active {
-            self.meter_active = true;
-            self.restart_level_monitor(cx);
-        }
+        self.on_screen = true;
+        self.sync_level_monitor(cx);
     }
 
     /// The page went off screen: close the level meter's capture streams.
     pub fn on_leave(&mut self, cx: &mut Context<Self>) {
-        if self.meter_active {
-            self.meter_active = false;
-            self.levels = Levels::default();
-            self.displayed_levels = Levels::default();
-            self.meter_tick = None;
-            stop_level_monitor(cx);
-        }
+        self.on_screen = false;
+        self.sync_level_monitor(cx);
     }
 
-    fn restart_level_monitor(&mut self, cx: &mut Context<Self>) {
-        if !self.meter_active {
+    fn toggle_audio_panel(&mut self, cx: &mut Context<Self>) {
+        self.audio_panel_open = !self.audio_panel_open;
+        self.sync_level_monitor(cx);
+        cx.notify();
+    }
+
+    /// Point the meters at whatever they should read now (page visibility,
+    /// panel state, recording phase, selected devices), starting or
+    /// stopping the core monitor only when that changes.
+    fn sync_level_monitor(&mut self, cx: &mut Context<Self>) {
+        let desired = desired_meter_source(
+            self.on_screen,
+            self.audio_panel_open,
+            self.snapshot.phase,
+            self.mic_selection(cx),
+            self.system_selection(cx),
+        );
+        if desired == self.meter_source {
             return;
         }
+        self.levels = Levels::default();
+        self.displayed_levels = Levels::default();
+        self.meter_tick = None;
+        self.meter_source = desired.clone();
+
         let services = AppServices::global(cx);
         let sink = services.sink.clone();
-        let io = services.io.clone();
-        let mic = self.mic_selection(cx);
-        let system = self.system_selection(cx);
-        io.spawn(async move {
-            let _ = simple_level_monitor::start_monitoring(sink, Some(mic), Some(system)).await;
+        services.io.spawn(async move {
+            let _ = match desired {
+                MeterSource::Off => simple_level_monitor::stop_monitoring().await,
+                MeterSource::Devices { mic, system } => {
+                    simple_level_monitor::start_monitoring(sink, Some(mic), Some(system)).await
+                }
+                MeterSource::Pipeline => simple_level_monitor::start_pipeline_monitoring(sink).await,
+            };
         });
     }
 
@@ -515,6 +561,9 @@ impl RecordingView {
                 }
             }
             "audio-levels" => {
+                if self.meter_source == MeterSource::Off {
+                    return;
+                }
                 if let Some(update) =
                     event.decode::<parley_core::audio::simple_level_monitor::AudioLevelUpdate>()
                 {
@@ -645,6 +694,7 @@ impl RecordingView {
 
         self.elapsed.rebase(&snapshot);
         self.snapshot = snapshot;
+        self.sync_level_monitor(cx);
         cx.notify();
     }
 
@@ -981,9 +1031,41 @@ impl Render for RecordingView {
                             .gap_3()
                             .items_center()
                             .child(div().flex_1().child(Input::new(&self.meeting_name)))
-                            .child(div().w_48().child(Select::new(&self.mic_select).disabled(!buttons.can_start)))
-                            .child(div().w_48().child(Select::new(&self.system_select).disabled(!buttons.can_start))),
+                            .child(
+                                Button::new("toggle-audio-panel")
+                                    .ghost()
+                                    .icon(if self.audio_panel_open { Lucide::ChevronDown } else { Lucide::ChevronRight })
+                                    .label("Audio")
+                                    .tooltip("Choose devices and check levels")
+                                    .on_click(cx.listener(|this, _, _, cx| this.toggle_audio_panel(cx))),
+                            ),
                     )
+                    .when(self.audio_panel_open, |this| {
+                        let caption = match self.meter_source {
+                            MeterSource::Pipeline => {
+                                "Mic level is after echo cancellation and noise suppression — what's being transcribed."
+                            }
+                            _ => "Raw input. Echo cancellation and noise suppression apply once recording starts.",
+                        };
+                        this.child(
+                            v_flex()
+                                .gap_2()
+                                .p_2()
+                                .rounded(cx.theme().radius)
+                                .bg(cx.theme().muted.opacity(0.4))
+                                .child(
+                                    h_flex()
+                                        .gap_3()
+                                        .items_center()
+                                        .child(div().w_20().text_xs().text_color(cx.theme().muted_foreground).child("Devices"))
+                                        .child(div().flex_1().child(Select::new(&self.mic_select).disabled(!buttons.can_start)))
+                                        .child(div().flex_1().child(Select::new(&self.system_select).disabled(!buttons.can_start))),
+                                )
+                                .child(self.level_bar(cx, "Mic", mic_level))
+                                .child(self.level_bar(cx, "System", system_level))
+                                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(caption)),
+                        )
+                    })
                     .child(
                         h_flex()
                             .gap_2()
@@ -1067,8 +1149,6 @@ impl Render for RecordingView {
                                 .child(format!("Bookmarks: {marks}")),
                         )
                     })
-                    .child(self.level_bar(cx, "Mic", mic_level))
-                    .child(self.level_bar(cx, "System", system_level)),
             )
             .child(
                 div()
@@ -1155,5 +1235,48 @@ impl Render for RecordingView {
                         })),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{desired_meter_source, MeterSource};
+    use parley_core::audio::recording_phase::RecordingPhase;
+
+    fn source(on_screen: bool, panel_open: bool, phase: RecordingPhase) -> MeterSource {
+        desired_meter_source(on_screen, panel_open, phase, "default".into(), "default".into())
+    }
+
+    #[test]
+    fn meters_stay_off_until_the_panel_is_opened() {
+        assert_eq!(source(true, false, RecordingPhase::Idle), MeterSource::Off);
+        assert_eq!(source(true, false, RecordingPhase::Recording), MeterSource::Off);
+    }
+
+    #[test]
+    fn meters_stay_off_while_the_page_is_hidden() {
+        assert_eq!(source(false, true, RecordingPhase::Idle), MeterSource::Off);
+        assert_eq!(source(false, true, RecordingPhase::Recording), MeterSource::Off);
+    }
+
+    #[test]
+    fn idle_meters_read_the_selected_devices() {
+        assert_eq!(
+            source(true, true, RecordingPhase::Idle),
+            MeterSource::Devices { mic: "default".into(), system: "default".into() }
+        );
+    }
+
+    #[test]
+    fn recording_meters_read_the_pipeline_not_the_devices() {
+        assert_eq!(source(true, true, RecordingPhase::Recording), MeterSource::Pipeline);
+        assert_eq!(source(true, true, RecordingPhase::Paused), MeterSource::Pipeline);
+    }
+
+    #[test]
+    fn meters_stand_aside_while_a_recording_starts_or_stops() {
+        for phase in [RecordingPhase::Starting, RecordingPhase::Stopping, RecordingPhase::Finalising] {
+            assert_eq!(source(true, true, phase), MeterSource::Off);
+        }
     }
 }
