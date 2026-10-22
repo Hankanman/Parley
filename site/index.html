@@ -111,6 +111,7 @@ section .sub { color: var(--fg-muted); font-size: 18px; max-width: 640px; margin
 .card { background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; }
 .card h3 { margin: 12px 0 6px; font-size: 17px; }
 .card p { margin: 0; color: var(--fg-muted); font-size: 15px; }
+.card p.small { margin-top: 12px; font-size: 13px; }
 .icon { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; background: rgba(26, 120, 232, 0.14); color: var(--link); }
 .icon svg { width: 22px; height: 22px; }
 
@@ -240,7 +241,7 @@ footer a { color: var(--fg-muted); }
         <h3>One click, both sides of the call</h3>
         <p>Parley captures your microphone and the call audio straight from PipeWire. There's no virtual device to set up, and it doesn't need to join the meeting.</p>
         <ul>
-          <li>Live transcript as people speak, with Whisper or Parakeet</li>
+          <li>Live transcript as people speak, with Whisper on your GPU</li>
           <li>Echo cancellation and noise suppression for laptop speakers</li>
           <li>Your voice and theirs stay on separate channels</li>
           <li>Upcoming events from your calendar, one click to start</li>
@@ -342,13 +343,13 @@ footer a { color: var(--fg-muted); }
 <section id="install">
   <div class="wrap">
     <h2>Get Parley</h2>
-    <p class="sub">A single AppImage for Fedora, Ubuntu, Arch and most other distributions. Models download on first run.</p>
+    <p class="sub">An AppImage for any current distribution: Ubuntu 24.04, Debian 13, Fedora 40, Arch or newer. Models download on first run.</p>
     <div class="install">
       <div class="card">
-        <h3>Download</h3>
-        <p>Grab <code>Parley-*-x86_64.AppImage</code> from the <a href="https://github.com/Hankanman/Parley/releases/latest">latest release</a>, then:</p>
-        <pre><code>chmod +x Parley-*-x86_64.AppImage
-./Parley-*-x86_64.AppImage</code></pre>
+        <h3>Install</h3>
+        <p>One line, no root. Installs the latest release to <code>~/.local/bin/parley</code>, checks its checksum and adds a menu entry. Run it again to update.</p>
+        <pre><code>curl -fsSL https://meetparley.app/install.sh | sh</code></pre>
+        <p class="small">Prefer to do it by hand? Grab the <code>.AppImage</code> from the <a href="https://github.com/Hankanman/Parley/releases/latest">latest release</a> and <code>chmod +x</code> it. Read the <a href="https://github.com/Hankanman/Parley/blob/main/site/install.sh">install script</a> first if you like.</p>
       </div>
       <div class="card">
         <h3>Build from source</h3>

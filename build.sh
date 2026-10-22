@@ -17,7 +17,7 @@
 #
 # Produces:
 #   target/gpui-dist/               self-contained staged dir (binary + libs)
-#   Parley-<ver>-x86_64.AppImage    repo root (version from parley-gpui/Cargo.toml)
+#   Parley-<ver>-x86_64.AppImage    repo root (version from scripts/version.sh)
 #   target/release/parley-mcp      MCP server, left for the user to register
 #                                    (not bundled into the AppImage — see
 #                                    parley-mcp/README.md)
@@ -208,7 +208,7 @@ echo "==> Staged: $DIST_DIR"
 du -sh "$DIST_DIR"/* | sed 's/^/    /'
 
 # ----- package as an AppImage -----
-GPUI_VERSION=$(awk -F'"' '/^version/ {print $2; exit}' "$ROOT/parley-gpui/Cargo.toml")
+GPUI_VERSION=$("$ROOT/scripts/version.sh")
 echo "==> Packaging AppImage (version $GPUI_VERSION)"
 APPIMAGE=$("$ROOT/parley-gpui/packaging/linux/build-appimage.sh" "$DIST_DIR" "$GPUI_VERSION" "$ROOT")
 

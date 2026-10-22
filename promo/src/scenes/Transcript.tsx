@@ -14,7 +14,7 @@ const WORD = 2.2; // frames per word
 const GAP = 8;
 
 export const Transcript: React.FC = () => (
-  <Feature side="right" headline={"Transcribed live.\n*On your device.*"} sub="Whisper or Parakeet, GPU-accelerated. Every speaker labelled as they talk.">
+  <Feature side="right" headline={"Transcribed live.\n*On your device.*"} sub="Whisper, GPU-accelerated on NVIDIA, AMD and Intel. Every speaker labelled as they talk.">
     <Panel width={920} height={680} title="Customer Call: Harbor Logistics" tilt={12} delay={2}>
       <TranscriptUi />
     </Panel>

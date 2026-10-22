@@ -15,9 +15,9 @@ on:
         required: true
         type: choice
         options:
-          - ubuntu-22.04
           - ubuntu-24.04
-        default: ubuntu-22.04
+          - ubuntu-24.04
+        default: ubuntu-24.04
       upload-artifacts:
         description: 'Upload build artifacts'
         required: true
@@ -39,7 +39,7 @@ env:
 jobs:
   build-linux:
     name: Build Linux (x64)
-    runs-on: ${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }}
+    runs-on: ${{ github.event.inputs.ubuntu-version || 'ubuntu-24.04' }}
     permissions:
       contents: write
 
@@ -49,11 +49,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get version from parley-gpui/Cargo.toml
+      - name: Get version (scripts/version.sh)
         id: get-version
         shell: bash
         run: |
-          VERSION=$(awk -F'"' '/^version/ {print $2; exit}' parley-gpui/Cargo.toml)
+          VERSION=$(scripts/version.sh)
           echo "Application version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -66,14 +66,18 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          key: ${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }}-x86_64-unknown-linux-gnu-gpui
+          key: ${{ github.event.inputs.ubuntu-version || 'ubuntu-24.04' }}-x86_64-unknown-linux-gnu-gpui
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            patchelf libasound2-dev libx11-dev libxtst-dev libxrandr-dev \
-            libpipewire-0.3-dev libclang-dev meson ninja-build
+            build-essential cmake pkg-config clang libclang-dev patchelf ninja-build \
+            libasound2-dev libpipewire-0.3-dev \
+            libfontconfig-dev libfreetype-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev libxtst-dev libxrandr-dev \
+            libvulkan-dev libssl-dev libzstd-dev libsqlite3-dev
+          pipx install meson  # webrtc-audio-processing-sys needs a recent meson
 
       - name: Install FUSE for AppImage
         run: |
@@ -102,7 +106,7 @@ jobs:
         if: ${{ github.event.inputs.upload-artifacts == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: parley-linux-${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }}-x64-${{ steps.get-version.outputs.version }}
+          name: parley-linux-${{ github.event.inputs.ubuntu-version || 'ubuntu-24.04' }}-x64-${{ steps.get-version.outputs.version }}
           path: Parley-*.AppImage
           retention-days: 30
 
@@ -114,7 +118,7 @@ jobs:
           echo "|----------|-------|" >> "$GITHUB_STEP_SUMMARY"
           echo "| **Version** | ${{ steps.get-version.outputs.version }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| **Mode** | ${{ github.event.inputs.mode || 'cpu' }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| **Ubuntu Version** | ${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Ubuntu Version** | ${{ github.event.inputs.ubuntu-version || 'ubuntu-24.04' }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### Build Artifact" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"

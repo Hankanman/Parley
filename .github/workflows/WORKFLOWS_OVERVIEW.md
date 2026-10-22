@@ -15,7 +15,7 @@ auto-updater.
 **Purpose:** One-off Linux AppImage build, run by hand
 
 **Key Features:**
-- Support for Ubuntu 22.04 and 24.04
+- Builds on Ubuntu 24.04 (AppImages need glibc 2.39+ and PipeWire 1.0+)
 - Builds via `./build.sh` (CPU-only — GitHub-hosted runners have no GPU)
 - AppImage size/extraction/library verification
 - Optional artifact upload
@@ -37,7 +37,7 @@ auto-updater.
 
 **Key Features:**
 - Uses reusable `build.yml` workflow
-- Matrix over Ubuntu 22.04 / 24.04
+- Matrix over the CPU and Vulkan builds (Ubuntu 24.04)
 - 30-day artifact retention
 
 **Triggers:**
@@ -62,10 +62,9 @@ auto-updater.
 
 **Key Features:**
 - Creates GitHub Release (draft)
-- Version comes from `parley-gpui/Cargo.toml`
-- Builds the Linux AppImage (`ubuntu-22.04`) via `build.yml` and uploads it
-  directly to the release
-- **Auto-increment versioning**: If tag exists, auto-increments (e.g., `0.1.1` -> `0.1.1.1` -> `0.1.1.2`, up to `.100`)
+- Version comes from `[workspace.package]` in the root `Cargo.toml` (`scripts/version.sh`)
+- Builds the CPU and Vulkan AppImages (`ubuntu-24.04`) via `build.yml` and
+  uploads them, each with a `.sha256` checksum, directly to the release
 
 **Triggers:**
 - Manual dispatch only
@@ -75,15 +74,13 @@ auto-updater.
 - Creating official release artifacts
 
 **Outputs:**
-- GitHub Release (draft)
-- Linux: `Parley-<version>-x86_64.AppImage`
+- GitHub Release (draft), tagged `v<version>` on the commit the workflow ran on
+- Linux: `Parley-<version>-x86_64.AppImage` (CPU) and `Parley-<version>-vulkan-x86_64.AppImage`, each with a `.sha256`
 - Release notes auto-generated
 
 **Version Behavior:**
-- If `v0.1.1` tag doesn't exist: creates `v0.1.1`
-- If `v0.1.1` exists: creates `v0.1.1.1`
-- If `v0.1.1.1` exists: creates `v0.1.1.2`
-- Maximum: `v0.1.1.100` (then bump the version in `parley-gpui/Cargo.toml`)
+- Strict semver: the workflow fails if `v<version>` already exists. Bump
+  first with `scripts/bump-version.sh patch|minor|major` (see `RELEASING.md`).
 
 ---
 
@@ -137,8 +134,8 @@ auto-updater.
 
 ```
 build.yml (reusable, Linux-only, CPU build via ./build.sh)
-    |-- build-test.yml (matrix over Ubuntu 22.04 / 24.04)
-    |-- release.yml (ubuntu-22.04 only, uploads to the release)
+    |-- build-test.yml (matrix over cpu / vulkan)
+    |-- release.yml (ubuntu-24.04 only, uploads to the release)
 
 Standalone (don't use build.yml):
     |-- build-linux.yml

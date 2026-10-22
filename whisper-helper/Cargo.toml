@@ -1,6 +1,6 @@
 [package]
 name = "whisper-helper"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 description = "Stdio JSON-lines whisper.cpp transcription sidecar (issue #56 spike). One binary per compiled backend — see README.md for the build matrix."
 

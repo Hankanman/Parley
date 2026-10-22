@@ -10,11 +10,14 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          - "ubuntu-22.04"
           - "ubuntu-24.04"
+        mode:
+          - "cpu"
+          - "vulkan"
 
     uses: ./.github/workflows/build.yml
     with:
       platform: ${{ matrix.platform }}
+      mode: ${{ matrix.mode }}
       upload-artifacts: true
     secrets: inherit

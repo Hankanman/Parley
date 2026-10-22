@@ -1,6 +1,6 @@
 [package]
 name = "parley-gpui"
-version = "0.1.0"
+version.workspace = true
 description = "Parley desktop app built on GPUI, linking parley-core directly"
 license = "MIT"
 edition = "2024"

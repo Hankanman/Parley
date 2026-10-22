@@ -1,6 +1,6 @@
 [package]
 name = "parley-core"
-version = "0.4.0"
+version.workspace = true
 description = "UI-independent core: audio capture/mixing/VAD, transcription, diarization, summaries, persistence"
 edition.workspace = true
 rust-version.workspace = true

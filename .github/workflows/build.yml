@@ -1,8 +1,12 @@
 name: "Build"
 
-# Builds the Parley (parley-gpui) AppImage via ./build.sh cpu. GitHub-hosted
-# runners have no GPU, so every CI build is CPU-only; use ./build.sh
-# cuda|vulkan locally for accelerated builds.
+# Builds the Parley (parley-gpui) AppImage via ./build.sh <mode>.
+#   mode: cpu     -> Parley-<version>-x86_64.AppImage
+#   mode: vulkan  -> Parley-<version>-vulkan-x86_64.AppImage (GPU Whisper on
+#                    NVIDIA/AMD/Intel; compiling it needs only the Vulkan SDK,
+#                    not a GPU)
+# Built on ubuntu-24.04 (PipeWire 1.0 headers, which the pipewire crate
+# needs) so the AppImage runs on any distro with glibc 2.39+.
 
 on:
   workflow_call:
@@ -10,7 +14,7 @@ on:
       platform:
         required: false
         type: string
-        default: "ubuntu-22.04"
+        default: "ubuntu-24.04"
       release-id:
         required: false
         type: string
@@ -18,6 +22,10 @@ on:
         required: false
         type: boolean
         default: false
+      mode:
+        required: false
+        type: string
+        default: "cpu"
       repository:
         required: false
         type: string
@@ -39,11 +47,11 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
 
-      - name: Get version from parley-gpui/Cargo.toml
+      - name: Get version (scripts/version.sh)
         id: get-version
         shell: bash
         run: |
-          VERSION=$(awk -F'"' '/^version/ {print $2; exit}' parley-gpui/Cargo.toml)
+          VERSION=$(scripts/version.sh)
           echo "Application version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -54,25 +62,70 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          key: ${{ inputs.platform }}-gpui-v1
+          key: ${{ inputs.platform }}-${{ inputs.mode }}-gpui-v1
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
+          # GPUI (fontconfig, freetype, xkbcommon, wayland, x11/xcb), audio
+          # (ALSA, PipeWire), whisper/llama (cmake, clang), openssl, AppImage (fuse)
           sudo apt-get install -y \
-            patchelf libasound2-dev libx11-dev libxtst-dev libxrandr-dev \
-            libpipewire-0.3-dev libclang-dev meson ninja-build \
+            build-essential cmake pkg-config clang libclang-dev patchelf ninja-build \
+            libasound2-dev libpipewire-0.3-dev \
+            libfontconfig-dev libfreetype-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev libxtst-dev libxrandr-dev \
+            libvulkan-dev libssl-dev libzstd-dev libsqlite3-dev \
             fuse libfuse2
+          # webrtc-audio-processing-sys runs `meson setup --reconfigure` on a
+          # fresh build dir, which needs a recent meson; take the current one.
+          pipx install meson
+          meson --version
 
-      - name: Build AppImage (CPU)
-        run: ./build.sh cpu
+      # Pinned LunarG SDK: glslc (ggml's Vulkan shaders) and current Vulkan
+      # headers, pinned so builds are reproducible.
+      - name: Cache Vulkan SDK
+        if: inputs.mode == 'vulkan'
+        uses: actions/cache@v4
+        with:
+          path: ~/vulkan-sdk
+          key: vulkan-sdk-1.4.341.1
+
+      - name: Install Vulkan SDK
+        if: inputs.mode == 'vulkan'
+        run: |
+          v=1.4.341.1
+          if [ ! -d ~/vulkan-sdk/$v ]; then
+            mkdir -p ~/vulkan-sdk
+            curl -fsSL "https://sdk.lunarg.com/sdk/download/$v/linux/vulkansdk-linux-x86_64-$v.tar.xz" | tar -xJ -C ~/vulkan-sdk
+          fi
+          sdk=~/vulkan-sdk/$v/x86_64
+          echo "VULKAN_SDK=$sdk" >> "$GITHUB_ENV"
+          echo "$sdk/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$sdk/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$sdk/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+          "$sdk/bin/glslc" --version | head -1
+
+      - name: Build AppImage (${{ inputs.mode }})
+        run: |
+          ./build.sh "${{ inputs.mode }}"
+          if [ "${{ inputs.mode }}" != cpu ]; then
+            v="${{ steps.get-version.outputs.version }}"
+            mv "Parley-$v-x86_64.AppImage" "Parley-$v-${{ inputs.mode }}-x86_64.AppImage"
+          fi
+
+      - name: Name the AppImage
+        id: appimage
+        run: |
+          v="${{ steps.get-version.outputs.version }}"
+          if [ "${{ inputs.mode }}" = cpu ]; then f="Parley-$v-x86_64.AppImage"; else f="Parley-$v-${{ inputs.mode }}-x86_64.AppImage"; fi
+          echo "file=$f" >> "$GITHUB_OUTPUT"
 
       - name: Verify AppImage before post-processing
         run: |
-          f="Parley-${{ steps.get-version.outputs.version }}-x86_64.AppImage"
+          f="${{ steps.appimage.outputs.file }}"
           [ -f "$f" ] || { echo "::error::no AppImage produced ($f)"; exit 1; }
           size=$(stat -c%s "$f"); echo "$f: $size bytes"
-          if [ "$size" -lt 50000000 ]; then echo "::error::AppImage is only $size bytes"; exit 1; fi
+          if [ "$size" -lt 30000000 ]; then echo "::error::AppImage is only $size bytes"; exit 1; fi  # CPU build is ~46 MB
           chmod +x "$f"
           ./"$f" --appimage-extract >/dev/null 2>&1 || { echo "::error::AppImage does not extract"; exit 1; }
           if ! find squashfs-root -name 'libsherpa-onnx-c-api.so*' | grep -q .; then
@@ -85,14 +138,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "v${{ steps.get-version.outputs.version }}" \
-            "Parley-${{ steps.get-version.outputs.version }}-x86_64.AppImage" \
+          f="${{ steps.appimage.outputs.file }}"
+          sha256sum "$f" > "$f.sha256"
+          gh release upload "v${{ steps.get-version.outputs.version }}" "$f" "$f.sha256" \
             --repo "${{ github.repository }}" --clobber
 
       - name: Upload artifacts
         if: inputs.upload-artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: parley-${{ inputs.platform }}-${{ steps.get-version.outputs.version }}
+          name: parley-${{ inputs.platform }}-${{ inputs.mode }}-${{ steps.get-version.outputs.version }}
           path: Parley-*.AppImage
           retention-days: 30

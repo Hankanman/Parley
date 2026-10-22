@@ -23,47 +23,21 @@ jobs:
         with:
           fetch-depth: 0  # Fetch all tags
 
-      - name: Get version from parley-gpui/Cargo.toml and check for existing tags
+      - name: Get version and check it is a new semver release
         id: get-version
         shell: bash
         run: |
-          BASE_VERSION=$(awk -F'"' '/^version/ {print $2; exit}' parley-gpui/Cargo.toml)
-          echo "Base version from parley-gpui/Cargo.toml: $BASE_VERSION"
-
-          # Fetch all tags
-          git fetch --tags
-
-          # Check if base version tag exists
-          if git tag -l "v${BASE_VERSION}" | grep -q .; then
-            echo "Tag v${BASE_VERSION} already exists, looking for minor updates..."
-
-            # Find all existing minor versions (e.g., 0.1.1.1, 0.1.1.2, etc.)
-            LATEST_MINOR=0
-            for i in $(seq 1 100); do
-              if git tag -l "v${BASE_VERSION}.${i}" | grep -q .; then
-                LATEST_MINOR=$i
-              else
-                break
-              fi
-            done
-
-            # Increment to next minor version
-            NEXT_MINOR=$((LATEST_MINOR + 1))
-
-            if [ $NEXT_MINOR -gt 100 ]; then
-              echo "ERROR: Maximum minor version (100) reached for ${BASE_VERSION}"
-              echo "Please update the version in parley-gpui/Cargo.toml"
-              exit 1
-            fi
-
-            VERSION="${BASE_VERSION}.${NEXT_MINOR}"
-            echo "Using minor update version: $VERSION"
-          else
-            VERSION="${BASE_VERSION}"
-            echo "Using base version: $VERSION"
+          VERSION=$(scripts/version.sh)
+          echo "Version from Cargo.toml: $VERSION"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$VERSION' is not a semver X.Y.Z version"
+            exit 1
           fi
-
-          echo "Final version: $VERSION"
+          git fetch --tags --force
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::v$VERSION is already released. Bump the version first: scripts/bump-version.sh patch|minor|major (see RELEASING.md)"
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Create Draft Release
@@ -75,6 +49,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               tag_name: `v${{ steps.get-version.outputs.version }}`,
+              target_commitish: context.sha,
               name: `Parley v${{ steps.get-version.outputs.version }}`,
               draft: true,
               prerelease: false,
@@ -83,17 +58,21 @@ jobs:
             console.log(`Created draft release with ID: ${data.id}`)
             return data.id
 
-  # STEP 2: Build the Linux AppImage (CPU-only — GitHub-hosted runners have no
-  # GPU) and upload it directly to the release. Local builds should use
-  # ./build.sh (cuda/vulkan/cpu, auto-detected) instead.
+  # STEP 2: Build the CPU and Vulkan AppImages on ubuntu-24.04 (portable to
+  # glibc 2.39+) and upload them, with checksums, directly to the release.
   # Note: macOS and Windows are dropped platforms (Linux-only app, see CLAUDE.md).
   build-linux:
     needs: create-release
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: ["cpu", "vulkan"]
     uses: ./.github/workflows/build.yml
     with:
-      platform: "ubuntu-22.04"
+      platform: "ubuntu-24.04"
+      mode: ${{ matrix.mode }}
       upload-artifacts: false  # this workflow uploads directly to the release
       release-id: ${{ needs.create-release.outputs.release-id }}
     secrets: inherit
@@ -139,7 +118,7 @@ jobs:
           echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.create-release.outputs.version }}"
           echo ""
           echo "Uploaded assets:"
-          echo "  - Linux: Parley-*.AppImage"
+          echo "  - Linux: Parley-*-x86_64.AppImage (CPU) and Parley-*-vulkan-x86_64.AppImage"
           echo ""
           echo "Next steps:"
           echo "  1. Review the draft release"
@@ -158,7 +137,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Platform | Assets |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Linux** | Parley-*.AppImage |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Linux** | Parley-*-x86_64.AppImage (CPU), Parley-*-vulkan-x86_64.AppImage |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
