@@ -64,7 +64,7 @@ curl -fsSL https://meetparley.app/install.sh | sh
 
 This picks the Vulkan (GPU) build if you have an NVIDIA, AMD or Intel GPU with a Vulkan driver, or the CPU build otherwise, verifies its checksum, installs it as `~/.local/bin/parley` and adds Parley to your application menu, with no root needed. `curl -fsSL https://meetparley.app/install.sh | sh -s -- --uninstall` removes it again (your meetings and settings stay). The script is [`site/install.sh`](site/install.sh) if you'd like to read it first.
 
-Or download the `.AppImage` from the [latest release](https://github.com/Hankanman/Parley/releases/latest) yourself, make it executable (`chmod +x`) and run it. AppImages need FUSE 2 (`libfuse2` / `fuse-libs` / `fuse2`, depending on your distribution).
+Or download the `.AppImage` from the [latest release](https://github.com/Hankanman/Parley/releases/latest) yourself, make it executable (`chmod +x`) and run it. AppImages need FUSE's `fusermount`, which most desktops already have (otherwise install your distribution's `fuse3` package).
 
 The first run walks you through downloading a Whisper model and the built-in summary model.
 
