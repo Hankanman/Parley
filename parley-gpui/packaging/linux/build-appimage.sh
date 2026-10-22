@@ -80,6 +80,8 @@ export LD_LIBRARY_PATH="$DIST_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 # breaks on any machine with a different driver version. The CUDA *runtime*
 # libraries (libcudart, libcublas, libcublasLt) are redistributable and are
 # still bundled so the AppImage runs without the CUDA toolkit installed.
+# Vulkan builds: never bundle the Vulkan loader (libvulkan.so.1) either; the
+# system's loader is the one that knows the installed GPU drivers.
 mkdir -p "$OUT_DIR"
 (
     cd "$OUT_DIR"
@@ -90,6 +92,7 @@ mkdir -p "$OUT_DIR"
         --icon-file "$APPDIR/usr/share/icons/hicolor/512x512/apps/io.github.hankanman.Parley.png" \
         --exclude-library 'libcuda.so*' \
         --exclude-library 'libnvidia-*' \
+        --exclude-library 'libvulkan.so*' \
         --output appimage 1>&2
 )
 

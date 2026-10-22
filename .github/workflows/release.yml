@@ -58,17 +58,21 @@ jobs:
             console.log(`Created draft release with ID: ${data.id}`)
             return data.id
 
-  # STEP 2: Build the Linux AppImage (CPU-only — GitHub-hosted runners have no
-  # GPU) and upload it directly to the release. Local builds should use
-  # ./build.sh (cuda/vulkan/cpu, auto-detected) instead.
+  # STEP 2: Build the CPU and Vulkan AppImages on ubuntu-22.04 (portable to
+  # glibc 2.35+) and upload them, with checksums, directly to the release.
   # Note: macOS and Windows are dropped platforms (Linux-only app, see CLAUDE.md).
   build-linux:
     needs: create-release
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: ["cpu", "vulkan"]
     uses: ./.github/workflows/build.yml
     with:
       platform: "ubuntu-22.04"
+      mode: ${{ matrix.mode }}
       upload-artifacts: false  # this workflow uploads directly to the release
       release-id: ${{ needs.create-release.outputs.release-id }}
     secrets: inherit
@@ -114,7 +118,7 @@ jobs:
           echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.create-release.outputs.version }}"
           echo ""
           echo "Uploaded assets:"
-          echo "  - Linux: Parley-*.AppImage"
+          echo "  - Linux: Parley-*-x86_64.AppImage (CPU) and Parley-*-vulkan-x86_64.AppImage"
           echo ""
           echo "Next steps:"
           echo "  1. Review the draft release"
@@ -133,7 +137,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Platform | Assets |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Linux** | Parley-*.AppImage |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Linux** | Parley-*-x86_64.AppImage (CPU), Parley-*-vulkan-x86_64.AppImage |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

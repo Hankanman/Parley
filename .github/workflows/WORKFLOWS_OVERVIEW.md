@@ -63,8 +63,8 @@ auto-updater.
 **Key Features:**
 - Creates GitHub Release (draft)
 - Version comes from `[workspace.package]` in the root `Cargo.toml` (`scripts/version.sh`)
-- Builds the Linux AppImage (`ubuntu-22.04`) via `build.yml` and uploads it,
-  with a `.sha256` checksum, directly to the release
+- Builds the CPU and Vulkan AppImages (`ubuntu-22.04`) via `build.yml` and
+  uploads them, each with a `.sha256` checksum, directly to the release
 
 **Triggers:**
 - Manual dispatch only
@@ -75,7 +75,7 @@ auto-updater.
 
 **Outputs:**
 - GitHub Release (draft), tagged `v<version>` on the commit the workflow ran on
-- Linux: `Parley-<version>-x86_64.AppImage` and `Parley-<version>-x86_64.AppImage.sha256`
+- Linux: `Parley-<version>-x86_64.AppImage` (CPU) and `Parley-<version>-vulkan-x86_64.AppImage`, each with a `.sha256`
 - Release notes auto-generated
 
 **Version Behavior:**
