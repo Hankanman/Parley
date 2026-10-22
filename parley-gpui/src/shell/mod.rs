@@ -14,6 +14,7 @@ use gpui_kit::component::{
     input::{Input, InputEvent, InputState},
     sidebar::{Sidebar, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem},
 };
+use gpui_kit::base::StyledExt as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use parley_core::database::models::MeetingModel;
@@ -109,6 +110,9 @@ const CONTENT_SEARCH_LIMIT: u32 = 200;
 
 pub struct AppShell {
     route: Route,
+    /// Bumped on every route change, so the page's entrance animation
+    /// replays (its element id includes this).
+    route_epoch: usize,
     recording: Entity<RecordingView>,
     meeting: Entity<MeetingView>,
     settings: Entity<SettingsView>,
@@ -173,6 +177,7 @@ impl AppShell {
             meetings: Vec::new(),
             meetings_loading: false,
             rendered_sidebar_shape: (0, 0),
+            route_epoch: 0,
             search,
             content_matches: Vec::new(),
             content_search_loading: false,
@@ -181,6 +186,10 @@ impl AppShell {
         };
         shell.load_meetings(cx);
         shell._upcoming_refresh = shell.start_upcoming_refresh(cx);
+        #[cfg(debug_assertions)]
+        if let Some(route) = dev_route() {
+            shell.navigate(route, cx);
+        }
         shell
     }
 
@@ -210,6 +219,9 @@ impl AppShell {
             self.recording.update(cx, |view, cx| view.on_leave(cx));
         } else if self.route != Route::Recording && route == Route::Recording {
             self.recording.update(cx, |view, cx| view.on_show(cx));
+        }
+        if self.route != route {
+            self.route_epoch += 1;
         }
         self.route = route;
         cx.notify();
@@ -428,7 +440,6 @@ impl AppShell {
             meeting.title.clone()
         };
         SidebarMenuItem::new(label)
-            .icon(IconName::FileText)
             .active(active)
             .on_click(move |_, window, cx| {
                 let id = id.clone();
@@ -557,6 +568,26 @@ impl AppShell {
     }
 }
 
+/// Debug builds only: open on the page named by `PARLEY_DEV_ROUTE`
+/// (`ask`, `settings`, `actions`, `speakers`, `meeting:<id>`, `brief:<id>`),
+/// for checking a page's layout without clicking through to it.
+#[cfg(debug_assertions)]
+fn dev_route() -> Option<Route> {
+    let value = std::env::var("PARLEY_DEV_ROUTE").ok()?;
+    let route = match value.split_once(':') {
+        Some(("meeting", id)) => Route::Meeting(id.to_string()),
+        Some(("brief", id)) => Route::Brief(id.to_string()),
+        _ => match value.as_str() {
+            "ask" => Route::Ask,
+            "settings" => Route::Settings,
+            "actions" => Route::ActionItems,
+            "speakers" => Route::Speakers,
+            _ => return None,
+        },
+    };
+    Some(route)
+}
+
 fn meeting_row(model: MeetingModel) -> MeetingRow {
     MeetingRow {
         id: model.id,
@@ -586,10 +617,20 @@ impl Render for AppShell {
 
         let mut sidebar = Sidebar::new("app-sidebar")
             .header(
-                SidebarHeader::new()
-                    .child(v_flex().w_full().gap_2().child("Parley").child(
-                        Input::new(&self.search).prefix(IconName::Search.view(cx)),
-                    )),
+                SidebarHeader::new().child(
+                    v_flex()
+                        .w_full()
+                        .gap_3()
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .px_1()
+                                .child(crate::ui::logo_mark(22.))
+                                .child(div().text_base().font_semibold().child("Parley")),
+                        )
+                        .child(Input::new(&self.search).prefix(IconName::Search.view(cx))),
+                ),
             )
             .child(
                 SidebarGroup::new("Meetings").child(SidebarMenu::new().children([
@@ -694,7 +735,12 @@ impl Render for AppShell {
                     .flex_1()
                     .min_h_0()
                     .child(sidebar)
-                    .child(div().flex_1().min_w_0().h_full().child(page)),
+                    .child(
+                        div().flex_1().min_w_0().h_full().child(crate::ui::fade_in(
+                            div().size_full().child(page),
+                            ("page", self.route_epoch),
+                        )),
+                    ),
             )
     }
 }

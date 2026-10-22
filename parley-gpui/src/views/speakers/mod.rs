@@ -568,7 +568,7 @@ impl SpeakersView {
                     .items_center()
                     .gap_2()
                     .child(IconName::User.view(cx))
-                    .child(div().text_lg().font_semibold().child("Speakers")),
+                    .child(div().text_xl().font_semibold().child("Speakers")),
             )
             .child(
                 div().text_xs().text_color(cx.theme().muted_foreground).child(
@@ -764,7 +764,7 @@ impl SpeakersView {
                      just keep talking.",
                 ),
             )
-            .child(self.self_voice_level_bar(level))
+            .child(self.self_voice_level_bar(level, cx))
             .child(
                 h_flex()
                     .items_center()
@@ -794,20 +794,20 @@ impl SpeakersView {
             .into_any_element()
     }
 
-    fn self_voice_level_bar(&self, level: f32) -> impl IntoElement {
+    fn self_voice_level_bar(&self, level: f32, cx: &App) -> impl IntoElement {
         let level = level.clamp(0.0, 1.0);
         div()
             .w_full()
             .h_2()
             .rounded_full()
-            .bg(hsla(0., 0., 0.5, 0.15))
+            .bg(cx.theme().border)
             .overflow_hidden()
             .child(
                 div()
                     .h_full()
                     .rounded_full()
                     .w(relative(level))
-                    .bg(hsla(0.38 - 0.1 * level, 0.65, 0.5, 1.)),
+                    .bg(crate::ui::level_color(level, cx)),
             )
     }
 
@@ -906,10 +906,12 @@ impl SpeakersView {
             .items_center()
             .gap_3()
             .px_3()
-            .py_2()
-            .rounded_md()
+            .py_2p5()
+            .rounded(cx.theme().radius_lg)
             .border_1()
             .border_color(cx.theme().border)
+            .bg(cx.theme().group_box)
+            .child(crate::ui::avatar(&profile.name, 36., cx))
             .child(
                 v_flex()
                     .flex_1()

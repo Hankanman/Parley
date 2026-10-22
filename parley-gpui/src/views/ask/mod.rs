@@ -18,7 +18,7 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::IconNameExt as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::{
-    ActiveTheme, Disableable as _, IconName, IndexPath,
+    ActiveTheme, Disableable as _, Icon, IconName, IndexPath,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputEvent, InputState},
@@ -435,7 +435,7 @@ impl Render for AskView {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(div().text_lg().font_semibold().child("Ask Parley"))
+                            .child(div().text_xl().font_semibold().child("Ask Parley"))
                             .child(
                                 div()
                                     .text_xs()
@@ -544,35 +544,66 @@ impl Render for AskView {
 
 impl AskView {
     fn render_empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut col = v_flex()
-            .flex_1()
-            .gap_3()
-            .p_4()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(Lucide::Sparkles.view(cx))
-                    .child(div().text_sm().font_semibold().child("Ask anything across your meetings")),
-            )
-            .child(
-                div().text_xs().text_color(cx.theme().muted_foreground).child(
-                    "Parley searches your transcripts, picks the most relevant passages and answers with \
-                     citations like [M1 12:34]. Click one to open that meeting at that moment. \
-                     Narrow the search with the filters above.",
-                ),
-            );
-        for (ix, suggestion) in SUGGESTIONS.iter().enumerate() {
+        let theme = cx.theme().clone();
+        let suggestions = SUGGESTIONS.iter().enumerate().map(|(ix, suggestion)| {
             let text = suggestion.to_string();
-            col = col.child(
-                Button::new(SharedString::from(format!("ask-all-suggestion-{ix}")))
-                    .outline()
-                    .small()
-                    .label(*suggestion)
-                    .on_click(cx.listener(move |this, _, window, cx| this.ask(text.clone(), window, cx))),
-            );
-        }
-        col.into_any_element()
+            crate::ui::fade_in(
+                h_flex()
+                    .id(SharedString::from(format!("ask-all-suggestion-{ix}")))
+                    .w_full()
+                    .gap_3()
+                    .items_center()
+                    .px_4()
+                    .py_3()
+                    .rounded(theme.radius_lg)
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.group_box)
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.accent).border_color(theme.primary.opacity(0.5)))
+                    .on_click(cx.listener(move |this, _, window, cx| this.ask(text.clone(), window, cx)))
+                    .child(div().text_color(theme.primary).child(Lucide::MessageSquare.view(cx)))
+                    .child(div().flex_1().text_sm().child(*suggestion))
+                    .child(div().text_color(theme.muted_foreground).child(Lucide::ArrowRight.view(cx))),
+                ("ask-all-suggestion-in", ix),
+            )
+        });
+        v_flex()
+            .flex_1()
+            .items_center()
+            .justify_center()
+            .gap_6()
+            .p_8()
+            .child(
+                v_flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .size(px(56.))
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(theme.primary.opacity(0.12))
+                            .text_color(theme.primary)
+                            .child(Icon::from(Lucide::Sparkles).large()),
+                    )
+                    .child(div().text_xl().font_semibold().child("Ask anything across your meetings"))
+                    .child(
+                        div()
+                            .max_w(px(520.))
+                            .text_sm()
+                            .text_center()
+                            .text_color(theme.muted_foreground)
+                            .child(
+                                "Parley searches your transcripts, picks the most relevant passages and answers \
+                                 with citations like [M1 12:34]. Click one to open that meeting at that moment.",
+                            ),
+                    ),
+            )
+            .child(v_flex().w_full().max_w(px(560.)).gap_2().children(suggestions))
+            .into_any_element()
     }
 }
 

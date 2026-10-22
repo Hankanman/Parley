@@ -2537,7 +2537,6 @@ impl Render for MeetingView {
         v_flex()
             .size_full()
             .child(self.render_header(cx))
-            .child(self.render_calendar_row(cx))
             .when(self.calendar_picker_open, |this| this.child(self.render_calendar_picker(cx)))
             .when(self.retranscribe_open, |this| this.child(self.render_retranscribe(cx)))
             .child(
@@ -2629,7 +2628,9 @@ impl MeetingView {
             .items_center()
             .justify_between()
             .gap_3()
-            .p_4()
+            .px_4()
+            .pt_5()
+            .pb_4()
             .border_b_1()
             .border_color(cx.theme().border)
             .child(if self.editing_title {
@@ -2656,21 +2657,20 @@ impl MeetingView {
                     )
                     .into_any_element()
             } else {
-                h_flex()
+                v_flex()
                     .flex_1()
                     .min_w_0()
-                    .gap_3()
-                    .items_center()
+                    .gap_2()
                     .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
+                        h_flex()
                             .gap_1()
+                            .items_center()
                             .child(
                                 div()
-                                    .text_lg()
+                                    .text_2xl()
                                     .font_semibold()
                                     .overflow_hidden()
+                                    .text_ellipsis()
                                     .child(if self.title.trim().is_empty() {
                                         "Untitled meeting".to_string()
                                     } else {
@@ -2678,22 +2678,26 @@ impl MeetingView {
                                     }),
                             )
                             .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(date),
+                                Button::new("edit-title")
+                                    .ghost()
+                                    .small()
+                                    .icon(Lucide::Pencil)
+                                    .tooltip("Rename")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        let title = this.title.clone();
+                                        this.title_input.update(cx, |state, cx| state.set_value(title, window, cx));
+                                        this.editing_title = true;
+                                        cx.notify();
+                                    })),
                             ),
                     )
                     .child(
-                        Button::new("edit-title")
-                            .ghost()
-                            .label("Rename")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                let title = this.title.clone();
-                                this.title_input.update(cx, |state, cx| state.set_value(title, window, cx));
-                                this.editing_title = true;
-                                cx.notify();
-                            })),
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .flex_wrap()
+                            .when(!date.is_empty(), |this| this.child(crate::ui::meta_chip(Lucide::Clock, date, cx)))
+                            .children(self.render_calendar_row(cx)),
                     )
                     .into_any_element()
             })
@@ -2736,110 +2740,67 @@ impl MeetingView {
 
     /// The calendar-event link row shown under the header — mirrors
     /// `CalendarEventPanel.tsx`.
-    fn render_calendar_row(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The linked calendar event as header chips (event + time, place,
+    /// attendees) with Change / Unlink, or a "Link calendar event" button.
+    fn render_calendar_row(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         if self.calendar_loading {
-            return div().into_any_element();
+            return Vec::new();
         }
-        let row = h_flex()
-            .w_full()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .px_4()
-            .py_2()
-            .border_b_1()
-            .border_color(cx.theme().border);
 
         let Some(event) = self.calendar_event.clone() else {
-            return row
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .text_color(cx.theme().muted_foreground)
-                        .text_sm()
-                        .child(Lucide::Calendar.view(cx))
-                        .child("Not linked to a calendar event."),
-                )
-                .child(
+            return vec![
                     Button::new("link-calendar-event")
                         .ghost()
+                        .xsmall()
                         .icon(Lucide::Link2)
-                        .label("Link event")
+                        .label("Link calendar event")
                         .disabled(self.calendar_mutating)
-                        .on_click(cx.listener(|this, _, _, cx| this.open_calendar_picker(cx))),
-                )
-                .into_any_element();
+                        .on_click(cx.listener(|this, _, _, cx| this.open_calendar_picker(cx)))
+                        .into_any_element(),
+            ];
         };
 
         let attendee_count = event.attendees.len();
-        row.child(
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .gap_1()
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .child(Lucide::Calendar.view(cx))
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_medium()
-                                .child(event.summary.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| "(untitled event)".to_string())),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(calendar_format::format_time_range(event.start_at, event.end_at)),
-                )
-                .when_some(event.location.clone().filter(|l| !l.is_empty()), |el, loc| {
-                    el.child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(Lucide::MapPin.view(cx))
-                            .child(loc),
-                    )
-                })
-                .when(attendee_count > 0, |el| {
-                    el.child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(Lucide::Users.view(cx))
-                            .child(format!("{attendee_count} attendee{}", if attendee_count == 1 { "" } else { "s" })),
-                    )
-                }),
+        let title = event.summary.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| "(untitled event)".to_string());
+        let mut items = vec![crate::ui::meta_chip(
+            Lucide::Calendar,
+            format!("{title} · {}", calendar_format::format_time_range(event.start_at, event.end_at)),
+            cx,
         )
-        .child(
-            h_flex()
-                .gap_2()
-                .items_center()
-                .child(
-                    Button::new("change-calendar-event")
-                        .ghost()
-                        .label("Change")
-                        .disabled(self.calendar_mutating)
-                        .on_click(cx.listener(|this, _, _, cx| this.open_calendar_picker(cx))),
+        .into_any_element()];
+        if let Some(loc) = event.location.clone().filter(|l| !l.is_empty()) {
+            items.push(crate::ui::meta_chip(Lucide::MapPin, loc, cx).into_any_element());
+        }
+        if attendee_count > 0 {
+            items.push(
+                crate::ui::meta_chip(
+                    Lucide::Users,
+                    format!("{attendee_count} attendee{}", if attendee_count == 1 { "" } else { "s" }),
+                    cx,
                 )
-                .child(
-                    Button::new("unlink-calendar-event")
-                        .ghost()
-                        .icon(Lucide::Link2Off)
-                        .label("Unlink")
-                        .disabled(self.calendar_mutating)
-                        .on_click(cx.listener(|this, _, _, cx| this.unlink_calendar_event(cx))),
-                ),
-        )
-        .into_any_element()
+                .into_any_element(),
+            );
+        }
+        items.push(
+            Button::new("change-calendar-event")
+                .ghost()
+                .xsmall()
+                .label("Change")
+                .disabled(self.calendar_mutating)
+                .on_click(cx.listener(|this, _, _, cx| this.open_calendar_picker(cx)))
+                .into_any_element(),
+        );
+        items.push(
+            Button::new("unlink-calendar-event")
+                .ghost()
+                .xsmall()
+                .icon(Lucide::Link2Off)
+                .tooltip("Unlink calendar event")
+                .disabled(self.calendar_mutating)
+                .on_click(cx.listener(|this, _, _, cx| this.unlink_calendar_event(cx)))
+                .into_any_element(),
+        );
+        items
     }
 
     /// "Link calendar event" picker: events within `±CALENDAR_WINDOW_DAYS`
@@ -3066,10 +3027,11 @@ impl MeetingView {
             .items_center()
             .justify_between()
             .gap_2()
-            .p_4()
+            .px_4()
+            .py_2()
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(div().text_sm().font_semibold().child("Transcript"))
+            .child(crate::ui::section_label("Transcript", cx))
             .child(
                 Button::new("copy-transcript")
                     .ghost()
@@ -3083,7 +3045,17 @@ impl MeetingView {
             return v_flex()
                 .size_full()
                 .child(header)
-                .child(div().p_4().child("Loading transcript…"))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .px_4()
+                        .py_4()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(crate::ui::pulse_dot(cx.theme().primary, 6., "transcript-loading"))
+                        .child("Loading transcript…"),
+                )
                 .into_any_element();
         }
         if let Some(err) = &self.load_error {
@@ -3097,12 +3069,12 @@ impl MeetingView {
             return v_flex()
                 .size_full()
                 .child(header)
-                .child(
-                    div()
-                        .p_4()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("No transcript yet."),
-                )
+                .child(crate::ui::empty_state(
+                    Lucide::AudioLines,
+                    "No transcript yet",
+                    "Nothing was transcribed for this meeting. If its audio was saved, Retranscribe (in the header) can try again.",
+                    cx,
+                ))
                 .into_any_element();
         }
 
@@ -3268,18 +3240,25 @@ impl MeetingView {
                     .items_center()
                     .justify_between()
                     .gap_2()
-                    .p_4()
+                    .px_4()
+                    .py_3()
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(div().text_sm().font_semibold().child("Summary"))
+                            .child(crate::ui::section_label("Summary", cx))
                             .when_some(status_label, |this, label| {
+                                let generating = matches!(self.summary_phase, SummaryPhase::Generating);
                                 this.child(
-                                    div()
+                                    h_flex()
+                                        .gap_2()
+                                        .items_center()
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
+                                        .when(generating, |this| {
+                                            this.child(crate::ui::pulse_dot(cx.theme().primary, 6., "summary-generating"))
+                                        })
                                         .child(label),
                                 )
                             }),

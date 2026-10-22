@@ -10,7 +10,7 @@
 mod logic;
 
 use gpui_kit::component::{
-    ActiveTheme, Disableable as _, IconName, WindowExt as _,
+    ActiveTheme, Disableable as _, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
@@ -280,7 +280,7 @@ impl ActionItemsView {
             .border_b_1()
             .border_color(cx.theme().border)
             .child(IconName::CircleCheck.view(cx))
-            .child(div().text_lg().font_semibold().child("Action items"))
+            .child(div().text_xl().font_semibold().child("Action items"))
             .child(
                 div()
                     .text_xs()
@@ -497,14 +497,19 @@ impl ActionItemsView {
                 .into_any_element();
         }
 
-        Button::new(format!("add-item-{meeting_id}"))
-            .ghost()
-            .icon(IconName::Plus)
-            .label("Add item")
-            .disabled(self.adding_to.is_some())
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.start_add(meeting_id.clone(), window, cx);
-            }))
+        h_flex()
+            .w_full()
+            .child(
+                Button::new(format!("add-item-{meeting_id}"))
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Plus)
+                    .label("Add item")
+                    .disabled(self.adding_to.is_some())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.start_add(meeting_id.clone(), window, cx);
+                    })),
+            )
             .into_any_element()
     }
 }

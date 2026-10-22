@@ -14,6 +14,7 @@ mod recovery;
 mod root;
 mod runtime;
 mod shell;
+mod theme;
 mod tray;
 mod ui;
 mod window;
@@ -100,6 +101,7 @@ fn main() {
     let runtime_context = runtime_handle.enter();
     app.run(move |cx| {
         gpui_kit::init(cx);
+        theme::install(cx);
         zorite_editor::bind_keys(cx);
         bookmark::install(cx);
         // After `gpui_kit::init` (which sets the Theme global), before any
