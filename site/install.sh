@@ -145,14 +145,16 @@ fi
 
 say "Installed Parley $VERSION ($BUILD build) to $BIN_DIR/parley"
 
-# AppImages need FUSE 2 to mount themselves.
-if ! ls /usr/lib*/libfuse.so.2* /usr/lib/*/libfuse.so.2* /lib*/libfuse.so.2* /lib/*/libfuse.so.2* >/dev/null 2>&1; then
-    warn "FUSE 2 (libfuse.so.2) wasn't found, and AppImages need it to start. Install it with:"
-    if command -v apt-get >/dev/null 2>&1; then echo "    sudo apt install libfuse2   (libfuse2t64 on Ubuntu 24.04+)" >&2
-    elif command -v dnf >/dev/null 2>&1; then echo "    sudo dnf install fuse-libs" >&2
-    elif command -v pacman >/dev/null 2>&1; then echo "    sudo pacman -S fuse2" >&2
-    elif command -v zypper >/dev/null 2>&1; then echo "    sudo zypper install libfuse2" >&2
-    else echo "    your distribution's FUSE 2 package" >&2; fi
+# The AppImage runtime has libfuse built in but mounts itself with the
+# system's fusermount (FUSE 3 or 2).
+if ! command -v fusermount3 >/dev/null 2>&1 && ! command -v fusermount >/dev/null 2>&1; then
+    warn "FUSE (fusermount) wasn't found, and AppImages need it to start. Install it with:"
+    if command -v apt-get >/dev/null 2>&1; then echo "    sudo apt install fuse3" >&2
+    elif command -v dnf >/dev/null 2>&1; then echo "    sudo dnf install fuse3" >&2
+    elif command -v pacman >/dev/null 2>&1; then echo "    sudo pacman -S fuse3" >&2
+    elif command -v zypper >/dev/null 2>&1; then echo "    sudo zypper install fuse3" >&2
+    else echo "    your distribution's fuse3 package" >&2; fi
+    echo "    (or run it without FUSE: $BIN_DIR/parley --appimage-extract-and-run)" >&2
 fi
 
 case ":$PATH:" in
