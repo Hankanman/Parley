@@ -1,125 +1,46 @@
 # Parley Privacy Policy
 
-*Last updated: [Current Date]*
+*Last updated: 22 October 2026*
 
-## Our Privacy-First Commitment
+Parley is a desktop app that runs entirely on your own machine. There is no Parley server, no account, and no company behind it collecting anything. This document explains exactly what leaves your computer, and when.
 
-Parley is built on the principle that your meeting data should remain private and under your control. This privacy policy explains how we handle data in our open-source meeting assistant.
+## No telemetry
 
-## Data Processing Philosophy
+Parley collects **no** usage analytics, crash reports, or tracking data of any kind. It has no analytics SDK and no "phone home" call. Logs are written only to your own disk (`~/.local/state/parley/logs/`).
 
-### Local-First Processing
-- **Meeting transcription**: Processed entirely on your device using local Whisper models
-- **Audio recordings**: Never transmitted to external servers
-- **Meeting content**: Remains on your infrastructure
-- **AI summaries**: Generated locally or through your chosen LLM provider
+## What stays on your machine
 
-### Your Data Ownership
-- You own all meeting data, transcripts, and recordings
-- Data is stored locally on your device
-- No vendor lock-in - export your data anytime
-- Complete control over data retention and deletion
+Everything Parley produces is stored locally and never uploaded by Parley:
 
-## Usage Analytics
+- **Audio recordings**: `~/Documents/parley-recordings/` (or the folder you choose)
+- **Transcripts, summaries, speakers, action items and settings**: a SQLite database in `~/.local/share/io.github.hankanman.Parley/`
+- **Voice profiles** used for speaker recognition: the same database
+- **Downloaded models**: `~/.local/share/io.github.hankanman.Parley/models/`
 
-### What We Collect
-To improve Parley and ensure optimal performance, we collect minimal, anonymized usage data:
+Transcription (Whisper or Parakeet), voice activity detection, speaker diarization and the built-in summary models all run on your device.
 
-**Application Usage:**
-- Feature usage patterns (which tools you use most)
-- Session duration and frequency
-- Performance metrics (transcription success rates, error frequencies)
-- UI interaction patterns (button clicks, navigation flows)
+## When Parley uses the network
 
-**Technical Metrics:**
-- Application version and platform information
-- Error logs and crash reports (anonymized)
-- Performance benchmarks (processing times, resource usage)
+Parley only makes network connections for the following, and only when you trigger them:
 
-### What We DON'T Collect
-We never collect:
-- ❌ Meeting content, transcripts, or recordings
-- ❌ Personal information or identifiable data
-- ❌ File names, meeting titles, or metadata
-- ❌ Audio data or voice patterns
-- ❌ Participant names or contact information
-- ❌ LLM conversations or AI-generated content
+| What | Where it connects | What is sent |
+|---|---|---|
+| Downloading a transcription, summary, diarization or VAD model | Hugging Face (`huggingface.co`) or GitHub release downloads (`github.com`) | An ordinary file download request. No meeting data. |
+| Generating a summary, answering an "Ask" question, extracting action items or drafting a follow-up **with a remote LLM provider you configured** | The provider you chose: a remote Ollama server, Anthropic, Groq, OpenRouter, OpenAI, or a custom OpenAI-compatible endpoint | The transcript text and prompt needed for that request, plus your API key. That provider's own privacy policy then applies. |
+| Calendar sync | The calendar feed URLs you add | A request for the feed. No meeting data. |
 
-### Why We Collect This Data
-This analytics collection is necessary for:
-- **Product Quality**: Identifying and fixing bugs that impact user experience
-- **Performance Optimization**: Understanding resource usage and system bottlenecks
-- **Security**: Detecting potential security issues and vulnerabilities
-- **Feature Development**: Making data-driven decisions about new features
-- **Open Source Sustainability**: Ensuring the project meets user needs effectively
+If you use the built-in summary model or a local Ollama server, transcript text never leaves your machine.
 
-### Analytics Implementation
-- **Provider**: PostHog (privacy-focused analytics platform)
-- **Anonymization**: All data linked to generated user IDs only - no personal identification
-- **Data retention**: 12 months maximum, then automatically deleted
-- **Encryption**: All data encrypted in transit using industry-standard protocols
-- **Location**: Data processed in accordance with PostHog's privacy policy
-- **Access Control**: Strictly limited to core development team members
+## Your control
 
-## Third-Party Services
+- **Access and export**: all your data is in ordinary files and a SQLite database you can open, copy or export from the app.
+- **Delete**: deleting a meeting in Parley removes its transcript, summary and related data from the database; its audio stays in the recordings folder until you delete it there. To remove everything, delete the folders listed above.
+- **Audit**: Parley is open source under the MIT license, so every network call can be checked in the source code.
 
-### LLM Providers (Optional)
-If you choose to use external LLM providers:
-- **Anthropic Claude**: Subject to Anthropic's privacy policy
-- **Groq**: Subject to Groq's privacy policy
-- **Local Ollama**: Processed entirely on your device
+## Changes to this policy
 
-### Analytics Service (Optional)
-- **PostHog**: Used for usage analytics when enabled
-- **Data**: Only anonymized usage patterns, no meeting content
-- **Control**: Completely optional and user-controlled
+Changes are made in this file in the [Parley repository](https://github.com/Hankanman/Parley) and noted in release notes.
 
-## Your Privacy Rights
+## Contact
 
-### Data Control
-- **Access**: View all data stored locally on your device
-- **Export**: Export your data in standard formats
-- **Delete**: Remove all data from your device
-
-
-### Analytics Transparency
-- **Open source**: Full analytics implementation available for review in our source code
-- **Questions**: Contact us for any analytics-related concerns
-
-## Data Security
-
-### Local Security
-- Data encrypted at rest using your device's security features
-- No transmission of sensitive meeting data
-- Standard file system permissions protect your data
-
-### Open Source Transparency
-- Full source code available for security review
-- Community-audited privacy implementations
-- No hidden data collection or tracking
-
-## Changes to This Policy
-
-We will notify users of any material changes to this privacy policy through:
-- Updates to this document in our GitHub repository
-- Release notes for application updates
-- In-app notifications for significant privacy changes
-
-## Contact Us
-
-For privacy-related questions or concerns:
-- **GitHub Issues**: [Create an issue](https://github.com/Zackriya-Solutions/meeting-minutes/issues)
-- **Email**: [Contact form](https://www.zackriya.com/service-interest-form/)
-- **Community**: [Discord](https://discord.gg/crRymMQBFH)
-
-## Open Source Commitment
-
-As an open-source project under MIT license, you can:
-- Review our complete privacy implementation
-- Modify data handling to meet your requirements
-- Deploy entirely on your own infrastructure
-- Contribute to privacy improvements
-
----
-
-*This privacy policy applies to Parley v0.0.5 and later versions. For enterprise deployments, additional privacy controls may be available.*
+For privacy questions or concerns, open an issue at [github.com/Hankanman/Parley/issues](https://github.com/Hankanman/Parley/issues).

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Parley** (formerly Meetily-Local, a fork of Zackriya-Solutions/meetily; GitHub repo `Hankanman/Parley`) is a privacy-first AI meeting assistant that captures, transcribes, and summarizes meetings entirely on local infrastructure. It's a single self-contained GPUI desktop application — no separate backend server, no webview, no JavaScript.
+**Parley** (GitHub repo `Hankanman/Parley`; an independent project, originally forked from Zackriya-Solutions/meetily) is a privacy-first AI meeting assistant that captures, transcribes, and summarizes meetings entirely on local infrastructure. It's a single self-contained GPUI desktop application — no separate backend server, no webview, no JavaScript.
 
 ### Key Technology Stack
 - **Desktop shell**: [GPUI](https://www.gpui.rs/) (Rust, the UI framework behind Zed) via `gpui-kit`/`gpui-component`

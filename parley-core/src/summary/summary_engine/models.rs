@@ -72,7 +72,7 @@ pub fn get_available_models() -> Vec<ModelDef> {
             gguf_file: "gemma-3-1b-it-Q8_0.gguf".to_string(),
             template: "gemma3".to_string(),
             download_url:
-                "https://meetily.towardsgeneralintelligence.com/models/gemma-3-1b-it-Q8_0.gguf"
+                "https://huggingface.co/unsloth/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q8_0.gguf"
                     .to_string(),
             size_mb: 1019,
             context_size: 32768, // Gemma 3 1B's trained maximum (4B and up go to 128k)
@@ -93,7 +93,7 @@ pub fn get_available_models() -> Vec<ModelDef> {
             gguf_file: "gemma-3-4b-it-Q4_K_M.gguf".to_string(),
             template: "gemma3".to_string(),
             download_url:
-                "https://meetily.towardsgeneralintelligence.com/models/gemma-3-4b-it-Q4_K_M.gguf"
+                "https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf"
                     .to_string(),
             size_mb: 2374,
             context_size: 65536, // trained to 128k; 64k fits 60-90 min meetings in one pass

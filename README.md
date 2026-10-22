@@ -6,25 +6,19 @@
     <a href="https://github.com/Hankanman/Parley/releases"><img src="https://img.shields.io/badge/Supported_OS-Linux-white" alt="Supported OS"></a>
     <a href="https://github.com/Hankanman/Parley/releases"><img alt="GitHub Tag" src="https://img.shields.io/github/v/tag/Hankanman/Parley?include_prereleases&color=yellow"></a>
     <br>
-    <h3>Open Source • Privacy-First • Independent Fork</h3>
+    <h3>Open Source • Privacy-First • Independent</h3>
 
 A privacy-first AI meeting assistant that captures, transcribes, and summarizes meetings entirely on your local infrastructure. No cloud calls, no telemetry, no upsells — just an offline meeting tool that works.
-
-<p align="center">
-    <img src="docs/parley_demo.gif" width="650" alt="Parley Demo" />
-</p>
 
 </div>
 
 ---
 
-## About this fork
+## Origins
 
-**Parley** is an independent fork of the original [Zackriya-Solutions/meetily](https://github.com/Zackriya-Solutions/meetily) project (the "Meetily Community Edition"), which is MIT-licensed.
+**Parley** is an independent project. It started as a fork of [Zackriya-Solutions/meetily](https://github.com/Zackriya-Solutions/meetily) (the MIT-licensed "Meetily Community Edition") and has since been rebuilt and developed separately — it shares no infrastructure, releases or roadmap with that project. There is no commercial product: everything is and will remain MIT-licensed and free.
 
-This fork is **fully independent** — not technically a GitHub fork anymore — and there is no commercial product. Everything is and will remain MIT-licensed and free.
-
-**What's different in Parley vs. upstream as of v0.4.0:**
+**How Parley departed from the original:**
 
 - ✅ **Linux-only.** This fork dropped macOS/Windows support to focus on one platform done well — native PipeWire audio capture (mic + system, no cpal/BlackHole-style virtual device needed) and ALSA device enumeration all fixed and tested.
 - ✅ **Native desktop shell.** No webview: the UI is [GPUI](https://www.gpui.rs/) (the framework behind Zed), talking to the Rust core in-process with no IPC/serialization overhead. The original Tauri + Next.js/React shell was retired once the GPUI app reached parity.
@@ -100,41 +94,21 @@ For platform-specific deep-dives, see [`docs/building_in_linux.md`](docs/buildin
 
 Transcribe meetings entirely on your device using **Whisper** (ggml) or **Parakeet** (ONNX).
 
-<p align="center">
-    <img src="docs/home.png" width="650" style="border-radius: 10px;" alt="Local transcription" />
-</p>
-
 ### 📥 Import & enhance `Beta`
 
 Import existing audio files to generate transcripts, or re-transcribe any recorded meeting with a different model or language.
-
-<p align="center">
-    <img src="docs/parley-export.gif" width="650" style="border-radius: 10px;" alt="Import and Enhance" />
-</p>
 
 ### 🤖 AI-powered summaries
 
 Generate summaries with your choice of provider — local **Ollama** is recommended for full privacy, with Claude / Groq / OpenRouter / any OpenAI-compatible endpoint also supported.
 
-<p align="center">
-    <img src="docs/summary.png" width="650" style="border-radius: 10px;" alt="Summary generation" />
-</p>
-
 ### 🔒 Privacy-first by default
 
-All audio, transcripts, models, and summaries stay on your machine. No telemetry. The only network traffic is what you explicitly configure (e.g. a remote Ollama endpoint or a cloud LLM API key you provide).
+All audio, transcripts, models, and summaries stay on your machine. No telemetry. The only network traffic is what you explicitly configure (e.g. a remote Ollama endpoint or a cloud LLM API key you provide), plus one-off model downloads. See [PRIVACY_POLICY.md](PRIVACY_POLICY.md).
 
-<p align="center">
-    <img src="docs/settings.png" width="650" style="border-radius: 10px;" alt="Settings" />
-</p>
+### 🎙️ Native PipeWire capture
 
-### 🎙️ Professional audio mixing
-
-Capture microphone and system audio simultaneously with intelligent RMS-based ducking and clipping prevention.
-
-<p align="center">
-    <img src="docs/audio.png" width="650" style="border-radius: 10px;" alt="Audio device selection" />
-</p>
+Capture microphone and system audio at the same time, straight from PipeWire — no virtual devices. The mic runs through a speakerphone chain (echo cancellation against the system audio, noise suppression, automatic gain), and the two sources stay separate: mic on the left channel, system on the right, so "you" and "them" are never mixed together.
 
 ### ⚡ GPU acceleration
 
@@ -168,7 +142,7 @@ If you're contributing a Linux fix, make sure `./build.sh` produces a working Ap
 
 This fork builds on substantial prior work:
 
-- **[Zackriya-Solutions/meeting-minutes](https://github.com/Zackriya-Solutions/meeting-minutes)** — original Meetily Community Edition. Architecture, much of the core feature set, original UI design, and significant Tauri/Rust scaffolding came from there. Lead author: [Sujith S](https://github.com/sujithatzackriya).
+- **[Zackriya-Solutions/meetily](https://github.com/Zackriya-Solutions/meetily)** — the Meetily Community Edition Parley was originally forked from. The original architecture, core feature set and Tauri/Rust scaffolding came from there. Lead author: [Sujith S](https://github.com/sujithatzackriya).
 - **[Whisper.cpp](https://github.com/ggerganov/whisper.cpp)** — fast inference engine for Whisper.
 - **[Screenpipe](https://github.com/mediar-ai/screenpipe)** — some audio capture code.
 - **[transcribe-rs](https://crates.io/crates/transcribe-rs)** — additional audio plumbing.
