@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parley · Private AI meeting notes for Linux</title>
+<meta name="description" content="Parley records, transcribes and summarises your meetings entirely on your own machine. Native Linux app, open source, no cloud, no telemetry.">
+<meta name="color-scheme" content="dark">
+<meta property="og:title" content="Parley · Private AI meeting notes for Linux">
+<meta property="og:description" content="Record, transcribe and summarise meetings entirely on your own machine. Open source, no cloud, no telemetry.">
+<meta property="og:image" content="https://meetparley.app/images/hero.png">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://meetparley.app/">
+<link rel="canonical" href="https://meetparley.app/">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+:root {
+  --bg: #0B0E14;
+  --bg-raised: #121722;
+  --bg-muted: #161C27;
+  --border: #1F2633;
+  --fg: #E6EAF2;
+  --fg-muted: #8A94A6;
+  --primary: #1A78E8;
+  --primary-hover: #2E86F0;
+  --link: #6FB0FF;
+  --green: #2FBF71;
+  --radius: 12px;
+  --max: 1120px;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.6 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+img, video { max-width: 100%; height: auto; display: block; }
+code, pre { font-family: ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace; font-size: 0.9em; }
+.wrap { max-width: var(--max); margin: 0 auto; padding: 0 16px; }
+
+/* Header */
+header.top {
+  position: sticky; top: 0; z-index: 10;
+  background: rgba(11, 14, 20, 0.82);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+}
+header.top .wrap { display: flex; align-items: center; gap: 24px; height: 60px; }
+.brand { display: flex; align-items: center; gap: 10px; color: var(--fg); font-weight: 600; font-size: 18px; }
+.brand:hover { text-decoration: none; }
+.brand img { width: 28px; height: 28px; border-radius: 7px; }
+header.top nav { display: flex; gap: 20px; margin-left: auto; font-size: 15px; }
+header.top nav a { color: var(--fg-muted); }
+header.top nav a:hover { color: var(--fg); text-decoration: none; }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 11px 20px; border-radius: 10px;
+  font-weight: 600; font-size: 15px;
+  border: 1px solid var(--border);
+  background: var(--bg-muted); color: var(--fg);
+  transition: background .15s, border-color .15s;
+}
+.btn:hover { text-decoration: none; background: #1C2433; }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn.primary:hover { background: var(--primary-hover); }
+.btn svg { width: 18px; height: 18px; }
+
+/* Hero */
+.hero {
+  text-align: center;
+  padding: 80px 0 0;
+  background: radial-gradient(1200px 560px at 50% 110%, rgba(26, 120, 232, 0.28), transparent 70%);
+  overflow: hidden;
+}
+.pill {
+  display: inline-block; padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--bg-raised);
+  color: var(--fg-muted); font-size: 13px; margin-bottom: 20px;
+}
+.hero h1 { font-size: clamp(36px, 6vw, 60px); line-height: 1.08; letter-spacing: -0.02em; margin: 0 auto 18px; max-width: 820px; }
+.hero h1 span { color: var(--link); }
+.hero p.lead { font-size: clamp(17px, 2.2vw, 20px); color: var(--fg-muted); max-width: 640px; margin: 0 auto 32px; }
+.hero .ctas { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.hero .note { margin-top: 14px; font-size: 13px; color: var(--fg-muted); }
+.shot {
+  margin: 56px auto 0; max-width: 1100px;
+  border-radius: var(--radius) var(--radius) 0 0;
+  border: 1px solid rgba(255, 255, 255, 0.1); border-bottom: 0;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+
+/* Sections */
+section { padding: 88px 0; border-top: 1px solid var(--border); }
+section h2 { font-size: clamp(28px, 4vw, 38px); letter-spacing: -0.015em; line-height: 1.15; margin: 0 0 12px; }
+section .sub { color: var(--fg-muted); font-size: 18px; max-width: 640px; margin: 0 0 48px; }
+.center { text-align: center; }
+.center .sub { margin-left: auto; margin-right: auto; }
+
+/* Promises */
+.promises { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
+.card { background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; }
+.card h3 { margin: 12px 0 6px; font-size: 17px; }
+.card p { margin: 0; color: var(--fg-muted); font-size: 15px; }
+.icon { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; background: rgba(26, 120, 232, 0.14); color: var(--link); }
+.icon svg { width: 22px; height: 22px; }
+
+/* Feature rows */
+.feature { display: grid; grid-template-columns: 5fr 7fr; gap: 56px; align-items: center; margin-bottom: 96px; }
+.feature:last-child { margin-bottom: 0; }
+.feature.flip { grid-template-columns: 7fr 5fr; }
+.feature.flip .text { order: 2; }
+.feature .text h3 { font-size: 26px; letter-spacing: -0.01em; margin: 0 0 12px; line-height: 1.2; }
+.feature .text p { color: var(--fg-muted); margin: 0 0 16px; }
+.feature ul { list-style: none; padding: 0; margin: 0; }
+.feature li { position: relative; padding-left: 26px; margin: 8px 0; color: var(--fg); font-size: 15px; }
+.feature li::before {
+  content: ""; position: absolute; left: 0; top: 7px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--green) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12l5 5L20 7'/%3E%3C/svg%3E") center/9px no-repeat;
+}
+.frame { border-radius: var(--radius); overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45); }
+.frame a { display: block; }
+.eyebrow { color: var(--link); font-size: 13px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+
+/* More features */
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+
+/* Video */
+.video { max-width: 960px; margin: 0 auto; }
+.video video { width: 100%; border-radius: var(--radius); border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45); background: #000; }
+
+/* Install */
+.install { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.install > *, .grid3 > *, .promises > * { min-width: 0; }
+pre {
+  margin: 12px 0 0; padding: 16px; overflow-x: auto;
+  background: #080A0F; border: 1px solid var(--border); border-radius: 10px;
+  color: #C9D1DE; line-height: 1.55;
+}
+pre .c { color: #5B6678; }
+.card h3:first-child { margin-top: 0; }
+.providers { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.providers span { padding: 4px 10px; border-radius: 999px; background: var(--bg-muted); border: 1px solid var(--border); font-size: 13px; color: var(--fg-muted); }
+
+footer { border-top: 1px solid var(--border); padding: 40px 0 56px; color: var(--fg-muted); font-size: 14px; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 16px 32px; align-items: center; }
+footer nav { display: flex; flex-wrap: wrap; gap: 20px; margin-left: auto; }
+footer a { color: var(--fg-muted); }
+
+@media (max-width: 820px) {
+  header.top nav a.opt { display: none; }
+  .hero { padding-top: 56px; }
+  section { padding: 64px 0; }
+  .feature, .feature.flip { grid-template-columns: 1fr; gap: 28px; margin-bottom: 64px; }
+  .feature.flip .text { order: 0; }
+  .install { grid-template-columns: 1fr; }
+  footer nav { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#"><img src="favicon.png" alt="">Parley</a>
+    <nav>
+      <a class="opt" href="#features">Features</a>
+      <a class="opt" href="#privacy">Privacy</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/Hankanman/Parley">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="hero">
+  <div class="wrap">
+    <div class="pill">Open source · MIT · Linux</div>
+    <h1>Meeting notes that <span>never leave your machine</span></h1>
+    <p class="lead">Parley records your calls, transcribes them live and writes the summary, the decisions and the action items. All of it runs on your own computer: no cloud, no account, no telemetry.</p>
+    <div class="ctas">
+      <a class="btn primary" href="https://github.com/Hankanman/Parley/releases/latest">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-5-5m5 5l5-5M5 21h14"/></svg>
+        Download AppImage
+      </a>
+      <a class="btn" href="https://github.com/Hankanman/Parley">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.4c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.38-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5z"/></svg>
+        View source
+      </a>
+    </div>
+    <div class="note">Works with any meeting app: Meet, Zoom, Teams, Slack huddles or a phone on speaker.</div>
+    <div class="shot"><img src="images/meeting.png" width="1100" height="720" alt="Parley showing a meeting: chapters and transcript on the left, an AI summary with key decisions on the right"></div>
+  </div>
+</div>
+
+<section id="privacy">
+  <div class="wrap">
+    <h2>Private by design, not by setting</h2>
+    <p class="sub">There is no Parley server to send anything to. Audio, transcripts, summaries and voice profiles live in a folder on your disk.</p>
+    <div class="promises">
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
+        <h3>Runs on your device</h3>
+        <p>Transcription, speaker recognition and the built-in summary models all run locally, with GPU acceleration on NVIDIA, AMD and Intel.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h3m14 0h3M12 2v3m0 14v3"/><circle cx="12" cy="12" r="6"/><path d="M5 5l14 14"/></svg></div>
+        <h3>No telemetry</h3>
+        <p>No analytics, no crash reporting, no phone-home. Logs are written to your own disk and nowhere else.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg></div>
+        <h3>Your choice of AI</h3>
+        <p>Use the bundled local model or your own Ollama server. A cloud provider is only used if you add its key yourself.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg></div>
+        <h3>Open source, for good</h3>
+        <p>MIT licensed with no paid tier and no upsell. Read the code, build it yourself, fork it.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="feature">
+      <div class="text">
+        <div class="eyebrow">Record</div>
+        <h3>One click, both sides of the call</h3>
+        <p>Parley captures your microphone and the call audio straight from PipeWire. There's no virtual device to set up, and it doesn't need to join the meeting.</p>
+        <ul>
+          <li>Live transcript as people speak, with Whisper or Parakeet</li>
+          <li>Echo cancellation and noise suppression for laptop speakers</li>
+          <li>Your voice and theirs stay on separate channels</li>
+          <li>Upcoming events from your calendar, one click to start</li>
+        </ul>
+      </div>
+      <div class="frame"><a href="images/record.png"><img src="images/record.png" width="1100" height="720" loading="lazy" alt="The Record page with microphone and system audio sources and upcoming calendar events"></a></div>
+    </div>
+
+    <div class="feature flip">
+      <div class="text">
+        <div class="eyebrow">Review</div>
+        <h3>The meeting, already written up</h3>
+        <p>When you stop, Parley writes a summary from a template of your choice, splits the transcript into chapters and pulls out what was decided.</p>
+        <ul>
+          <li>Templates for stand-ups, client calls, retros and more</li>
+          <li>Click any line to hear that moment again</li>
+          <li>Bookmarks, notes and talk-time insights</li>
+          <li>Export to Markdown, PDF, Word, JSON or subtitles</li>
+        </ul>
+      </div>
+      <div class="frame"><a href="images/meeting.png"><img src="images/meeting.png" width="1100" height="720" loading="lazy" alt="A meeting's transcript with chapters and the generated summary"></a></div>
+    </div>
+
+    <div class="feature">
+      <div class="text">
+        <div class="eyebrow">Ask</div>
+        <h3>Ask across every meeting</h3>
+        <p>"What did we promise Harbor Logistics?" Ask Parley questions in plain language and get answers with links to the meetings they came from.</p>
+        <ul>
+          <li>Searches every transcript you've recorded</li>
+          <li>Answers cite their sources</li>
+          <li>Also available to Claude and other AI tools through the bundled MCP server</li>
+        </ul>
+      </div>
+      <div class="frame"><a href="images/ask.png"><img src="images/ask.png" width="1100" height="720" loading="lazy" alt="The Ask Parley page with suggested questions"></a></div>
+    </div>
+
+    <div class="feature flip">
+      <div class="text">
+        <div class="eyebrow">Follow up</div>
+        <h3>Nothing falls through the cracks</h3>
+        <p>Action items are picked out of every meeting with an owner and a due date, and collected in one list you can tick off.</p>
+        <ul>
+          <li>Owners and due dates taken from what was said</li>
+          <li>Open and done views, linked back to each meeting</li>
+          <li>Draft a follow-up email from any meeting</li>
+        </ul>
+      </div>
+      <div class="frame"><a href="images/actions.png"><img src="images/actions.png" width="1100" height="720" loading="lazy" alt="The Action items page listing open and completed tasks with owners and due dates"></a></div>
+    </div>
+
+    <div class="feature">
+      <div class="text">
+        <div class="eyebrow">Speakers</div>
+        <h3>Knows who said what</h3>
+        <p>Name a voice once and Parley recognises it in future meetings. Voice profiles are stored locally, like everything else.</p>
+        <ul>
+          <li>On-device speaker diarization</li>
+          <li>Names carried into transcripts, summaries and action items</li>
+          <li>Rename, merge duplicates or delete a voice at any time</li>
+        </ul>
+      </div>
+      <div class="frame"><a href="images/speakers.png"><img src="images/speakers.png" width="1100" height="720" loading="lazy" alt="The Speakers page listing known voice profiles"></a></div>
+    </div>
+  </div>
+</section>
+
+<section id="video">
+  <div class="wrap center">
+    <h2>See it in action</h2>
+    <p class="sub">A 30-second tour, shown with demo data.</p>
+    <div class="video">
+      <video controls preload="metadata" playsinline poster="images/promo-poster.png">
+        <source src="images/promo.mp4" type="video/mp4">
+      </video>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Everything else you'd expect</h2>
+    <p class="sub">And a few things you might not.</p>
+    <div class="grid3">
+      <div class="card"><h3>Import recordings</h3><p>Drop in an existing audio file and get the same transcript and summary as a live meeting.</p></div>
+      <div class="card"><h3>Re-transcribe</h3><p>Run any past meeting again with a bigger model or a different language.</p></div>
+      <div class="card"><h3>Calendar aware</h3><p>Subscribe to iCal feeds. Meetings pick up their title, attendees and location automatically.</p></div>
+      <div class="card"><h3>Crash safe</h3><p>Audio is checkpointed as you record. If anything goes wrong, the meeting is recovered on next launch.</p></div>
+      <div class="card"><h3>Native and fast</h3><p>Written in Rust with GPUI, the UI framework behind the Zed editor. No browser engine inside.</p></div>
+      <div class="card">
+        <h3>Bring your own model</h3>
+        <p>Summaries and answers from any of these:</p>
+        <div class="providers"><span>Built-in (llama.cpp)</span><span>Ollama</span><span>Claude</span><span>Groq</span><span>OpenRouter</span><span>OpenAI-compatible</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>Get Parley</h2>
+    <p class="sub">A single AppImage for Fedora, Ubuntu, Arch and most other distributions. Models download on first run.</p>
+    <div class="install">
+      <div class="card">
+        <h3>Download</h3>
+        <p>Grab <code>Parley-*-x86_64.AppImage</code> from the <a href="https://github.com/Hankanman/Parley/releases/latest">latest release</a>, then:</p>
+        <pre><code>chmod +x Parley-*-x86_64.AppImage
+./Parley-*-x86_64.AppImage</code></pre>
+      </div>
+      <div class="card">
+        <h3>Build from source</h3>
+        <p>Needs Rust, cmake and clang. See <a href="https://github.com/Hankanman/Parley/blob/main/docs/building_in_linux.md">building on Linux</a>.</p>
+        <pre><code>git clone https://github.com/Hankanman/Parley.git
+cd Parley
+./build.sh        <span class="c"># CUDA on NVIDIA, CPU otherwise</span>
+./build.sh vulkan <span class="c"># AMD / Intel GPUs</span></code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Parley is MIT licensed. Originally forked from <a href="https://github.com/Zackriya-Solutions/meetily">Meetily</a>.</span>
+    <nav>
+      <a href="https://github.com/Hankanman/Parley/blob/main/docs/architecture.md">Architecture</a>
+      <a href="https://github.com/Hankanman/Parley/blob/main/PRIVACY_POLICY.md">Privacy policy</a>
+      <a href="https://github.com/Hankanman/Parley/releases">Releases</a>
+      <a href="https://github.com/Hankanman/Parley/issues">Issues</a>
+    </nav>
+  </div>
+</footer>
+</body>
+</html>
