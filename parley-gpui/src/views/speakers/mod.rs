@@ -568,7 +568,7 @@ impl SpeakersView {
                     .items_center()
                     .gap_2()
                     .child(IconName::User.view(cx))
-                    .child(div().text_lg().font_semibold().child("Speakers")),
+                    .child(div().text_xl().font_semibold().child("Speakers")),
             )
             .child(
                 div().text_xs().text_color(cx.theme().muted_foreground).child(
@@ -906,10 +906,12 @@ impl SpeakersView {
             .items_center()
             .gap_3()
             .px_3()
-            .py_2()
-            .rounded_md()
+            .py_2p5()
+            .rounded(cx.theme().radius_lg)
             .border_1()
             .border_color(cx.theme().border)
+            .bg(cx.theme().group_box)
+            .child(crate::ui::avatar(&profile.name, 36., cx))
             .child(
                 v_flex()
                     .flex_1()

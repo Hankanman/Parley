@@ -29,7 +29,6 @@ use std::time::Duration;
 
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Icon, Sizable as _};
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     div, img, px, Animation, AnimationExt as _, Div, ElementId, Hsla, Image, ImageFormat, IntoElement,
     ParentElement, SharedString, Styled,
@@ -81,25 +80,6 @@ pub fn pulse_dot(color: Hsla, size: f32, id: impl Into<ElementId>) -> impl IntoE
                 .with_easing(gpui_kit::pulsating_between(0.35, 1.0)),
             |el, delta| el.opacity(delta),
         )
-}
-
-/// Page title row: a large title, an optional muted subtitle, and room for
-/// actions on the right.
-pub fn page_header(
-    title: impl Into<SharedString>,
-    subtitle: Option<SharedString>,
-    cx: &gpui_kit::App,
-) -> Div {
-    h_flex().w_full().items_start().gap_4().child(
-        v_flex()
-            .flex_1()
-            .min_w_0()
-            .gap_1()
-            .child(div().text_2xl().font_semibold().child(title.into()))
-            .when_some(subtitle, |this, subtitle| {
-                this.child(div().text_sm().text_color(cx.theme().muted_foreground).child(subtitle))
-            }),
-    )
 }
 
 /// A raised surface: card background, hairline border, large radius.
@@ -186,4 +166,38 @@ pub fn meta_chip(
         .text_color(cx.theme().muted_foreground)
         .child(icon.into().xsmall())
         .child(text.into())
+}
+
+/// A round avatar with a person's initials, tinted by a colour picked
+/// from their name so the same person always gets the same colour.
+pub fn avatar(name: &str, size: f32, cx: &gpui_kit::App) -> Div {
+    let theme = cx.theme();
+    let palette = [
+        theme.blue,
+        theme.green,
+        theme.magenta,
+        theme.cyan,
+        theme.yellow,
+        theme.red,
+    ];
+    let hash = name.bytes().fold(0usize, |h, b| h.wrapping_mul(31).wrapping_add(b as usize));
+    let color = palette[hash % palette.len()];
+    let initials: String = name
+        .split_whitespace()
+        .filter_map(|word| word.chars().next())
+        .take(2)
+        .flat_map(char::to_uppercase)
+        .collect();
+    div()
+        .flex_shrink_0()
+        .size(px(size))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(color.opacity(0.18))
+        .text_color(color)
+        .text_size(px(size * 0.38))
+        .font_semibold()
+        .child(if initials.is_empty() { "?".to_string() } else { initials })
 }
