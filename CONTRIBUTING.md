@@ -2,8 +2,8 @@
 
 Thank you for your interest in contributing! This document provides guidelines and instructions for contributing to this project.
 
-Parley is an independent fork — see [README.md](README.md#about-this-fork). PRs and issues go to
-[Hankanman/Parley](https://github.com/Hankanman/Parley), not the upstream Zackriya-Solutions project.
+Parley is an independent project — see [README.md](README.md#origins). PRs and issues go to
+[Hankanman/Parley](https://github.com/Hankanman/Parley).
 
 ## Development Workflow
 
