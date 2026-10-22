@@ -45,11 +45,18 @@ struct Navigator(WeakEntity<AppShell>);
 
 impl Global for Navigator {}
 
+///
+/// Deferred to the end of the current effect cycle: callers are usually
+/// inside a view's own update (a core-event handler), and switching routes
+/// updates the pages being left and shown — possibly that same view, which
+/// GPUI would reject as a double lease.
 pub fn navigate(route: Route, cx: &mut App) {
     let Some(shell) = cx.try_global::<Navigator>().map(|n| n.0.clone()) else {
         return;
     };
-    let _ = shell.update(cx, |shell, cx| shell.navigate(route, cx));
+    cx.defer(move |cx| {
+        let _ = shell.update(cx, |shell, cx| shell.navigate(route, cx));
+    });
 }
 
 /// Open meeting `id` and, once its transcript has loaded, scroll to
@@ -58,11 +65,14 @@ pub fn open_meeting_at(id: String, seconds: Option<f64>, cx: &mut App) {
     let Some(shell) = cx.try_global::<Navigator>().map(|n| n.0.clone()) else {
         return;
     };
-    let _ = shell.update(cx, |shell, cx| {
-        shell.navigate(Route::Meeting(id), cx);
-        if let Some(seconds) = seconds {
-            shell.meeting.update(cx, |view, cx| view.jump_when_loaded(seconds, cx));
-        }
+    // Deferred for the same reason as `navigate`.
+    cx.defer(move |cx| {
+        let _ = shell.update(cx, |shell, cx| {
+            shell.navigate(Route::Meeting(id), cx);
+            if let Some(seconds) = seconds {
+                shell.meeting.update(cx, |view, cx| view.jump_when_loaded(seconds, cx));
+            }
+        });
     });
 }
 
