@@ -182,7 +182,7 @@
 
         "popover.background": "#FFFFFF",
         "popover.foreground": "#0F1724",
-        "input.border": "#D9E0EA",
+        "input.border": "#C3CCD9",
         "group_box.background": "#F7F9FC",
         "group_box.foreground": "#0F1724",
         "group_box.title.foreground": "#5B6678",

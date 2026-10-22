@@ -94,6 +94,10 @@ pub fn init_theme(window: &mut Window, cx: &mut App) {
             Ok(Ok(Some(pref))) if !pref.is_empty() => pref,
             _ => "system".to_string(),
         };
+        // Debug builds only: `PARLEY_DEV_THEME=light|dark` overrides the saved
+        // preference for this run (not saved), for checking both themes.
+        #[cfg(debug_assertions)]
+        let pref = std::env::var("PARLEY_DEV_THEME").unwrap_or(pref);
         cx.update(|cx| apply_theme_mode(&pref, cx));
     })
     .detach();
