@@ -10,7 +10,7 @@
 
 A privacy-first AI meeting assistant that captures, transcribes, and summarizes meetings entirely on your local infrastructure. No cloud calls, no telemetry, no upsells — just an offline meeting tool that works.
 
-**[meetparley.app](https://meetparley.app)** · [Download](https://github.com/Hankanman/Parley/releases/latest) · [30-second tour](https://meetparley.app/#video)
+**[meetparley.app](https://meetparley.app)** · [Download](https://github.com/Hankanman/Parley/releases/latest) · [40-second tour](https://meetparley.app/#video)
 
 <img src="docs/images/hero.png" alt="Parley showing a meeting with its transcript, chapters and AI summary" width="900">
 
