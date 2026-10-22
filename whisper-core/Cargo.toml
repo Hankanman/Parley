@@ -1,6 +1,6 @@
 [package]
 name = "whisper-core"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 description = "Shared whisper.cpp params-building and confidence-scoring logic, used by both the in-process WhisperEngine and the whisper-helper sidecar."
 

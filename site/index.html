@@ -111,6 +111,7 @@ section .sub { color: var(--fg-muted); font-size: 18px; max-width: 640px; margin
 .card { background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; }
 .card h3 { margin: 12px 0 6px; font-size: 17px; }
 .card p { margin: 0; color: var(--fg-muted); font-size: 15px; }
+.card p.small { margin-top: 12px; font-size: 13px; }
 .icon { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; background: rgba(26, 120, 232, 0.14); color: var(--link); }
 .icon svg { width: 22px; height: 22px; }
 
@@ -345,10 +346,10 @@ footer a { color: var(--fg-muted); }
     <p class="sub">A single AppImage for Fedora, Ubuntu, Arch and most other distributions. Models download on first run.</p>
     <div class="install">
       <div class="card">
-        <h3>Download</h3>
-        <p>Grab the <code>.AppImage</code> from the <a href="https://github.com/Hankanman/Parley/releases/latest">latest release</a>, then make it executable and run it:</p>
-        <pre><code>chmod +x ~/Downloads/&lt;downloaded-file&gt;.AppImage
-~/Downloads/&lt;downloaded-file&gt;.AppImage</code></pre>
+        <h3>Install</h3>
+        <p>One line, no root. Installs the latest release to <code>~/.local/bin/parley</code>, checks its checksum and adds a menu entry. Run it again to update.</p>
+        <pre><code>curl -fsSL https://meetparley.app/install.sh | sh</code></pre>
+        <p class="small">Prefer to do it by hand? Grab the <code>.AppImage</code> from the <a href="https://github.com/Hankanman/Parley/releases/latest">latest release</a> and <code>chmod +x</code> it. Read the <a href="https://github.com/Hankanman/Parley/blob/main/site/install.sh">install script</a> first if you like.</p>
       </div>
       <div class="card">
         <h3>Build from source</h3>

@@ -39,11 +39,11 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
 
-      - name: Get version from parley-gpui/Cargo.toml
+      - name: Get version (scripts/version.sh)
         id: get-version
         shell: bash
         run: |
-          VERSION=$(awk -F'"' '/^version/ {print $2; exit}' parley-gpui/Cargo.toml)
+          VERSION=$(scripts/version.sh)
           echo "Application version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -85,8 +85,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "v${{ steps.get-version.outputs.version }}" \
-            "Parley-${{ steps.get-version.outputs.version }}-x86_64.AppImage" \
+          f="Parley-${{ steps.get-version.outputs.version }}-x86_64.AppImage"
+          sha256sum "$f" > "$f.sha256"
+          gh release upload "v${{ steps.get-version.outputs.version }}" "$f" "$f.sha256" \
             --repo "${{ github.repository }}" --clobber
 
       - name: Upload artifacts

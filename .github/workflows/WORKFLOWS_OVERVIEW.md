@@ -62,10 +62,9 @@ auto-updater.
 
 **Key Features:**
 - Creates GitHub Release (draft)
-- Version comes from `parley-gpui/Cargo.toml`
-- Builds the Linux AppImage (`ubuntu-22.04`) via `build.yml` and uploads it
-  directly to the release
-- **Auto-increment versioning**: If tag exists, auto-increments (e.g., `0.1.1` -> `0.1.1.1` -> `0.1.1.2`, up to `.100`)
+- Version comes from `[workspace.package]` in the root `Cargo.toml` (`scripts/version.sh`)
+- Builds the Linux AppImage (`ubuntu-22.04`) via `build.yml` and uploads it,
+  with a `.sha256` checksum, directly to the release
 
 **Triggers:**
 - Manual dispatch only
@@ -75,15 +74,13 @@ auto-updater.
 - Creating official release artifacts
 
 **Outputs:**
-- GitHub Release (draft)
-- Linux: `Parley-<version>-x86_64.AppImage`
+- GitHub Release (draft), tagged `v<version>` on the commit the workflow ran on
+- Linux: `Parley-<version>-x86_64.AppImage` and `Parley-<version>-x86_64.AppImage.sha256`
 - Release notes auto-generated
 
 **Version Behavior:**
-- If `v0.1.1` tag doesn't exist: creates `v0.1.1`
-- If `v0.1.1` exists: creates `v0.1.1.1`
-- If `v0.1.1.1` exists: creates `v0.1.1.2`
-- Maximum: `v0.1.1.100` (then bump the version in `parley-gpui/Cargo.toml`)
+- Strict semver: the workflow fails if `v<version>` already exists. Bump
+  first with `scripts/bump-version.sh patch|minor|major` (see `RELEASING.md`).
 
 ---
 

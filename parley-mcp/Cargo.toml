@@ -1,6 +1,6 @@
 [package]
 name = "parley-mcp"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Standalone MCP (Model Context Protocol) stdio server over the Parley meeting database"
 license = "MIT"

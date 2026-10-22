@@ -13,6 +13,9 @@ members = [
 
 # Shared workspace settings
 [workspace.package]
+# The one Parley version, shared by every crate. Semantic versioning; release
+# tags are v<version>. Change it with scripts/bump-version.sh (see RELEASING.md).
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.99"
 

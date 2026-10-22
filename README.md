@@ -56,12 +56,15 @@ Audio, transcripts, summaries, voice profiles and settings are stored on your di
 
 ## Installation
 
-Parley is Linux-only and ships as an AppImage that runs on most distributions (Fedora, Ubuntu, Arch and others). Download the `.AppImage` from the [latest release](https://github.com/Hankanman/Parley/releases/latest), then:
+Parley is Linux-only (x86_64) and ships as an AppImage that runs on most distributions (Fedora, Ubuntu, Arch and others). Install or update it with:
 
 ```bash
-chmod +x ~/Downloads/<downloaded-file>.AppImage
-~/Downloads/<downloaded-file>.AppImage
+curl -fsSL https://meetparley.app/install.sh | sh
 ```
+
+This downloads the latest release, verifies its checksum, installs it as `~/.local/bin/parley` and adds Parley to your application menu, with no root needed. `curl -fsSL https://meetparley.app/install.sh | sh -s -- --uninstall` removes it again (your meetings and settings stay). The script is [`site/install.sh`](site/install.sh) if you'd like to read it first.
+
+Or download the `.AppImage` from the [latest release](https://github.com/Hankanman/Parley/releases/latest) yourself, make it executable (`chmod +x`) and run it. AppImages need FUSE 2 (`libfuse2` / `fuse-libs` / `fuse2`, depending on your distribution).
 
 The first run walks you through downloading a Whisper model and the built-in summary model.
 
@@ -98,7 +101,7 @@ See [docs/architecture.md](docs/architecture.md) for more.
 
 ## Contributing
 
-PRs welcome. Open an issue first if you're planning a non-trivial change so we can agree on direction. If you're contributing a fix, make sure `./build.sh` produces a working AppImage on your distro before opening the PR.
+PRs welcome. Releases follow semantic versioning; see [RELEASING.md](RELEASING.md). Open an issue first if you're planning a non-trivial change so we can agree on direction. If you're contributing a fix, make sure `./build.sh` produces a working AppImage on your distro before opening the PR.
 
 ## License
 
