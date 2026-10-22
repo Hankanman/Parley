@@ -6,6 +6,7 @@ mod app_state;
 mod bookmark;
 mod core_events;
 mod crash_log;
+mod desktop_icon;
 mod fonts;
 mod meeting_detect;
 mod notifications;
@@ -49,6 +50,7 @@ fn main() {
     // Paths first, then the database (blocking, so everything after it sees
     // the pool), then background init with the pool.
     bootstrap::init_paths();
+    desktop_icon::spawn();
     let db = match io.block_on(bootstrap::prepare_database()) {
         Ok(StartupOutcome::Initialized(db)) => Some(db),
         Ok(StartupOutcome::FirstLaunch) => {
