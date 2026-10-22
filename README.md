@@ -10,6 +10,10 @@
 
 A privacy-first AI meeting assistant that captures, transcribes, and summarizes meetings entirely on your local infrastructure. No cloud calls, no telemetry, no upsells — just an offline meeting tool that works.
 
+**[meetparley.app](https://meetparley.app)** · [Download](https://github.com/Hankanman/Parley/releases/latest) · [40-second tour](https://meetparley.app/#video)
+
+<img src="docs/images/hero.png" alt="Parley showing a meeting with its transcript, chapters and AI summary" width="900">
+
 </div>
 
 ---
@@ -50,6 +54,16 @@ While many meeting transcription tools exist, this one stands out by:
 - **Open source** — MIT, no upsell.
 - **Flexible AI providers** — Ollama (local, recommended), Claude, Groq, OpenRouter, or any OpenAI-compatible endpoint.
 - **GPU acceleration** — NVIDIA (CUDA) or AMD/Intel (Vulkan), auto-detected by `build.sh`; falls back to CPU.
+
+## Screenshots
+
+All screenshots use the fictional demo data in [`parley-core/examples/demo/seed.sql`](parley-core/examples/demo/seed.sql); regenerate them with `scripts/showcase-screenshots.sh`.
+
+| Ask across meetings | Action items |
+|---|---|
+| ![Ask Parley](docs/images/ask.png) | ![Action items](docs/images/actions.png) |
+| **Speakers** | **Record** |
+| ![Speakers](docs/images/speakers.png) | ![Record](docs/images/record.png) |
 
 ## Installation
 
