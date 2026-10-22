@@ -7,7 +7,8 @@
 # SHA-256, installs it as ~/.local/bin/parley and adds Parley to your
 # application menu. No root needed. Run it again to update.
 #
-#   sh install.sh --uninstall           remove Parley (keeps your meetings and settings)
+#   curl -fsSL https://meetparley.app/install.sh | sh -s -- --uninstall
+#                                       remove Parley (keeps your meetings and settings)
 #   PARLEY_VERSION=0.5.0 sh install.sh  install a specific version
 #   PARLEY_BIN_DIR=/opt/bin sh install.sh
 #
