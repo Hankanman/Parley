@@ -125,7 +125,7 @@ jobs:
           f="${{ steps.appimage.outputs.file }}"
           [ -f "$f" ] || { echo "::error::no AppImage produced ($f)"; exit 1; }
           size=$(stat -c%s "$f"); echo "$f: $size bytes"
-          if [ "$size" -lt 50000000 ]; then echo "::error::AppImage is only $size bytes"; exit 1; fi
+          if [ "$size" -lt 30000000 ]; then echo "::error::AppImage is only $size bytes"; exit 1; fi  # CPU build is ~46 MB
           chmod +x "$f"
           ./"$f" --appimage-extract >/dev/null 2>&1 || { echo "::error::AppImage does not extract"; exit 1; }
           if ! find squashfs-root -name 'libsherpa-onnx-c-api.so*' | grep -q .; then
