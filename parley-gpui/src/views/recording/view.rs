@@ -205,6 +205,8 @@ pub struct RecordingView {
     audio_panel_open: bool,
     /// What the meters are currently reading from — see `sync_level_monitor`.
     meter_source: MeterSource,
+    /// Meter switches, applied in order by one worker (`spawn_meter_worker`).
+    meter_tx: tokio::sync::mpsc::UnboundedSender<MeterSource>,
     refining: bool,
     pending_toasts: Vec<(NotificationType, String)>,
     /// Provisional action items from the beta live extractor — see
@@ -221,10 +223,30 @@ pub struct RecordingView {
     session_bookmarks: Vec<f64>,
 }
 
-fn stop_level_monitor(cx: &App) {
-    AppServices::global(cx).io.spawn(async {
-        let _ = simple_level_monitor::stop_monitoring().await;
+/// Apply meter switches strictly in order. Spawning each switch as its own
+/// task would let a quick open/close race, and a "start" landing after its
+/// "stop" leaves the mic open with the panel shut. Only the newest pending
+/// switch matters, so a backlog collapses to it. Ends when the view drops
+/// its sender.
+fn spawn_meter_worker(cx: &App) -> tokio::sync::mpsc::UnboundedSender<MeterSource> {
+    let services = AppServices::global(cx);
+    let sink = services.sink.clone();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<MeterSource>();
+    services.io.spawn(async move {
+        while let Some(mut source) = rx.recv().await {
+            while let Ok(newer) = rx.try_recv() {
+                source = newer;
+            }
+            let _ = match source {
+                MeterSource::Off => simple_level_monitor::stop_monitoring().await,
+                MeterSource::Devices { mic, system } => {
+                    simple_level_monitor::start_monitoring(sink.clone(), Some(mic), Some(system)).await
+                }
+                MeterSource::Pipeline => simple_level_monitor::start_pipeline_monitoring(sink.clone()).await,
+            };
+        }
     });
+    tx
 }
 
 impl RecordingView {
@@ -274,6 +296,7 @@ impl RecordingView {
             on_screen: true,
             audio_panel_open: false,
             meter_source: MeterSource::Off,
+            meter_tx: spawn_meter_worker(cx),
             refining: false,
             pending_toasts: Vec::new(),
             live_action_items: Vec::new(),
@@ -288,9 +311,9 @@ impl RecordingView {
         this.start_elapsed_ticker(cx);
         // Closing to tray removes the window and drops this view, but the
         // monitor session lives in core — close its streams with the view.
-        cx.on_release(|this, cx| {
+        cx.on_release(|this, _cx| {
             if this.meter_source != MeterSource::Off {
-                stop_level_monitor(cx);
+                let _ = this.meter_tx.send(MeterSource::Off);
             }
         })
         .detach();
@@ -471,18 +494,7 @@ impl RecordingView {
         self.displayed_levels = Levels::default();
         self.meter_tick = None;
         self.meter_source = desired.clone();
-
-        let services = AppServices::global(cx);
-        let sink = services.sink.clone();
-        services.io.spawn(async move {
-            let _ = match desired {
-                MeterSource::Off => simple_level_monitor::stop_monitoring().await,
-                MeterSource::Devices { mic, system } => {
-                    simple_level_monitor::start_monitoring(sink, Some(mic), Some(system)).await
-                }
-                MeterSource::Pipeline => simple_level_monitor::start_pipeline_monitoring(sink).await,
-            };
-        });
+        let _ = self.meter_tx.send(desired);
     }
 
     fn start_elapsed_ticker(&mut self, cx: &mut Context<Self>) {
