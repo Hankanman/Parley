@@ -7,10 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{Local, Utc};
 use gpui_kit::component::{
-    ActiveTheme, Icon, Sizable as _, Disableable as _, IconName, IndexPath, StyledExt as _, WindowExt, h_flex, v_flex,
+    ActiveTheme, Icon, Sizable as _, Selectable as _, IconName, IndexPath, StyledExt as _, WindowExt, h_flex, v_flex,
     button::{Button, ButtonVariants as _},
     input::{Input, InputState},
-    label::Label,
     message_scroller::{MessageScroller, MessageScrollerState},
     notification::{Notification, NotificationType},
     select::{Select, SelectEvent, SelectItem, SelectState},
@@ -963,14 +962,14 @@ impl RecordingView {
                     .flex_1()
                     .h_2()
                     .rounded_full()
-                    .bg(hsla(0., 0., 0.5, 0.15))
+                    .bg(cx.theme().border)
                     .overflow_hidden()
                     .child(
                         div()
                             .h_full()
                             .rounded_full()
                             .w(relative(level.clamp(0.0, 1.0)))
-                            .bg(hsla(0.38 - 0.1 * level.clamp(0.0, 1.0), 0.65, 0.5, 1.)),
+                            .bg(crate::ui::level_color(level, cx)),
                     ),
             )
     }
@@ -1027,223 +1026,313 @@ impl Render for RecordingView {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        v_flex()
-            .size_full()
-            .gap_3()
-            .p_4()
+        let theme = cx.theme().clone();
+        let phase = self.snapshot.phase;
+        let (status_label, status_color, live) = match phase {
+            RecordingPhase::Recording => ("Recording", theme.danger, true),
+            RecordingPhase::Paused => ("Paused", theme.warning, false),
+            RecordingPhase::Starting => ("Starting…", theme.muted_foreground, true),
+            RecordingPhase::Stopping | RecordingPhase::Finalising => ("Saving…", theme.muted_foreground, true),
+            RecordingPhase::Error => ("Error", theme.danger, false),
+            RecordingPhase::Idle => ("Ready", theme.success, false),
+        };
+        let status_dot = if live {
+            crate::ui::pulse_dot(status_color, 8., "record-status-dot").into_any_element()
+        } else {
+            div().size(px(8.)).rounded_full().bg(status_color).into_any_element()
+        };
+        let has_transcript = !self.rows.is_empty() || !partials.is_empty();
+
+        let controls = h_flex()
+            .gap_2()
+            .items_center()
+            .when(buttons.can_start, |this| {
+                this.child(
+                    Button::new("start-recording")
+                        .primary()
+                        .large()
+                        .icon(Lucide::Mic)
+                        .label("Start recording")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.on_start_click(window, cx);
+                        })),
+                )
+            })
+            .when(buttons.can_pause, |this| {
+                this.child(
+                    Button::new("pause-recording")
+                        .large()
+                        .icon(IconName::Pause)
+                        .label("Pause")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.on_pause_click(cx);
+                        })),
+                )
+            })
+            .when(buttons.can_resume, |this| {
+                this.child(
+                    Button::new("resume-recording")
+                        .primary()
+                        .large()
+                        .icon(IconName::Play)
+                        .label("Resume")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.on_resume_click(cx);
+                        })),
+                )
+            })
+            .when(buttons.can_stop, |this| {
+                this.child(
+                    Button::new("stop-recording")
+                        .danger()
+                        .large()
+                        .icon(Lucide::Square)
+                        .label("Stop")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.on_stop_click(cx);
+                        })),
+                )
+                .child(
+                    Button::new("bookmark-moment")
+                        .ghost()
+                        .large()
+                        .icon(Lucide::BookmarkPlus)
+                        .label("Bookmark")
+                        .tooltip(format!("Bookmark this moment ({})", crate::bookmark::SHORTCUT_LABEL))
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            crate::bookmark::bookmark_now(cx);
+                        })),
+                )
+            })
+            .child(div().flex_1())
+            .when(self.refining, |this| {
+                this.child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(crate::ui::pulse_dot(theme.primary, 6., "refining-dot"))
+                        .child("Refining the last meeting…"),
+                )
+            })
             .child(
-                v_flex()
-                    .gap_2()
-                    .p_3()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        h_flex()
-                            .gap_3()
-                            .items_center()
-                            .child(div().flex_1().child(Input::new(&self.meeting_name)))
-                            .child(
-                                Button::new("toggle-audio-panel")
-                                    .ghost()
-                                    .icon(if self.audio_panel_open { Lucide::ChevronDown } else { Lucide::ChevronRight })
-                                    .label("Audio")
-                                    .tooltip("Choose devices and check levels")
-                                    .on_click(cx.listener(|this, _, _, cx| this.toggle_audio_panel(cx))),
-                            ),
-                    )
-                    .when(self.audio_panel_open, |this| {
-                        let caption = match self.meter_source {
-                            MeterSource::Pipeline => {
-                                "Mic level is after echo cancellation and noise suppression — what's being transcribed."
-                            }
-                            _ => "Raw input. Echo cancellation and noise suppression apply once recording starts.",
-                        };
-                        this.child(
-                            v_flex()
-                                .gap_2()
-                                .p_2()
-                                .rounded(cx.theme().radius)
-                                .bg(cx.theme().muted.opacity(0.4))
-                                .child(
-                                    h_flex()
-                                        .gap_3()
-                                        .items_center()
-                                        .child(div().w_20().text_xs().text_color(cx.theme().muted_foreground).child("Devices"))
-                                        .child(div().flex_1().child(Select::new(&self.mic_select).disabled(!buttons.can_start)))
-                                        .child(div().flex_1().child(Select::new(&self.system_select).disabled(!buttons.can_start))),
-                                )
-                                .child(self.level_bar(cx, "Mic", mic_level))
-                                .child(self.level_bar(cx, "System", system_level))
-                                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(caption)),
-                        )
-                    })
+                Button::new("toggle-audio-panel")
+                    .ghost()
+                    .icon(Lucide::SlidersHorizontal)
+                    .label("Audio")
+                    .selected(self.audio_panel_open)
+                    .tooltip("Choose devices and check levels")
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_audio_panel(cx))),
+            );
+
+        let session_card = crate::ui::card(cx)
+            .child(
+                h_flex()
+                    .gap_3()
+                    .items_center()
                     .child(
                         h_flex()
                             .gap_2()
                             .items_center()
-                            .child(
-                                Button::new("start-recording")
-                                    .primary()
-                                    .icon(IconName::Play)
-                                    .label("Start")
-                                    .disabled(!buttons.can_start)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.on_start_click(window, cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("pause-recording")
-                                    .icon(IconName::Pause)
-                                    .label("Pause")
-                                    .disabled(!buttons.can_pause)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.on_pause_click(cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("resume-recording")
-                                    .icon(IconName::Play)
-                                    .label("Resume")
-                                    .disabled(!buttons.can_resume)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.on_resume_click(cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("stop-recording")
-                                    .danger()
-                                    .label("Stop")
-                                    .disabled(!buttons.can_stop)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.on_stop_click(cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("bookmark-moment")
-                                    .icon(Lucide::BookmarkPlus)
-                                    .label("Bookmark")
-                                    .tooltip(format!(
-                                        "Bookmark this moment ({})",
-                                        crate::bookmark::SHORTCUT_LABEL
-                                    ))
-                                    .disabled(!buttons.can_stop)
-                                    .on_click(cx.listener(|_, _, _, cx| {
-                                        crate::bookmark::bookmark_now(cx);
-                                    })),
-                            )
-                            .child(div().flex_1())
-                            .child(Label::new(elapsed).text_color(cx.theme().muted_foreground))
-                            .when(self.refining, |this| {
-                                this.child(
-                                    div()
-                                        .text_xs()
-                                        .italic()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child("Refining meeting…"),
-                                )
-                            }),
+                            .px_2p5()
+                            .py_1()
+                            .rounded_full()
+                            .bg(status_color.opacity(0.12))
+                            .text_xs()
+                            .font_semibold()
+                            .text_color(status_color)
+                            .child(status_dot)
+                            .child(status_label),
                     )
-                    .when(!self.session_bookmarks.is_empty(), |this| {
-                        let marks = self
-                            .session_bookmarks
-                            .iter()
-                            .map(|s| logic::format_elapsed(s.max(0.0) as u64))
-                            .collect::<Vec<_>>()
-                            .join(" · ");
-                        this.child(
-                            h_flex()
-                                .gap_2()
-                                .items_center()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(Icon::from(Lucide::Bookmark).xsmall())
-                                .child(format!("Bookmarks: {marks}")),
-                        )
-                    })
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
+                    .child(div().flex_1().child(Input::new(&self.meeting_name).appearance(false).large()))
                     .child(
-                        MessageScroller::new(
-                            "live-transcript",
-                            self.scroller.clone(),
-                            move |ix, _window, cx| {
-                                let entity = this_entity.read(cx);
-                                let row = &entity.rows[ix];
-                                let theme = ActiveTheme::theme(cx);
-                                let accent = if row.source == "mic" {
-                                    theme.primary
-                                } else {
-                                    theme.muted_foreground
-                                };
-                                v_flex()
-                                    .gap_1()
-                                    .child(
-                                        h_flex()
-                                            .gap_2()
-                                            .items_baseline()
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .font_semibold()
-                                                    .text_color(accent)
-                                                    .child(row.speaker.clone()),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.muted_foreground)
-                                                    .child(logic::format_elapsed(
-                                                        row.audio_start_time.max(0.0) as u64,
-                                                    )),
-                                            ),
-                                    )
-                                    .child(div().text_sm().child(row.text.clone()))
-                            },
-                        )
-                        .with_bottom_fade(cx.theme().background),
+                        div()
+                            .text_2xl()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_color(if live { theme.foreground } else { theme.muted_foreground })
+                            .child(elapsed),
                     ),
             )
-            .when(!partials.is_empty(), |parent| {
-                parent.child(v_flex().gap_1().px_1().children(partials.into_iter().map(
-                    |(source, text)| {
-                        h_flex()
-                            .gap_2()
-                            .items_baseline()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .italic()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(if source == "mic" { "You (live)" } else { "System (live)" }),
-                            )
-                            .child(div().text_sm().italic().text_color(cx.theme().muted_foreground).child(text))
-                    },
-                )))
-            })
-            .when(!self.live_action_items.is_empty(), |parent| {
-                parent.child(
+            .child(controls)
+            .when(self.audio_panel_open, |this| {
+                let caption = match self.meter_source {
+                    MeterSource::Pipeline => {
+                        "Mic level is after echo cancellation and noise suppression — what's being transcribed."
+                    }
+                    _ => "Raw input. Echo cancellation and noise suppression apply once recording starts.",
+                };
+                this.child(crate::ui::fade_in(
                     v_flex()
-                        .gap_1()
+                        .gap_3()
                         .p_3()
-                        .rounded(cx.theme().radius)
-                        .border_1()
-                        .border_color(cx.theme().border)
+                        .rounded(theme.radius)
+                        .bg(theme.muted.opacity(0.5))
+                        .child(
+                            h_flex()
+                                .gap_3()
+                                .items_center()
+                                .child(div().w_20().text_xs().text_color(theme.muted_foreground).child("Devices"))
+                                .child(div().flex_1().child(Select::new(&self.mic_select).disabled(!buttons.can_start)))
+                                .child(div().flex_1().child(Select::new(&self.system_select).disabled(!buttons.can_start))),
+                        )
+                        .child(self.level_bar(cx, "Mic", mic_level))
+                        .child(self.level_bar(cx, "System", system_level))
+                        .child(div().text_xs().text_color(theme.muted_foreground).child(caption)),
+                    "audio-panel",
+                ))
+            })
+            .when(!self.session_bookmarks.is_empty(), |this| {
+                this.child(
+                    h_flex().gap_2().items_center().flex_wrap().children(
+                        self.session_bookmarks.iter().enumerate().map(|(i, s)| {
+                            crate::ui::fade_in(
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded_full()
+                                    .bg(theme.primary.opacity(0.12))
+                                    .text_xs()
+                                    .text_color(theme.primary)
+                                    .child(Icon::from(Lucide::Bookmark).xsmall())
+                                    .child(logic::format_elapsed(s.max(0.0) as u64)),
+                                ("bookmark-chip", i),
+                            )
+                        }),
+                    ),
+                )
+            });
+
+        let transcript = div()
+            .flex_1()
+            .min_h_0()
+            .rounded(theme.radius_lg)
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.group_box.opacity(0.5))
+            .overflow_hidden()
+            .map(|this| {
+                if !has_transcript {
+                    let (title, body) = if live {
+                        ("Listening…", "Speech will appear here as it's transcribed.")
+                    } else {
+                        (
+                            "Ready when you are",
+                            "Start a recording and the transcript appears here live. Everything stays on this machine.",
+                        )
+                    };
+                    this.child(crate::ui::empty_state(Lucide::AudioLines, title, body, cx))
+                } else {
+                    this.child(
+                        MessageScroller::new("live-transcript", self.scroller.clone(), move |ix, _window, cx| {
+                            let entity = this_entity.read(cx);
+                            let row = &entity.rows[ix];
+                            let theme = ActiveTheme::theme(cx);
+                            let accent = if row.source == "mic" { theme.primary } else { theme.info };
+                            crate::ui::fade_in(
+                                h_flex()
+                                    .w_full()
+                                    .gap_3()
+                                    .px_4()
+                                    .py_2()
+                                    .items_start()
+                                    .child(div().mt_1().w(px(3.)).h(px(14.)).rounded_full().bg(accent))
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .gap_0p5()
+                                            .child(
+                                                h_flex()
+                                                    .gap_2()
+                                                    .items_baseline()
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .font_semibold()
+                                                            .text_color(accent)
+                                                            .child(row.speaker.clone()),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(theme.muted_foreground)
+                                                            .child(logic::format_elapsed(
+                                                                row.audio_start_time.max(0.0) as u64,
+                                                            )),
+                                                    ),
+                                            )
+                                            .child(div().text_sm().line_height(rems(1.45)).child(row.text.clone())),
+                                    ),
+                                ("transcript-row", ix),
+                            )
+                        })
+                        .with_bottom_fade(theme.group_box.opacity(0.5)),
+                    )
+                }
+            });
+
+        v_flex()
+            .size_full()
+            .gap_4()
+            .p_6()
+            .child(session_card)
+            .child(transcript)
+            .when(!partials.is_empty(), |parent| {
+                parent.child(v_flex().gap_1().px_2().children(partials.into_iter().map(|(source, text)| {
+                    h_flex()
+                        .gap_2()
+                        .items_baseline()
+                        .child(crate::ui::pulse_dot(
+                            if source == "mic" { theme.primary } else { theme.info },
+                            6.,
+                            ("partial-dot", if source == "mic" { 0usize } else { 1 }),
+                        ))
                         .child(
                             div()
                                 .text_xs()
-                                .font_semibold()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("Action items (live, beta)"),
+                                .text_color(theme.muted_foreground)
+                                .child(if source == "mic" { "You" } else { "System" }),
                         )
-                        .children(self.live_action_items.iter().map(|text| {
-                            div().text_sm().child(format!("• {}", text))
+                        .child(div().text_sm().italic().text_color(theme.muted_foreground).child(text))
+                })))
+            })
+            .when(!self.live_action_items.is_empty(), |parent| {
+                parent.child(
+                    crate::ui::card(cx)
+                        .gap_2()
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .child(crate::ui::section_label("Action items", cx))
+                                .child(
+                                    div()
+                                        .px_1p5()
+                                        .rounded_full()
+                                        .bg(theme.primary.opacity(0.12))
+                                        .text_xs()
+                                        .text_color(theme.primary)
+                                        .child("live · beta"),
+                                ),
+                        )
+                        .children(self.live_action_items.iter().enumerate().map(|(i, text)| {
+                            crate::ui::fade_in(
+                                h_flex()
+                                    .gap_2()
+                                    .items_start()
+                                    .child(
+                                        div()
+                                            .mt(px(7.))
+                                            .size(px(5.))
+                                            .rounded_full()
+                                            .bg(theme.primary),
+                                    )
+                                    .child(div().text_sm().child(text.clone())),
+                                ("live-action", i),
+                            )
                         })),
                 )
             })
