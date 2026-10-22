@@ -194,6 +194,13 @@ impl AppShell {
         if matches!(self.route, Route::Speakers) && route != Route::Speakers {
             self.speakers.update(cx, |view, cx| view.on_leave(cx));
         }
+        // The Recording page's level meter holds the mic open, so it only
+        // runs while that page is on screen.
+        if self.route == Route::Recording && route != Route::Recording {
+            self.recording.update(cx, |view, cx| view.on_leave(cx));
+        } else if self.route != Route::Recording && route == Route::Recording {
+            self.recording.update(cx, |view, cx| view.on_show(cx));
+        }
         self.route = route;
         cx.notify();
     }

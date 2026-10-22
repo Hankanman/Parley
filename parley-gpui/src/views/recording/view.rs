@@ -173,6 +173,10 @@ pub struct RecordingView {
     displayed_levels: Levels,
     /// Time of the last meter animation step; `None` while the meters are settled.
     meter_tick: Option<std::time::Instant>,
+    /// Whether the level meter's capture streams should be open — only while
+    /// this page is the one on screen. The meter holds the microphone open,
+    /// which desktop "mic in use" indicators report as Parley listening.
+    meter_active: bool,
     refining: bool,
     pending_toasts: Vec<(NotificationType, String)>,
     /// Provisional action items from the beta live extractor — see
@@ -187,6 +191,12 @@ pub struct RecordingView {
     /// Offsets (seconds) bookmarked during this recording, newest last —
     /// from the button, the tray or the shortcut (issue #87).
     session_bookmarks: Vec<f64>,
+}
+
+fn stop_level_monitor(cx: &App) {
+    AppServices::global(cx).io.spawn(async {
+        let _ = simple_level_monitor::stop_monitoring().await;
+    });
 }
 
 impl RecordingView {
@@ -233,6 +243,7 @@ impl RecordingView {
             levels: Levels::default(),
             displayed_levels: Levels::default(),
             meter_tick: None,
+            meter_active: true,
             refining: false,
             pending_toasts: Vec::new(),
             live_action_items: Vec::new(),
@@ -246,6 +257,14 @@ impl RecordingView {
         this.subscribe_to_selects(cx);
         this.restart_level_monitor(cx);
         this.start_elapsed_ticker(cx);
+        // Closing to tray removes the window and drops this view, but the
+        // monitor session lives in core — close its streams with the view.
+        cx.on_release(|this, cx| {
+            if this.meter_active {
+                stop_level_monitor(cx);
+            }
+        })
+        .detach();
 
         this
     }
@@ -387,7 +406,29 @@ impl RecordingView {
             .unwrap_or_else(|| DEFAULT_DEVICE_ID.to_string())
     }
 
+    /// The page came on screen: open the level meter.
+    pub fn on_show(&mut self, cx: &mut Context<Self>) {
+        if !self.meter_active {
+            self.meter_active = true;
+            self.restart_level_monitor(cx);
+        }
+    }
+
+    /// The page went off screen: close the level meter's capture streams.
+    pub fn on_leave(&mut self, cx: &mut Context<Self>) {
+        if self.meter_active {
+            self.meter_active = false;
+            self.levels = Levels::default();
+            self.displayed_levels = Levels::default();
+            self.meter_tick = None;
+            stop_level_monitor(cx);
+        }
+    }
+
     fn restart_level_monitor(&mut self, cx: &mut Context<Self>) {
+        if !self.meter_active {
+            return;
+        }
         let services = AppServices::global(cx);
         let sink = services.sink.clone();
         let io = services.io.clone();
