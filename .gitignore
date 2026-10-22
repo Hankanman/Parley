@@ -40,7 +40,9 @@ experiments/
 .claude/
 target/
 
-Cargo.lock
+# Cargo.lock is committed: Parley is an application, and release builds must use
+# the exact dependency versions it was tested with (an unpinned llama-cpp-sys-2
+# drifting to an incompatible 0.1.x broke the CI build).
 
 # gpui-shell spike: standalone crate, own workspace, own Cargo.lock (committed)
 spikes/gpui-shell/target/
