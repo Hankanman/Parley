@@ -5,7 +5,8 @@ name: "Build"
 #   mode: vulkan  -> Parley-<version>-vulkan-x86_64.AppImage (GPU Whisper on
 #                    NVIDIA/AMD/Intel; compiling it needs only the Vulkan SDK,
 #                    not a GPU)
-# Built on ubuntu-22.04 so the AppImage runs on any distro with glibc 2.35+.
+# Built on ubuntu-24.04 (PipeWire 1.0 headers, which the pipewire crate
+# needs) so the AppImage runs on any distro with glibc 2.39+.
 
 on:
   workflow_call:
@@ -13,7 +14,7 @@ on:
       platform:
         required: false
         type: string
-        default: "ubuntu-22.04"
+        default: "ubuntu-24.04"
       release-id:
         required: false
         type: string
@@ -76,12 +77,12 @@ jobs:
             libvulkan-dev libssl-dev libzstd-dev libsqlite3-dev \
             fuse libfuse2
           # webrtc-audio-processing-sys runs `meson setup --reconfigure` on a
-          # fresh build dir, which Ubuntu 22.04's meson 0.61 rejects.
+          # fresh build dir, which needs a recent meson; take the current one.
           pipx install meson
           meson --version
 
       # Pinned LunarG SDK: glslc (ggml's Vulkan shaders) and current Vulkan
-      # headers; Ubuntu 22.04 packages neither new enough.
+      # headers, pinned so builds are reproducible.
       - name: Cache Vulkan SDK
         if: inputs.mode == 'vulkan'
         uses: actions/cache@v4

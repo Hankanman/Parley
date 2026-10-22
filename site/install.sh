@@ -54,6 +54,15 @@ fi
 [ "$(uname -s)" = "Linux" ] || die "Parley is Linux-only."
 [ "$(uname -m)" = "x86_64" ] || die "Parley is only built for x86_64 (this machine is $(uname -m))."
 
+# The AppImages are built on Ubuntu 24.04: they need glibc 2.39 or newer.
+GLIBC="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
+if [ -n "$GLIBC" ]; then
+    major="${GLIBC%%.*}"; minor="${GLIBC#*.}"; minor="${minor%%.*}"
+    if [ "$major" -lt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -lt 39 ]; }; then
+        die "Parley needs glibc 2.39 or newer (Ubuntu 24.04, Debian 13, Fedora 40 or later); this system has $GLIBC."
+    fi
+fi
+
 if [ -n "${PARLEY_VERSION:-}" ]; then
     API="https://api.github.com/repos/$REPO/releases/tags/v${PARLEY_VERSION#v}"
 else

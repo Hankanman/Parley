@@ -15,9 +15,9 @@ on:
         required: true
         type: choice
         options:
-          - ubuntu-22.04
           - ubuntu-24.04
-        default: ubuntu-22.04
+          - ubuntu-24.04
+        default: ubuntu-24.04
       upload-artifacts:
         description: 'Upload build artifacts'
         required: true
@@ -39,7 +39,7 @@ env:
 jobs:
   build-linux:
     name: Build Linux (x64)
-    runs-on: ${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }}
+    runs-on: ${{ github.event.inputs.ubuntu-version || 'ubuntu-24.04' }}
     permissions:
       contents: write
 
@@ -66,7 +66,7 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          key: ${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }}-x86_64-unknown-linux-gnu-gpui
+          key: ${{ github.event.inputs.ubuntu-version || 'ubuntu-24.04' }}-x86_64-unknown-linux-gnu-gpui
 
       - name: Install system dependencies
         run: |
@@ -77,7 +77,7 @@ jobs:
             libfontconfig-dev libfreetype-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev libxtst-dev libxrandr-dev \
             libvulkan-dev libssl-dev libzstd-dev libsqlite3-dev
-          pipx install meson  # Ubuntu 22.04's meson 0.61 is too old for webrtc-audio-processing-sys
+          pipx install meson  # webrtc-audio-processing-sys needs a recent meson
 
       - name: Install FUSE for AppImage
         run: |
@@ -106,7 +106,7 @@ jobs:
         if: ${{ github.event.inputs.upload-artifacts == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: parley-linux-${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }}-x64-${{ steps.get-version.outputs.version }}
+          name: parley-linux-${{ github.event.inputs.ubuntu-version || 'ubuntu-24.04' }}-x64-${{ steps.get-version.outputs.version }}
           path: Parley-*.AppImage
           retention-days: 30
 
@@ -118,7 +118,7 @@ jobs:
           echo "|----------|-------|" >> "$GITHUB_STEP_SUMMARY"
           echo "| **Version** | ${{ steps.get-version.outputs.version }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| **Mode** | ${{ github.event.inputs.mode || 'cpu' }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| **Ubuntu Version** | ${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Ubuntu Version** | ${{ github.event.inputs.ubuntu-version || 'ubuntu-24.04' }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### Build Artifact" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"

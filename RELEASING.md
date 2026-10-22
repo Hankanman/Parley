@@ -26,8 +26,8 @@ While Parley is below 1.0:
 3. Run the **Release** workflow (Actions → Release → Run workflow, on
    `main`), or `gh workflow run release.yml --ref main`. It refuses to run if
    the tag already exists. It creates a draft release `v<version>` with
-   generated notes, then builds two AppImages on `ubuntu-22.04` (so they run
-   on any distro with glibc 2.35+) and uploads each with a `.sha256`:
+   generated notes, then builds two AppImages on `ubuntu-24.04` (so they run
+   on any distro with glibc 2.39+ and PipeWire 1.0+) and uploads each with a `.sha256`:
    - `Parley-<version>-x86_64.AppImage`: CPU build, runs everywhere
    - `Parley-<version>-vulkan-x86_64.AppImage`: Whisper on the GPU via
      Vulkan (NVIDIA, AMD, Intel). Compiling it needs the Vulkan SDK, not a GPU.

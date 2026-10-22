@@ -58,8 +58,8 @@ jobs:
             console.log(`Created draft release with ID: ${data.id}`)
             return data.id
 
-  # STEP 2: Build the CPU and Vulkan AppImages on ubuntu-22.04 (portable to
-  # glibc 2.35+) and upload them, with checksums, directly to the release.
+  # STEP 2: Build the CPU and Vulkan AppImages on ubuntu-24.04 (portable to
+  # glibc 2.39+) and upload them, with checksums, directly to the release.
   # Note: macOS and Windows are dropped platforms (Linux-only app, see CLAUDE.md).
   build-linux:
     needs: create-release
@@ -71,7 +71,7 @@ jobs:
         mode: ["cpu", "vulkan"]
     uses: ./.github/workflows/build.yml
     with:
-      platform: "ubuntu-22.04"
+      platform: "ubuntu-24.04"
       mode: ${{ matrix.mode }}
       upload-artifacts: false  # this workflow uploads directly to the release
       release-id: ${{ needs.create-release.outputs.release-id }}
