@@ -11,7 +11,7 @@
 //!   finished onboarding (resumed at its persisted step).
 //! - `Shell` — the normal app.
 
-use gpui_kit::component::{label::Label, Root};
+use gpui_kit::component::label::Label;
 use gpui_kit::*;
 use parley_core::onboarding;
 
@@ -105,7 +105,7 @@ impl RootView {
 }
 
 impl Render for RootView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let content = match &self.state {
             State::Loading => div()
                 .size_full()
@@ -117,18 +117,8 @@ impl Render for RootView {
             State::Onboarding(view) => view.clone().into_any_element(),
             State::Shell(view) => view.clone().into_any_element(),
         };
-        // gpui-kit's `Root` doesn't mount its overlay layers itself: without
-        // these, `open_dialog` / `open_alert_dialog` / `push_notification`
-        // update `Root`'s state but nothing is ever drawn.
-        let sheet_layer = Root::render_sheet_layer(window, cx);
-        let dialog_layer = Root::render_dialog_layer(window, cx);
-        let notification_layer = Root::render_notification_layer(window, cx);
-        div()
-            .relative()
-            .size_full()
-            .child(content)
-            .children(sheet_layer)
-            .children(dialog_layer)
-            .children(notification_layer)
+        // Since gpui-kit 0.8, `Root` mounts the sheet, dialog and
+        // notification layers itself (as root plugins).
+        div().relative().size_full().child(content)
     }
 }
