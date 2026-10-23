@@ -2,7 +2,7 @@
 //! client config snippet, backed by `parley_core::mcp_config`.
 
 use gpui_kit::component::{
-    button::Button,
+    button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
     h_flex, v_flex,
     label::Label,
@@ -24,8 +24,8 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
             SettingGroup::new()
                 .title("Model Context Protocol (MCP)")
                 .description(
-                    "parley-mcp is a separate binary an AI client (Claude Desktop, Claude Code) \
-                     spawns by absolute path to read this app's meeting database directly.",
+                    "parley-mcp lets an AI client (Claude Desktop, Claude Code) read your meetings. \
+                     The client starts it by absolute path and it reads this app's database directly.",
                 )
                 .item(info_item(&view)),
         )
@@ -33,7 +33,7 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
 }
 
 fn info_item(view: &Entity<SettingsView>) -> SettingItem {
-    let _ = view;
+    let view = view.clone();
     SettingItem::render(move |_options, _window, cx| {
         let info = SettingsCache::global(cx).mcp_info.clone();
 
@@ -51,7 +51,17 @@ fn info_item(view: &Entity<SettingsView>) -> SettingItem {
         let binary_line = match &info.binary_path {
             Some(path) if info.binary_found => format!("Binary found: {}", path),
             Some(path) => format!("Binary not found at last known path: {}", path),
+            None if info.bundled_path.is_some() => {
+                "Not installed yet — install it to give clients a stable path".to_string()
+            }
             None => "Binary not found — build parley-mcp or set $PARLEY_MCP_BIN".to_string(),
+        };
+        // The AppImage's own copy can be (re)installed to ~/.local/bin unless
+        // that copy is already identical.
+        let install_label = match (&info.bundled_path, info.installed_is_current) {
+            (Some(_), false) if info.binary_found => Some("Update parley-mcp"),
+            (Some(_), false) => Some("Install parley-mcp"),
+            _ => None,
         };
         let reveal_path = info.binary_path.clone().filter(|_| info.binary_found);
 
@@ -80,6 +90,13 @@ fn info_item(view: &Entity<SettingsView>) -> SettingItem {
                             cx.theme().danger
                         }),
                     )
+                    .children(install_label.map(|label| {
+                        let view = view.clone();
+                        Button::new("mcp-install-binary")
+                            .primary()
+                            .label(label)
+                            .on_click(move |_, _, cx| install_bundled(cx, &view))
+                    }))
                     .children(reveal_path.map(|path| {
                         Button::new("mcp-reveal-binary")
                             .outline()
@@ -95,6 +112,17 @@ fn info_item(view: &Entity<SettingsView>) -> SettingItem {
             .child(snippet_block(cx, "Claude Desktop / other MCP JSON config", &json_snippet))
             .into_any_element()
     })
+}
+
+/// Copy the AppImage's bundled `parley-mcp` to `~/.local/bin` and refresh
+/// the panel so the snippets pick up the stable path.
+fn install_bundled(cx: &mut App, view: &Entity<SettingsView>) {
+    match parley_core::mcp_config::install_bundled_binary() {
+        Ok(path) => log::info!("settings: installed parley-mcp to {}", path.display()),
+        Err(e) => log::warn!("settings: failed to install parley-mcp: {}", e),
+    }
+    cx.global_mut::<SettingsCache>().mcp_info = parley_core::mcp_config::get_mcp_server_info().ok();
+    let _ = view.update(cx, |_, cx| cx.notify());
 }
 
 /// The `claude mcp add` one-liner for registering `parley-mcp` with Claude

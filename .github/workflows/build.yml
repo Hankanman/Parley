@@ -131,6 +131,7 @@ jobs:
           if ! find squashfs-root -name 'libsherpa-onnx-c-api.so*' | grep -q .; then
             echo "::error::libsherpa-onnx-c-api.so is not bundled in the AppImage"; exit 1
           fi
+          [ -x squashfs-root/usr/bin/parley-mcp ] || { echo "::error::parley-mcp is not bundled in the AppImage"; exit 1; }
           rm -rf squashfs-root
 
       - name: Upload to release

@@ -2,19 +2,22 @@
 //!
 //! `parley-mcp` is a separate binary that an external AI client (Claude
 //! Desktop, Claude Code) spawns by absolute path and which reads this app's
-//! SQLite database directly — see the `parley-mcp` crate. It is deliberately
-//! *not* a sidecar and *not* bundled into the app (an absolute path into
-//! an AppImage mount is not stable across launches), so the app cannot spawn
-//! it; all it can do is help the user register it. This module backs the
-//! Settings → Integrations panel: it reports where the database lives and does
-//! its best to locate the binary so the UI can render a ready-to-paste client
-//! config.
+//! SQLite database directly — see the `parley-mcp` crate. It is not a
+//! sidecar: the app never spawns it, it only helps the user register it.
+//! This module backs the Settings → Integrations panel: it reports where the
+//! database lives and does its best to locate the binary so the UI can render
+//! a ready-to-paste client config.
 //!
-//! Locating the binary is best-effort. The build leaves it in the workspace
-//! `target/` dir (see `build.sh`), which is knowable at compile time via
-//! `CARGO_MANIFEST_DIR`, so a from-source build+run resolves it automatically.
-//! When that fails (e.g. a relocated binary), the UI lets the user point at it
-//! by hand — the returned `binary_path` is only a suggestion for the snippet.
+//! The AppImage carries a copy next to `parley`, but a path into the
+//! AppImage's mount changes every launch, so clients can't use it directly.
+//! [`install_bundled_binary`] copies it to `~/.local/bin` (as `install.sh`
+//! does) to give it a stable path.
+//!
+//! Locating the binary is best-effort. A from-source build leaves it in the
+//! workspace `target/` dir (see `build.sh`), which is knowable at compile time
+//! via `CARGO_MANIFEST_DIR`, so a from-source build+run resolves it
+//! automatically. The returned `binary_path` is only a suggestion for the
+//! snippet.
 
 use std::path::{Path, PathBuf};
 
@@ -53,6 +56,15 @@ pub struct McpServerInfo {
     /// Whether `binary_path` was found and points at an existing file.
     #[serde(rename = "binaryFound")]
     pub binary_found: bool,
+    /// The copy inside the running AppImage, when there is one. Not usable
+    /// as a client command (see the module docs); [`install_bundled_binary`]
+    /// copies it to [`install_path`].
+    #[serde(rename = "bundledPath")]
+    pub bundled_path: Option<String>,
+    /// Whether the binary at [`install_path`] is byte-for-byte the bundled
+    /// one, i.e. installing again would change nothing.
+    #[serde(rename = "installedIsCurrent")]
+    pub installed_is_current: bool,
 }
 
 /// The default DB location the MCP server picks with no flag/env, mirroring
@@ -65,8 +77,59 @@ fn default_db_path() -> Option<PathBuf> {
         .map(|d| d.join("meeting_minutes.sqlite"))
 }
 
+/// Where [`install_bundled_binary`] puts the binary: `~/.local/bin`, the same
+/// directory `install.sh` installs `parley` into by default.
+pub fn install_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".local/bin").join(MCP_BIN_NAME))
+}
+
+/// The `parley-mcp` packaged next to the running executable inside an
+/// AppImage (`$APPDIR`), if any.
+fn bundled_binary() -> Option<PathBuf> {
+    let appdir = std::env::var_os("APPDIR")?;
+    let exe = std::env::current_exe().ok()?;
+    if !exe.starts_with(&appdir) {
+        return None;
+    }
+    let candidate = exe.parent()?.join(MCP_BIN_NAME);
+    candidate.is_file().then_some(candidate)
+}
+
+/// Copy the AppImage's bundled `parley-mcp` to [`install_path`], replacing
+/// any older copy, and return where it went. Written to a temporary file
+/// and renamed into place, so a client mid-launch never sees half a binary.
+pub fn install_bundled_binary() -> Result<PathBuf, String> {
+    let source = bundled_binary().ok_or_else(|| "This build doesn't include parley-mcp".to_string())?;
+    let target = install_path().ok_or_else(|| "Couldn't find your home folder".to_string())?;
+    install_binary(&source, &target)?;
+    Ok(target)
+}
+
+fn install_binary(source: &Path, target: &Path) -> Result<(), String> {
+    let dir = target.parent().ok_or_else(|| "Invalid install path".to_string())?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("Couldn't create {}: {}", dir.display(), e))?;
+    let tmp = dir.join(format!(".{}.tmp", MCP_BIN_NAME));
+    std::fs::copy(source, &tmp).map_err(|e| format!("Couldn't copy parley-mcp: {}", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("Couldn't make parley-mcp executable: {}", e))?;
+    }
+    std::fs::rename(&tmp, target).map_err(|e| format!("Couldn't install parley-mcp: {}", e))?;
+    Ok(())
+}
+
+fn same_contents(a: &Path, b: &Path) -> bool {
+    match (std::fs::read(a), std::fs::read(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// Search likely locations for the `parley-mcp` binary, in priority order.
-/// Returns the first path that exists.
+/// Returns the first path that exists. Never returns the copy inside an
+/// AppImage mount, whose path changes every launch.
 fn locate_binary() -> Option<PathBuf> {
     // 1. Explicit override — an advanced user pointing us at a specific build.
     if let Ok(env_path) = std::env::var(MCP_BIN_ENV) {
@@ -79,10 +142,17 @@ fn locate_binary() -> Option<PathBuf> {
         }
     }
 
-    // 2. Next to the running executable — covers the case where someone has
-    //    copied the binary alongside the app.
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
+    // 2. Installed by `install.sh` or the Integrations page.
+    if let Some(candidate) = install_path() {
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    // 3. Next to the AppImage file itself (`install.sh` with a custom
+    //    `PARLEY_BIN_DIR` puts both there).
+    if let Some(appimage) = std::env::var_os("APPIMAGE") {
+        if let Some(dir) = Path::new(&appimage).parent() {
             let candidate = dir.join(MCP_BIN_NAME);
             if candidate.is_file() {
                 return Some(candidate);
@@ -90,7 +160,20 @@ fn locate_binary() -> Option<PathBuf> {
         }
     }
 
-    // 3. The workspace target dir this app was built from. `CARGO_MANIFEST_DIR`
+    // 4. Next to the running executable — covers the case where someone has
+    //    copied the binary alongside the app. Skipped inside an AppImage.
+    if bundled_binary().is_none() {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let candidate = dir.join(MCP_BIN_NAME);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+
+    // 5. The workspace target dir this app was built from. `CARGO_MANIFEST_DIR`
     //    is `…/parley-core` at compile time; the workspace `target/` lives
     //    one level up. This is what resolves a from-source build+run.
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent();
@@ -103,7 +186,7 @@ fn locate_binary() -> Option<PathBuf> {
         }
     }
 
-    // 4. Anywhere on PATH.
+    // 6. Anywhere on PATH.
     if let Ok(path_var) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path_var) {
             let candidate = dir.join(MCP_BIN_NAME);
@@ -125,6 +208,11 @@ pub fn get_mcp_server_info() -> Result<McpServerInfo, String> {
 
     let binary = locate_binary();
     let binary_found = binary.is_some();
+    let bundled = bundled_binary();
+    let installed_is_current = match (&bundled, install_path()) {
+        (Some(bundled), Some(installed)) => same_contents(bundled, &installed),
+        _ => false,
+    };
 
     Ok(McpServerInfo {
         db_exists: db_path.is_file(),
@@ -132,6 +220,8 @@ pub fn get_mcp_server_info() -> Result<McpServerInfo, String> {
         db_is_default,
         binary_path: binary.map(|p| p.to_string_lossy().into_owned()),
         binary_found,
+        bundled_path: bundled.map(|p| p.to_string_lossy().into_owned()),
+        installed_is_current,
     })
 }
 
@@ -151,4 +241,33 @@ pub fn reveal_mcp_binary(path: String) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("Failed to open folder: {}", e))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn install_binary_creates_the_dir_and_replaces_an_older_copy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("bundled");
+        std::fs::write(&source, b"new build").unwrap();
+        let target = tmp.path().join("home/.local/bin").join(MCP_BIN_NAME);
+
+        install_binary(&source, &target).unwrap();
+        assert!(same_contents(&source, &target));
+
+        std::fs::write(&target, b"old build").unwrap();
+        assert!(!same_contents(&source, &target));
+        install_binary(&source, &target).unwrap();
+        assert!(same_contents(&source, &target));
+        assert!(!target.with_file_name(format!(".{}.tmp", MCP_BIN_NAME)).exists());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&target).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o755);
+        }
+    }
 }

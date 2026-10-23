@@ -10,14 +10,24 @@ Parley is running**, and it's safe to use while a meeting is being recorded.
 Everything stays on your machine: this is a local process reading a local file.
 Nothing is sent anywhere except to the MCP client that spawned it.
 
-## Build
+## Get it
+
+The Parley AppImage includes it. The installer
+(`curl -fsSL https://meetparley.app/install.sh | sh`) puts it at
+`~/.local/bin/parley-mcp`; if you downloaded the AppImage yourself, use
+**Install parley-mcp** in Parley's Settings → Integrations, which copies it
+to the same place. (Clients can't use the copy inside the AppImage
+directly: its path changes every launch.)
+
+From source:
 
 ```bash
 cargo build --release -p parley-mcp
 # -> target/release/parley-mcp
 ```
 
-`./build.sh` at the repo root builds it too, alongside the app.
+`./build.sh` at the repo root builds it too, and bundles it into the
+AppImage.
 
 ## Register it with a client
 
@@ -28,7 +38,7 @@ your shell's `PATH`.
 ### Claude Code
 
 ```bash
-claude mcp add parley -- /absolute/path/to/parley/target/release/parley-mcp
+claude mcp add parley -- /home/you/.local/bin/parley-mcp
 ```
 
 Or add it to `.mcp.json` in a project:
@@ -37,7 +47,7 @@ Or add it to `.mcp.json` in a project:
 {
   "mcpServers": {
     "parley": {
-      "command": "/absolute/path/to/parley/target/release/parley-mcp"
+      "command": "/home/you/.local/bin/parley-mcp"
     }
   }
 }
@@ -54,7 +64,7 @@ restart Claude Desktop:
 {
   "mcpServers": {
     "parley": {
-      "command": "/absolute/path/to/parley/target/release/parley-mcp"
+      "command": "/home/you/.local/bin/parley-mcp"
     }
   }
 }
@@ -66,7 +76,7 @@ To point at a database somewhere other than the default:
 {
   "mcpServers": {
     "parley": {
-      "command": "/absolute/path/to/parley/target/release/parley-mcp",
+      "command": "/home/you/.local/bin/parley-mcp",
       "args": ["--db", "/path/to/meeting_minutes.sqlite"]
     }
   }

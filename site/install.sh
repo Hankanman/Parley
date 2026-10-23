@@ -4,8 +4,9 @@
 #   curl -fsSL https://meetparley.app/install.sh | sh
 #
 # Downloads the latest Parley AppImage from GitHub releases, checks its
-# SHA-256, installs it as ~/.local/bin/parley and adds Parley to your
-# application menu. No root needed. Run it again to update.
+# SHA-256, installs it as ~/.local/bin/parley (with the parley-mcp MCP
+# server beside it) and adds Parley to your application menu. No root
+# needed. Run it again to update.
 #
 #   curl -fsSL https://meetparley.app/install.sh | sh -s -- --uninstall
 #                                       remove Parley (keeps your meetings and settings)
@@ -45,7 +46,7 @@ refresh_menus() {
 }
 
 if [ "${1:-}" = "--uninstall" ]; then
-    rm -f "$BIN_DIR/parley" "$DESKTOP_FILE" "$ICON_FILE"
+    rm -f "$BIN_DIR/parley" "$BIN_DIR/parley-mcp" "$DESKTOP_FILE" "$ICON_FILE"
     refresh_menus
     say "Parley removed. Your meetings, models and settings are still in $DATA_HOME/$APP_ID"
     exit 0
@@ -132,9 +133,17 @@ chmod +x "$TMP/$NAME"
 (cd "$TMP" && "./$NAME" --appimage-extract "usr/share/icons/hicolor/512x512/apps/$APP_ID.png" >/dev/null 2>&1 \
     && "./$NAME" --appimage-extract "usr/share/applications/$APP_ID.desktop" >/dev/null 2>&1) \
     || warn "couldn't read the menu entry from the AppImage; skipping it"
+# The MCP server (0.5.1 and later), which AI clients start by absolute path.
+(cd "$TMP" && "./$NAME" --appimage-extract "usr/bin/parley-mcp" >/dev/null 2>&1) || true
 
 mkdir -p "$BIN_DIR"
 mv -f "$TMP/$NAME" "$BIN_DIR/parley"
+
+if [ -f "$TMP/squashfs-root/usr/bin/parley-mcp" ]; then
+    cp "$TMP/squashfs-root/usr/bin/parley-mcp" "$BIN_DIR/parley-mcp.tmp"
+    chmod 755 "$BIN_DIR/parley-mcp.tmp"
+    mv -f "$BIN_DIR/parley-mcp.tmp" "$BIN_DIR/parley-mcp"
+fi
 
 if [ -f "$TMP/squashfs-root/usr/share/applications/$APP_ID.desktop" ]; then
     mkdir -p "$(dirname "$DESKTOP_FILE")" "$(dirname "$ICON_FILE")"
@@ -144,6 +153,7 @@ if [ -f "$TMP/squashfs-root/usr/share/applications/$APP_ID.desktop" ]; then
 fi
 
 say "Installed Parley $VERSION ($BUILD build) to $BIN_DIR/parley"
+[ -f "$BIN_DIR/parley-mcp" ] && say "MCP server for AI clients: $BIN_DIR/parley-mcp (see https://meetparley.app/docs/mcp.html)"
 
 # The AppImage runtime has libfuse built in but mounts itself with the
 # system's fusermount (FUSE 3 or 2).
