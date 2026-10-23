@@ -1,0 +1,57 @@
+/* Parley colours on top of mdBook's themes (see site/index.html). */
+:root {
+  --content-max-width: 820px;
+}
+.navy {
+  --bg: #0B0E14;
+  --fg: #E6EAF2;
+  --sidebar-bg: #121722;
+  --sidebar-fg: #C4CCDA;
+  --sidebar-non-existant: #5B6678;
+  --sidebar-active: #6FB0FF;
+  --sidebar-spacer: #1F2633;
+  --sidebar-header-border-color: #1A78E8;
+  --icons: #8A94A6;
+  --icons-hover: #E6EAF2;
+  --links: #6FB0FF;
+  --inline-code-color: #C9D1DE;
+  --theme-popup-bg: #121722;
+  --theme-popup-border: #1F2633;
+  --theme-hover: #161C27;
+  --quote-bg: #121722;
+  --quote-border: #1F2633;
+  --table-border-color: #1F2633;
+  --table-header-bg: #161C27;
+  --table-alternate-bg: #0F131B;
+  --searchbar-border-color: #1F2633;
+  --searchbar-bg: #161C27;
+  --searchbar-fg: #E6EAF2;
+  --searchbar-shadow-color: transparent;
+  --searchresults-header-fg: #8A94A6;
+  --searchresults-border-color: #1F2633;
+  --searchresults-li-bg: #121722;
+  --search-mark-bg: #1A78E8;
+  --blockquote-note-color: #6FB0FF;
+  --blockquote-tip-color: #2FBF71;
+}
+.light {
+  --links: #1A6FD6;
+  --sidebar-active: #1A6FD6;
+}
+html {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+}
+.navy pre, .navy pre > code.hljs {
+  background: #080A0F;
+}
+.navy pre {
+  border: 1px solid #1F2633;
+  border-radius: 10px;
+}
+.content img {
+  border-radius: 10px;
+  border: 1px solid rgba(127, 127, 127, 0.25);
+}
+.content kbd {
+  font-size: 0.85em;
+}

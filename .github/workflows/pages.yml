@@ -1,7 +1,8 @@
 name: "Website"
 
 # Publishes site/ (plus the screenshots in docs/images/) to GitHub Pages:
-# https://meetparley.app (custom domain; site/CNAME)
+# https://meetparley.app (custom domain; site/CNAME), and the user guide in
+# docs/user/ (mdBook) at https://meetparley.app/docs/
 
 on:
   push:
@@ -9,6 +10,7 @@ on:
     paths:
       - "site/**"
       - "docs/images/**"
+      - "docs/user/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -30,11 +32,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install mdBook
+        run: |
+          v=0.5.4
+          mkdir -p ~/.local/bin
+          curl -fsSL "https://github.com/rust-lang/mdBook/releases/download/v$v/mdbook-v$v-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C ~/.local/bin
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Assemble site
         run: |
           mkdir -p _site
           cp -r site/. _site/
           cp -r docs/images _site/images
+          mdbook build docs/user --dest-dir "$PWD/_site/docs"
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

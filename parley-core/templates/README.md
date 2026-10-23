@@ -45,11 +45,10 @@ Each template JSON file follows this schema:
 
 ## Custom Templates
 
-Users can add custom templates to the application data directory:
-
-- **macOS**: `~/Library/Application Support/Parley/templates/`
-- **Windows**: `%APPDATA%\Parley\templates\`
-- **Linux**: `~/.config/Parley/templates/`
+Users can add custom templates to the `templates/` folder in the app data
+directory: `~/.local/share/io.github.hankanman.Parley/templates/`.
+Only `standard_meeting` and `daily_standup` are built in; the other JSON files
+here are examples to copy there.
 
 Custom templates override built-in templates with the same filename.
 

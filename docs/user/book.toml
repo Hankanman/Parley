@@ -1,0 +1,21 @@
+# The Parley user guide, published at https://meetparley.app/docs/
+# Built by .github/workflows/pages.yml; preview locally with scripts/docs.sh.
+
+[book]
+title = "Parley User Guide"
+description = "How to install and use Parley, the private AI meeting notes app for Linux."
+authors = ["Parley contributors"]
+language = "en"
+src = "src"
+
+[output.html]
+site-url = "/docs/"
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/Hankanman/Parley"
+edit-url-template = "https://github.com/Hankanman/Parley/edit/main/docs/user/{path}"
+additional-css = ["theme/parley.css"]
+no-section-label = true
+
+[output.html.search]
+limit-results = 20
