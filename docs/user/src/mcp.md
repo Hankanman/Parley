@@ -41,6 +41,18 @@ Run Parley at least once before connecting, so that its database exists.
 
 ## What the assistant can do
 
-It can list and search your meetings, read transcripts, summaries and talk-time statistics, and list action items. It can also add notes and action items, mark action items done and replace a meeting's summary. Anything it creates is marked as coming from the agent.
+It can read:
+
+- your meetings, with their summaries, transcripts, chapters, bookmarks, notes and talk-time statistics,
+- the calendar event each meeting belongs to, with its attendees, and your upcoming events,
+- the people Parley recognises, so it can find every meeting with someone,
+- the briefs and follow-up email drafts you've made in Parley,
+- your action items.
+
+It can search transcripts by keyword, or by meaning if you use [Ollama](models.md#ollama) (the same semantic search as [Ask Parley](ask.md#keyword-and-semantic-search)). Semantic search only covers meetings Parley has indexed, which it does while Ask Parley is open.
+
+It can also add notes, add, edit, complete and delete action items, and replace a meeting's summary. Anything it creates is marked as coming from the agent.
+
+Try asking it to *"prepare me for my next meeting"*, *"what has Priya committed to this month?"* or *"draft a recap of every Sprint Planning this quarter"*.
 
 The full list of tools is in the [parley-mcp README](https://github.com/Hankanman/Parley/blob/main/parley-mcp/README.md).

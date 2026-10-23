@@ -21,6 +21,9 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 chrono = "0.4.31"
 uuid = { version = "1.0", features = ["v4"] }
 dirs = "5.0.1"
+# Embeds the query for `semantic_search` with the user's Ollama server (the
+# same reqwest the app uses).
+reqwest = { version = "0.11", features = ["json"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 

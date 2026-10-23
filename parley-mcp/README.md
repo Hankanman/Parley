@@ -2,13 +2,17 @@
 
 An [MCP](https://modelcontextprotocol.io) server that exposes your Parley
 meeting history — meetings, transcripts, AI-generated summaries, action items,
-and notes — to an external AI agent like Claude Desktop or Claude Code.
+notes, chapters and bookmarks, the people Parley recognises, your calendar,
+pre-meeting briefs and follow-up drafts — to an external AI agent like Claude
+Desktop or Claude Code.
 
 It reads the app's SQLite database directly, so **it works whether or not
 Parley is running**, and it's safe to use while a meeting is being recorded.
 
 Everything stays on your machine: this is a local process reading a local file.
-Nothing is sent anywhere except to the MCP client that spawned it.
+Nothing is sent anywhere except to the MCP client that spawned it, and, for
+`semantic_search` only, the search text to the Ollama server you configured
+in Parley.
 
 ## Get it
 
@@ -116,13 +120,18 @@ recording in progress, and writes wait their turn rather than failing.
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `list_meetings` | `limit?` (default 50, max 500), `since?`/`until?` (`YYYY-MM-DD`, UTC), `query?` (title substring) | id, title, created_at, has_summary, open_action_item_count |
-| `get_meeting` | `meeting_id` | metadata, summary markdown, summary status, transcript/action-item/note counts |
+| `list_meetings` | `limit?` (default 50, max 500), `since?`/`until?` (`YYYY-MM-DD`, UTC), `query?` (title substring), `person?` (speaker id, or a name/email matched against speakers and calendar attendees), `series_id?` (a recurring calendar meeting) | id, title, created_at, has_summary, open_action_item_count |
+| `get_meeting` | `meeting_id` | metadata, summary markdown and status, the linked calendar event (time, location, organizer, attendees, `series_id`), chapters, bookmarks, notes, counts, whether a follow-up draft exists |
 | `get_transcript` | `meeting_id`, `include_speakers?` (default true) | rendered text plus, when attributed, per-segment speaker + timestamps |
 | `get_meeting_stats` | `meeting_id` | talk-time analytics computed from the transcript (no AI): per-speaker talk share, turns, words per minute, longest monologue, questions, interruptions; duration, silence ratio, you-vs-others split |
 | `search_transcripts` | `query`, `limit?` (default 50, max 500) | matching segments across all meetings with meeting title, snippet, speaker |
+| `semantic_search` | `query`, `limit?` (default 10, max 50), `person?`, `since?`/`until?` | passages that match the meaning of the query, with meeting, similarity, start time and excerpt, plus how many meetings are indexed |
 | `get_action_items` | `meeting_id?`, `status?` (`open`/`done`) | action items, open first |
 | `get_recent_summaries` | `limit?` (default 5, max 500) | recent meetings' summary markdown |
+| `list_speakers` | — | the people Parley recognises by voice: id, name, email, whether it's you, meeting count |
+| `list_calendar_events` | `from?`/`to?` (`YYYY-MM-DD`; default the next 7 days), `query?`, `limit?` | events with attendees, recorded meeting ids, `series_id`, whether a brief exists |
+| `get_brief` | `event_id` | the pre-meeting brief Parley prepared, with the past meetings it cites |
+| `get_followup_draft` | `meeting_id` | the follow-up email drafted in Parley (subject, body, tone) |
 
 ### Write
 
@@ -134,6 +143,8 @@ entries apart from your own in the app.
 | `add_meeting_note` | `meeting_id`, `body` | inserts a note |
 | `create_action_item` | `meeting_id`, `text`, `assignee?`, `due_hint?` | inserts an open action item |
 | `set_action_item_status` | `action_item_id`, `status` (`open`/`done`) | updates status; maintains the completion timestamp |
+| `update_action_item` | `action_item_id`, `text?`, `assignee?`, `due_hint?` | edits the item; omitted fields are kept, an empty string clears owner or due hint |
+| `delete_action_item` | `action_item_id` | deletes the item |
 | `update_summary` | `meeting_id`, `markdown` | replaces the summary text |
 
 `update_summary` **overwrites** the whole summary — it doesn't append. It
@@ -152,13 +163,21 @@ best-first (bm25), each with a snippet that has the matched words in
 are searched as plain text. It is keyword search, not semantic: synonyms don't
 match.
 
+`semantic_search` matches meaning instead, using the transcript embeddings
+Parley builds for Ask Parley. It follows the app's rules: it needs Ollama as
+Parley's summary provider (and the `nomic-embed-text` model, or whatever
+`ask_embedding_model` names), embeds the query with that Ollama server, and
+only covers meetings the app has indexed, which it does in the background
+while Ask Parley is open.
+
 Against a database from an older Parley build that hasn't created the FTS5
 index yet, it falls back to an unranked case-insensitive substring match.
 
 ## Resources
 
 Each meeting is also readable as a resource at `parley://meeting/{id}`,
-returning summary + full attributed transcript as one markdown document —
+returning calendar details, summary, chapters, bookmarks, notes and the full
+attributed transcript as one markdown document —
 convenient for "ingest this meeting". `resources/list` returns the 100 most
 recent meetings; use `list_meetings` to reach older ones.
 

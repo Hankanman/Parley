@@ -9,6 +9,8 @@
 
 mod cli;
 mod db;
+mod extras;
+mod semantic;
 mod server;
 /// Talk-time / speaking statistics, compiled from parley-core's own source
 /// so the app's Insights tab and `get_meeting_stats` share one definition

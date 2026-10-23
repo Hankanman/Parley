@@ -33,7 +33,7 @@ Parley only makes network connections for the following, and only when you trigg
 
 If you use the built-in summary model or a local Ollama server, transcript text never leaves your machine.
 
-The optional `parley-mcp` server gives an AI client you connect (such as Claude Desktop or Claude Code) access to your meetings. Parley itself sends nothing, but whatever that client reads is then handled under its own privacy policy.
+The optional `parley-mcp` server gives an AI client you connect (such as Claude Desktop or Claude Code) access to your meetings. Parley itself sends nothing, but whatever that client reads is then handled under its own privacy policy. Its `semantic_search` tool sends the search text to the Ollama server you configured in Parley, as Ask Parley does.
 
 ## Your control
 
