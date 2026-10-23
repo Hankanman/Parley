@@ -105,6 +105,16 @@ jobs:
           echo "PKG_CONFIG_PATH=$sdk/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
           "$sdk/bin/glslc" --version | head -1
 
+      # rust-cache restores sherpa-onnx-sys's finished build script but not
+      # the prebuilt libraries it downloaded into target/sherpa-onnx-prebuilt,
+      # so the script wouldn't rerun and linking fails (-lsherpa-onnx-c-api).
+      # Cleaning just that package makes it fetch them again.
+      - name: Refresh sherpa-onnx prebuilt libraries
+        run: |
+          if [ ! -d target/sherpa-onnx-prebuilt ]; then
+            cargo clean --release -p sherpa-onnx-sys
+          fi
+
       - name: Build AppImage (${{ inputs.mode }})
         run: |
           ./build.sh "${{ inputs.mode }}"
