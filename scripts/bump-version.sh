@@ -22,4 +22,6 @@ esac
 
 sed -i "/^\[workspace\.package\]/,/^\[/ s/^version = \"$CURRENT\"/version = \"$NEW\"/" "$ROOT/Cargo.toml"
 [ "$("$ROOT/scripts/version.sh")" = "$NEW" ] || { echo "failed to update Cargo.toml" >&2; exit 1; }
+# Record the workspace crates' new version in Cargo.lock (no dependency changes).
+(cd "$ROOT" && cargo metadata --format-version 1 --offline >/dev/null 2>&1 || cargo metadata --format-version 1 >/dev/null)
 echo "$NEW"
