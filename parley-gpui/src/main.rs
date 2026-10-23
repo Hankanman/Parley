@@ -36,7 +36,29 @@ use runtime::Io;
 /// second request (mashing close, or close + tray Quit) doesn't start another.
 static QUIT_STARTED: AtomicBool = AtomicBool::new(false);
 
+/// `parley --llama-helper`: become the bundled llama.cpp helper instead of
+/// the app. `parley-mcp`, installed outside the AppImage, starts the
+/// AppImage this way to embed a `semantic_search` query, since only the
+/// AppImage's mount can see the helper and the libraries it was built with.
+fn exec_llama_helper() -> ! {
+    use std::os::unix::process::CommandExt;
+    let helper = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("llama-helper")));
+    let Some(helper) = helper.filter(|p| p.is_file()) else {
+        eprintln!("parley: no llama-helper next to this executable");
+        std::process::exit(1);
+    };
+    let err = std::process::Command::new(&helper).args(std::env::args_os().skip(2)).exec();
+    eprintln!("parley: couldn't run {}: {err}", helper.display());
+    std::process::exit(1);
+}
+
 fn main() {
+    if std::env::args_os().nth(1).is_some_and(|a| a == "--llama-helper") {
+        exec_llama_helper();
+    }
+
     // stderr + ~/.local/state/parley/logs/parley.log, panic and
     // fatal-signal breadcrumbs (issue #91).
     crash_log::init(
@@ -51,6 +73,7 @@ fn main() {
     // Paths first, then the database (blocking, so everything after it sees
     // the pool), then background init with the pool.
     bootstrap::init_paths();
+    parley_core::mcp_config::record_appimage_path();
     desktop_icon::spawn();
     let db = match io.block_on(bootstrap::prepare_database()) {
         Ok(StartupOutcome::Initialized(db)) => Some(db),

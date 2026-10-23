@@ -6,17 +6,14 @@ It reads Parley's database directly on your computer, works whether or not Parle
 
 ## Getting parley-mcp
 
-`parley-mcp` isn't included in the AppImage yet, so for now you build it from source (you need [Rust](https://rustup.rs)):
+`parley-mcp` comes with Parley (version 0.5.1 and later):
 
-```bash
-git clone https://github.com/Hankanman/Parley.git
-cd Parley
-cargo build --release -p parley-mcp
-```
+- If you used the [install command](install.md#install-with-one-command), it's already installed at `~/.local/bin/parley-mcp`.
+- If you downloaded the AppImage yourself, open **Settings → Integrations** and click **Install parley-mcp**, which copies it to `~/.local/bin/parley-mcp`. After updating Parley, the same button reads **Update parley-mcp**.
 
-The program is then at `target/release/parley-mcp`. Copy it somewhere permanent, such as `~/.local/bin/`.
+Assistants can't use the copy inside the AppImage directly, because its location changes every time Parley starts.
 
-**Settings → Integrations** shows whether Parley can find it, and gives you ready-made setup commands with the right paths filled in, each with a copy button.
+**Settings → Integrations** also gives you ready-made setup commands with the right paths filled in, each with a copy button.
 
 ## Connecting an assistant
 
@@ -44,6 +41,18 @@ Run Parley at least once before connecting, so that its database exists.
 
 ## What the assistant can do
 
-It can list and search your meetings, read transcripts, summaries and talk-time statistics, and list action items. It can also add notes and action items, mark action items done and replace a meeting's summary. Anything it creates is marked as coming from the agent.
+It can read:
+
+- your meetings, with their summaries, transcripts, chapters, bookmarks, notes and talk-time statistics,
+- the calendar event each meeting belongs to, with its attendees, and your upcoming events,
+- the people Parley recognises, so it can find every meeting with someone,
+- the briefs and follow-up email drafts you've made in Parley,
+- your action items.
+
+It can search transcripts by keyword, or by meaning, using the same on-device semantic search as [Ask Parley](ask.md#keyword-and-semantic-search). Searching by meaning covers the meetings Parley has indexed, which it does while Ask Parley is open, and needs Parley to have been started once from its AppImage so `parley-mcp` can borrow its built-in model runner.
+
+It can also add notes, add, edit, complete and delete action items, and replace a meeting's summary. Anything it creates is marked as coming from the agent.
+
+Try asking it to *"prepare me for my next meeting"*, *"what has Priya committed to this month?"* or *"draft a recap of every Sprint Planning this quarter"*.
 
 The full list of tools is in the [parley-mcp README](https://github.com/Hankanman/Parley/blob/main/parley-mcp/README.md).

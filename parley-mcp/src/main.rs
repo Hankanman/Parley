@@ -9,6 +9,8 @@
 
 mod cli;
 mod db;
+mod extras;
+mod semantic;
 mod server;
 /// Talk-time / speaking statistics, compiled from parley-core's own source
 /// so the app's Insights tab and `get_meeting_stats` share one definition
@@ -77,7 +79,11 @@ async fn run() -> Result<(), String> {
     // surfacing mid-conversation is much harder to act on.
     verify_schema(&pool).await?;
 
-    let service = ParleyMcp::new(pool)
+    let data_dir = db_path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
+    let service = ParleyMcp::new(pool, data_dir)
         .serve(stdio())
         .await
         .map_err(|e| format!("failed to start MCP server: {e}"))?;

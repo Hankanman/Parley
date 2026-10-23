@@ -10,6 +10,8 @@ The first time you open Parley, a short setup walks you through three steps.
 
    You can click **Continue** as soon as the transcription engine has finished. The summary model keeps downloading in the background, and summaries become available when it's done.
 
+   Shortly afterwards Parley also fetches two small models in the background: one that recognises speakers (about 28 MB) and one for [semantic search](ask.md#keyword-and-semantic-search) (about 146 MB).
+
 That's it: Parley opens on the **Record** page, ready for your first meeting. Nothing you record leaves your computer unless you later choose a cloud AI provider.
 
 > [!TIP]

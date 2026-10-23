@@ -4,7 +4,7 @@
 # standalone, but it validates its inputs so it fails loudly if it is.
 #
 # Args:
-#   $1  DIST_DIR   staged dir: parley-gpui binary + .so files + llama-helper
+#   $1  DIST_DIR   staged dir: parley-gpui binary + .so files + llama-helper + parley-mcp
 #   $2  VERSION    version string for the output filename
 #   $3  OUT_DIR    directory the final .AppImage is written into
 #
@@ -46,7 +46,7 @@ rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/512x512/apps"
 
 cp "$DIST_DIR"/* "$APPDIR/usr/bin/"
-chmod +x "$APPDIR/usr/bin/parley" "$APPDIR/usr/bin/llama-helper" 2>/dev/null || true
+chmod +x "$APPDIR/usr/bin/parley" "$APPDIR/usr/bin/llama-helper" "$APPDIR/usr/bin/parley-mcp" 2>/dev/null || true
 
 DESKTOP_FILE="$APPDIR/usr/share/applications/io.github.hankanman.Parley.desktop"
 cp "$PACKAGING_DIR/parley.desktop" "$DESKTOP_FILE"

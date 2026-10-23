@@ -63,7 +63,7 @@ Runs entirely on your computer with llama.cpp. There are two models:
 
 Install [Ollama](https://ollama.com), then choose **Ollama** as the provider and pick one of your installed models. You can also type a model name (such as `gemma3:4b`) and click **Pull model** to download it from inside Parley.
 
-Ollama also unlocks **semantic search** in [Ask Parley](ask.md), which finds relevant passages even when they use different words from your question. For that, also pull the embedding model:
+With Ollama as the provider, Parley also uses it for [semantic search](ask.md#keyword-and-semantic-search) instead of its built-in model. Pull the embedding model once:
 
 ```bash
 ollama pull nomic-embed-text
@@ -80,4 +80,4 @@ Paste your key under **API keys**, then choose a model from the list Parley fetc
 
 - **Templates → Default summary template**: the template pre-selected when you generate a summary. See [Meeting notes](meetings.md).
 - **Auto-summarize after recording**: write the summary and chapters automatically when a recording stops. Off by default.
-- **Show transcription confidence**: show a coloured dot by each transcript line for how sure Whisper was of it.
+- **Show transcription confidence**: show a coloured dot by each transcript line for how sure Whisper was of it. On by default.

@@ -244,7 +244,7 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
             SettingItem::new(
                 "Show transcription confidence",
                 SettingField::switch(
-                    |cx: &App| SettingsCache::global(cx).ui_bool("showConfidenceIndicator", false),
+                    |cx: &App| SettingsCache::global(cx).ui_bool("showConfidenceIndicator", true),
                     {
                         let view = view.clone();
                         move |val: bool, cx: &mut App| {

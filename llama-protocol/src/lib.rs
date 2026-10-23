@@ -4,8 +4,8 @@
 //! Newline-delimited JSON over the child process's stdin/stdout: the app
 //! writes one [`Request`] per line, the helper answers with zero or more
 //! [`Response::Chunk`] lines followed by exactly one terminal line
-//! ([`Response::Response`], [`Response::Pong`], [`Response::Goodbye`], or
-//! [`Response::Error`]).
+//! ([`Response::Response`], [`Response::Embeddings`], [`Response::Pong`],
+//! [`Response::Goodbye`], or [`Response::Error`]).
 //!
 //! Both sides depend on this crate, so the two ends of the pipe can never
 //! drift apart silently — serde ignores unknown fields on deserialize, which
@@ -36,6 +36,15 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         json_schema: Option<String>,
     },
+    /// Sentence embeddings of `texts` with the embedding model at
+    /// `model_path` (e.g. nomic-embed-text), answered with
+    /// [`Response::Embeddings`]. The caller adds any task prefix the model
+    /// expects; vectors come back pooled as the model specifies, not
+    /// normalised.
+    Embed {
+        model_path: String,
+        texts: Vec<String>,
+    },
     Ping,
     Shutdown,
 }
@@ -53,6 +62,9 @@ pub enum Response {
     /// Terminal line of a `Generate` exchange. `text` is the complete final
     /// output (authoritative — it supersedes any streamed chunks).
     Response { text: String, error: Option<String> },
+    /// Terminal line of an `Embed` exchange: one vector per input text, in
+    /// order.
+    Embeddings { vectors: Vec<Vec<f32>> },
     Pong,
     Goodbye,
     Error { message: String },
@@ -144,6 +156,25 @@ mod tests {
         assert!(!json.contains('\n'));
         match serde_json::from_str::<Response>(&json).unwrap() {
             Response::Chunk { text } => assert_eq!(text, "line one\nline two"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn embed_round_trips() {
+        let request = Request::Embed {
+            model_path: "/m/nomic.gguf".to_string(),
+            texts: vec!["a".to_string(), "b".to_string()],
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"type\":\"embed\""));
+        match serde_json::from_str::<Request>(&json).unwrap() {
+            Request::Embed { texts, .. } => assert_eq!(texts, ["a", "b"]),
+            _ => panic!("wrong variant"),
+        }
+        let json = r#"{"type":"embeddings","vectors":[[0.5,-1.0],[0.0,2.0]]}"#;
+        match serde_json::from_str::<Response>(json).unwrap() {
+            Response::Embeddings { vectors } => assert_eq!(vectors[1], [0.0, 2.0]),
             _ => panic!("wrong variant"),
         }
     }

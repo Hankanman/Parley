@@ -15,6 +15,12 @@ Open **Settings** from the sidebar or the tray menu. Changes are saved as soon a
 
 ## Notifications
 
+Under **General**:
+
+- **Recording notifications** turns the four recording notifications below on or off together.
+- **Notification sound** asks your desktop to play its message sound with each notification.
+- **Manual Do Not Disturb** silences all of Parley's notifications. Your desktop's own Do Not Disturb mode also holds them back.
+
 Under **Events**, choose which notifications Parley shows:
 
 | Event | Default |
@@ -26,6 +32,6 @@ Under **Events**, choose which notifications Parley shows:
 | Meeting reminders | On |
 | System errors | On |
 
-**Manual Do Not Disturb** silences all of them. **Send test notification** checks that notifications reach your desktop.
+**Send test notification** checks that notifications reach your desktop.
 
 Call-detection prompts are controlled from **Settings → Recording → Meeting detection** instead.

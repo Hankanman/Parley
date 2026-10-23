@@ -58,11 +58,10 @@ pub fn previous_step(step: Step) -> Step {
 /// `OnboardingContext.tsx`.
 pub const ONBOARDING_WHISPER_MODEL: &str = "large-v3-turbo-q5_0";
 
-/// Approximate on-disk size shown next to the summary-model download card,
-/// matching `DownloadProgressStep.tsx`'s `recommendedModel === "gemma3:4b" ?
-/// "~2.5 GB" : "~806 MB"`.
+/// Approximate download size shown next to the summary-model download card
+/// (the GGUFs in `summary_engine::models`: 1019 MB and 2374 MB).
 pub fn summary_model_size_label(model: &str) -> &'static str {
-    if model == "gemma3:4b" { "~2.5 GB" } else { "~806 MB" }
+    if model == "gemma3:4b" { "~2.3 GB" } else { "~1.0 GB" }
 }
 
 /// Whether the "Continue" button on the download step should be enabled:
@@ -111,9 +110,9 @@ mod tests {
 
     #[test]
     fn summary_model_size_label_matches_react_copy() {
-        assert_eq!(summary_model_size_label("gemma3:4b"), "~2.5 GB");
-        assert_eq!(summary_model_size_label("gemma3:1b"), "~806 MB");
-        assert_eq!(summary_model_size_label("unknown-model"), "~806 MB");
+        assert_eq!(summary_model_size_label("gemma3:4b"), "~2.3 GB");
+        assert_eq!(summary_model_size_label("gemma3:1b"), "~1.0 GB");
+        assert_eq!(summary_model_size_label("unknown-model"), "~1.0 GB");
     }
 
     #[test]

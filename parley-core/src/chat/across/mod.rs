@@ -23,6 +23,7 @@
 //! can cascade-delete with its meeting, a global log can't cleanly. The UI
 //! passes recent turns back in for follow-ups.
 
+pub mod builtin_embedder;
 pub mod embeddings;
 pub mod prompt;
 pub mod retrieval;
@@ -107,6 +108,12 @@ pub async fn refresh_semantic_index(pool: &SqlitePool) {
     if let Ok(embedder) = embeddings::resolve_embedder(pool).await {
         embeddings::spawn_backfill(pool.clone(), embedder);
     }
+}
+
+/// Whether the semantic index is being built, or its built-in model is
+/// still downloading — the UI keeps its status fresh while this is true.
+pub fn semantic_index_busy() -> bool {
+    embeddings::backfill_running() || builtin_embedder::model_is_downloading()
 }
 
 /// Semantic-search status for the UI: availability plus

@@ -160,7 +160,8 @@ impl AskView {
 
     /// Called by the shell whenever the page is shown: refresh the filter
     /// options and the semantic-index status, and let the background
-    /// indexer pick up new meetings.
+    /// indexer pick up new meetings. While it indexes (or the built-in
+    /// model downloads) the status is refreshed every few seconds.
     pub fn on_show(&mut self, cx: &mut Context<Self>) {
         let Some(pool) = AppServices::global(cx).pool() else {
             return;
@@ -177,12 +178,40 @@ impl AskView {
                 })
                 .await;
             let Ok((people, series, status)) = result else { return };
-            let _ = this.update_in(cx, |this, window, cx| {
+            let shown = this.update_in(cx, |this, window, cx| {
                 this.status = Some(status);
                 this.set_people(people, window, cx);
                 this.set_series(series, window, cx);
                 cx.notify();
             });
+            if shown.is_err() {
+                return;
+            }
+            // Bounded: an hour of polling at most, even if something sticks.
+            for _ in 0..1200 {
+                if !across::semantic_index_busy() {
+                    break;
+                }
+                cx.background_executor().timer(std::time::Duration::from_secs(3)).await;
+                let Some(pool) = cx.update(|cx| AppServices::global(cx).pool()) else {
+                    return;
+                };
+                let status = io
+                    .spawn(async move {
+                        across::refresh_semantic_index(&pool).await;
+                        let (availability, progress) = across::semantic_status(&pool).await;
+                        logic::semantic_status_text(&availability, progress)
+                    })
+                    .await;
+                let Ok(status) = status else { return };
+                let updated = this.update(cx, |this, cx| {
+                    this.status = Some(status);
+                    cx.notify();
+                });
+                if updated.is_err() {
+                    return;
+                }
+            }
         })
         .detach();
     }

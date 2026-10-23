@@ -22,7 +22,7 @@ The installer:
 1. Checks that your system meets the requirements above.
 2. Downloads the latest release from GitHub. It picks the **Vulkan (GPU)** build if it finds an NVIDIA, AMD or Intel GPU with a Vulkan driver, and the **CPU** build otherwise.
 3. Verifies the download's SHA-256 checksum.
-4. Installs it as `~/.local/bin/parley` and adds Parley, with its icon, to your application menu.
+4. Installs it as `~/.local/bin/parley`, with the [MCP server](mcp.md) beside it as `~/.local/bin/parley-mcp`, and adds Parley, with its icon, to your application menu.
 
 No root access is needed. You can [read the script](https://meetparley.app/install.sh) before running it.
 
@@ -69,7 +69,7 @@ Run the install command again; it replaces the old version and keeps your meetin
 curl -fsSL https://meetparley.app/install.sh | sh -s -- --uninstall
 ```
 
-This removes the program, its menu entry and its icon. Your meetings, recordings, models and settings are left in place; see [Your data](data.md) to remove those too.
+This removes Parley, `parley-mcp`, the menu entry and the icon. Your meetings, recordings, models and settings are left in place; see [Your data](data.md) to remove those too.
 
 ## Building from source
 

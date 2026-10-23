@@ -1,6 +1,6 @@
 # Parley Privacy Policy
 
-*Last updated: 22 October 2026*
+*Last updated: 23 October 2026*
 
 Parley is a desktop app that runs entirely on your own machine. There is no Parley server, no account, and no company behind it collecting anything. This document explains exactly what leaves your computer, and when.
 
@@ -25,11 +25,15 @@ Parley only makes network connections for the following, and only when you trigg
 
 | What | Where it connects | What is sent |
 |---|---|---|
-| Downloading a transcription, summary, diarization or VAD model | Hugging Face (`huggingface.co`) or GitHub release downloads (`github.com`) | An ordinary file download request. No meeting data. |
-| Generating a summary, answering an "Ask" question, extracting action items or drafting a follow-up **with a remote LLM provider you configured** | The provider you chose: a remote Ollama server, Anthropic, Groq, OpenRouter, OpenAI, or a custom OpenAI-compatible endpoint | The transcript text and prompt needed for that request, plus your API key. That provider's own privacy policy then applies. |
+| Downloading a transcription, summary, semantic search, diarization or VAD model | Hugging Face (`huggingface.co`) or GitHub release downloads (`github.com`) | An ordinary file download request. No meeting data. |
+| Generating a summary or chapters, answering an "Ask" question, extracting action items (including live action items while recording), drafting a follow-up or preparing a meeting brief **with a remote LLM provider you configured** | The provider you chose: a remote Ollama server, Anthropic, Groq, OpenRouter, OpenAI, or a custom OpenAI-compatible endpoint | The transcript text and prompt needed for that request, plus your API key. That provider's own privacy policy then applies. |
+| Listing the models a provider offers, when Settings → Summary shows that provider | The provider you chose (OpenRouter's list needs no key; the others get your API key) | A request for the model list. No meeting data. |
 | Calendar sync | The calendar feed URLs you add | A request for the feed. No meeting data. |
+| "Check for updates" in the tray menu | GitHub's API (`api.github.com`) | A request for the latest release. No meeting data. |
 
 If you use the built-in summary model or a local Ollama server, transcript text never leaves your machine.
+
+The optional `parley-mcp` server gives an AI client you connect (such as Claude Desktop or Claude Code) access to your meetings. Parley itself sends nothing, but whatever that client reads is then handled under its own privacy policy. Its `semantic_search` tool runs on your computer; only if Ollama is your summary provider does it send the search text to that Ollama server, as Ask Parley does.
 
 ## Your control
 

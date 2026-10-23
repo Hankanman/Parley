@@ -400,9 +400,11 @@ pub async fn list_meetings(
     since: Option<&str>,
     until: Option<&str>,
     title_query: Option<&str>,
+    person: Option<&str>,
+    series: Option<(&str, &str)>,
 ) -> Result<Vec<MeetingListItem>, sqlx::Error> {
     let date_expr = date_prefix_filter("m.created_at");
-    let mut sql = String::from(
+    let mut qb: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
         r#"
         SELECT
             m.id,
@@ -419,32 +421,28 @@ pub async fn list_meetings(
             ) AS open_action_item_count
         FROM meetings m
         WHERE 1 = 1
-        "#
+        "#,
     );
-    if since.is_some() {
-        sql.push_str(&format!(" AND {date_expr} >= ?"));
-    }
-    if until.is_some() {
-        sql.push_str(&format!(" AND {date_expr} <= ?"));
-    }
-    if title_query.is_some() {
-        sql.push_str(" AND m.title LIKE ? ESCAPE '\\'");
-    }
-    sql.push_str(" ORDER BY m.created_at DESC LIMIT ?");
-
-    let mut q = sqlx::query(&sql);
     if let Some(v) = since {
-        q = q.bind(v);
+        qb.push(format!(" AND {date_expr} >= ")).push_bind(v.to_string());
     }
     if let Some(v) = until {
-        q = q.bind(v);
+        qb.push(format!(" AND {date_expr} <= ")).push_bind(v.to_string());
     }
     if let Some(v) = title_query {
-        q = q.bind(format!("%{}%", escape_like(v)));
+        qb.push(" AND m.title LIKE ")
+            .push_bind(format!("%{}%", escape_like(v)))
+            .push(" ESCAPE '\\'");
     }
-    q = q.bind(limit);
+    if let Some(p) = person {
+        crate::extras::push_person_filter(&mut qb, p);
+    }
+    if let Some((source_id, ics_uid)) = series {
+        crate::extras::push_series_filter(&mut qb, source_id, ics_uid);
+    }
+    qb.push(" ORDER BY m.created_at DESC LIMIT ").push_bind(limit);
 
-    let rows = q.fetch_all(pool).await?;
+    let rows = qb.build().fetch_all(pool).await?;
     rows.into_iter()
         .map(|r| {
             Ok(MeetingListItem {

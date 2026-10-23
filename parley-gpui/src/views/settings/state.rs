@@ -85,8 +85,10 @@ impl Default for NotificationSettings {
             meeting_reminders: true,
             respect_do_not_disturb: true,
             notification_sound: true,
-            system_permission_granted: false,
-            consent_given: false,
+            // Unused leftovers of the Tauri shell's permission prompt; true
+            // so older builds reading this row don't silence notifications.
+            system_permission_granted: true,
+            consent_given: true,
             manual_dnd_mode: false,
             notification_preferences: NotificationPreferences::default(),
         }
@@ -1113,8 +1115,8 @@ mod tests {
         assert!(defaults.meeting_reminders);
         assert!(defaults.respect_do_not_disturb);
         assert!(defaults.notification_sound);
-        assert!(!defaults.system_permission_granted);
-        assert!(!defaults.consent_given);
+        assert!(defaults.system_permission_granted);
+        assert!(defaults.consent_given);
         assert!(!defaults.manual_dnd_mode);
         assert!(!defaults.notification_preferences.show_recording_started);
         assert!(!defaults.notification_preferences.show_recording_stopped);

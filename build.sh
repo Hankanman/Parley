@@ -18,9 +18,8 @@
 # Produces:
 #   target/gpui-dist/               self-contained staged dir (binary + libs)
 #   Parley-<ver>-x86_64.AppImage    repo root (version from scripts/version.sh)
-#   target/release/parley-mcp      MCP server, left for the user to register
-#                                    (not bundled into the AppImage — see
-#                                    parley-mcp/README.md)
+#   target/release/parley-mcp      MCP server, also bundled in the AppImage
+#                                    (see parley-mcp/README.md)
 
 set -euo pipefail
 
@@ -171,11 +170,12 @@ if [[ ! -x "$GPUI_BIN" ]]; then
 fi
 
 # ----- parley-mcp -----
-# Not bundled into the app: it's a standalone MCP server that an external
-# client (Claude Desktop / Claude Code) spawns by absolute path, and it talks
-# to the SQLite database directly rather than to the app. So it's built and
-# left in target/release for the user to register. It has no GPU backend,
-# hence no feature flags.
+# A standalone MCP server that an external client (Claude Desktop / Claude
+# Code) spawns by absolute path; it reads the SQLite database directly
+# rather than talking to the app. Packaged next to `parley` in the AppImage,
+# from where install.sh or Settings → Integrations copies it to ~/.local/bin
+# (a path into the AppImage mount changes every launch). It has no GPU
+# backend, hence no feature flags.
 echo "==> Building parley-mcp (MCP server)"
 cargo build --release -p parley-mcp
 MCP_BIN="$ROOT/target/release/parley-mcp"
@@ -203,6 +203,7 @@ cp -P "${SO_FILES[@]}" "$DIST_DIR/"
 # starting with "llama-helper" next to the executable, so the plain name
 # works both here and once packaged into the AppImage.
 cp "$ROOT/target/release/llama-helper" "$DIST_DIR/llama-helper"
+cp "$MCP_BIN" "$DIST_DIR/parley-mcp"
 
 echo "==> Staged: $DIST_DIR"
 du -sh "$DIST_DIR"/* | sed 's/^/    /'
@@ -216,5 +217,5 @@ echo
 echo "==> Build succeeded"
 echo "    Dist dir: $DIST_DIR"
 echo "    AppImage: $APPIMAGE ($(du -h "$APPIMAGE" | cut -f1))"
-echo "    MCP server: $MCP_BIN ($(du -h "$MCP_BIN" | cut -f1))"
+echo "    MCP server: $MCP_BIN ($(du -h "$MCP_BIN" | cut -f1)), also bundled in the AppImage"
 echo "                register it with your MCP client — see parley-mcp/README.md"

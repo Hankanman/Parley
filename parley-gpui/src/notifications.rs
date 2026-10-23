@@ -10,6 +10,12 @@
 //! yet (notification settings never saved), this defaults to on, per the
 //! phase 1 tray spec.
 //!
+//! The row's `consent_given` / `system_permission_granted` fields are
+//! leftovers from the retired Tauri shell's permission prompt. Linux has no
+//! such prompt and nothing sets them, so they are ignored here: gating on
+//! them silenced every notification once the settings page saved its
+//! (false) defaults.
+//!
 //! Also owns the meeting-reminder background loop and the GitHub-releases
 //! update check (see [`start_meeting_reminder_loop`] and
 //! [`check_for_updates`]).
@@ -46,10 +52,12 @@ pub enum Kind {
 
 #[derive(Debug, Deserialize)]
 struct SettingsMini {
+    /// Master switch for the recording started/stopped/paused/resumed
+    /// notifications (Settings → Notifications → "Recording notifications").
     #[serde(default = "default_true")]
-    consent_given: bool,
+    recording_notifications: bool,
     #[serde(default = "default_true")]
-    system_permission_granted: bool,
+    notification_sound: bool,
     #[serde(default)]
     manual_dnd_mode: bool,
     #[serde(default)]
@@ -103,8 +111,8 @@ fn default_reminder_minutes() -> Vec<u64> {
 impl Default for SettingsMini {
     fn default() -> Self {
         Self {
-            consent_given: true,
-            system_permission_granted: true,
+            recording_notifications: true,
+            notification_sound: true,
             manual_dnd_mode: false,
             notification_preferences: PreferencesMini::default(),
         }
@@ -115,23 +123,25 @@ impl Default for SettingsMini {
 // Pure gating logic (unit-tested)
 // ============================================================================
 
-/// Whether `kind` should be shown given `settings` — consent, system
-/// permission, manual DND, and the per-event-type toggle (the system DND
-/// check needs a live D-Bus query and stays in [`maybe_notify`]).
-/// `Kind::Test` always shows.
+/// Whether `kind` should be shown given `settings` — manual DND, the
+/// recording-notifications master switch, and the per-event-type toggle.
+/// The desktop's own Do Not Disturb is left to the notification server,
+/// which already holds back popups while it is on. `Kind::Test` always
+/// shows.
 fn should_notify(settings: &SettingsMini, kind: &Kind) -> bool {
     if matches!(kind, Kind::Test) {
         return true;
     }
-    if !settings.consent_given || !settings.system_permission_granted || settings.manual_dnd_mode {
+    if settings.manual_dnd_mode {
         return false;
     }
     let p = &settings.notification_preferences;
+    let recording = settings.recording_notifications;
     match kind {
-        Kind::Started => p.show_recording_started,
-        Kind::Stopped => p.show_recording_stopped,
-        Kind::Paused => p.show_recording_paused,
-        Kind::Resumed => p.show_recording_resumed,
+        Kind::Started => recording && p.show_recording_started,
+        Kind::Stopped => recording && p.show_recording_stopped,
+        Kind::Paused => recording && p.show_recording_paused,
+        Kind::Resumed => recording && p.show_recording_resumed,
         Kind::TranscriptionComplete => p.show_transcription_complete,
         Kind::SystemError(_) => p.show_system_errors,
         Kind::MeetingReminder { .. } => p.show_meeting_reminders,
@@ -197,18 +207,20 @@ const CALL_PROMPT_TIMEOUT_MS: u32 = 60_000;
 /// "Teams call detected — Record?" with a **Record** action button and a
 /// clickable body, when the notification server advertises the `actions`
 /// capability; otherwise a plain notification (the tray hint is then the
-/// way to act on it). Gated by consent / permission / manual DND only —
-/// the per-feature opt-in is the Recording page's auto-detect setting.
+/// way to act on it). Gated by manual DND only — the per-feature opt-in is
+/// the Recording page's auto-detect setting.
 /// Resolves once the user acts on it (or it closes).
 pub async fn prompt_call_detected(
     pool: Option<sqlx::SqlitePool>,
     app_label: String,
 ) -> CallPromptResponse {
     let settings = load_settings(pool).await;
-    if !settings.consent_given || !settings.system_permission_granted || settings.manual_dnd_mode {
+    if settings.manual_dnd_mode {
         return CallPromptResponse::Dismissed;
     }
-    let result = tokio::task::spawn_blocking(move || show_call_prompt_blocking(&app_label)).await;
+    let sound = settings.notification_sound;
+    let result =
+        tokio::task::spawn_blocking(move || show_call_prompt_blocking(&app_label, sound)).await;
     match result {
         Ok(response) => response,
         Err(e) => {
@@ -218,7 +230,7 @@ pub async fn prompt_call_detected(
     }
 }
 
-fn show_call_prompt_blocking(app_label: &str) -> CallPromptResponse {
+fn show_call_prompt_blocking(app_label: &str, sound: bool) -> CallPromptResponse {
     let supports_actions = notify_rust::get_capabilities()
         .map(|caps| caps.iter().any(|c| c == "actions"))
         .unwrap_or(false);
@@ -228,6 +240,7 @@ fn show_call_prompt_blocking(app_label: &str) -> CallPromptResponse {
         .appname("Parley")
         .summary(&format!("{app_label} detected — Record?"))
         .timeout(notify_rust::Timeout::Milliseconds(CALL_PROMPT_TIMEOUT_MS));
+    apply_sound(&mut notification, sound);
     if supports_actions {
         notification
             .body("Record this call with Parley.")
@@ -272,7 +285,7 @@ pub fn maybe_notify(cx: &mut App, kind: Kind) {
             return;
         }
         let (title, body) = notification_text(&kind);
-        show(title, body).await;
+        show(title, body, settings.notification_sound).await;
     });
 }
 
@@ -304,11 +317,25 @@ async fn load_settings(pool: Option<sqlx::SqlitePool>) -> SettingsMini {
     }
 }
 
+/// Ask the notification server for its standard "new message" sound, or for
+/// silence ("Notification sound" in Settings → Notifications). Servers
+/// without sound support ignore both hints.
+fn apply_sound(notification: &mut notify_rust::Notification, sound: bool) {
+    if sound {
+        notification.sound_name("message-new-instant");
+    } else {
+        notification.hint(notify_rust::Hint::SuppressSound(true));
+    }
+}
+
 /// Show a system notification via D-Bus, off the calling task (notify-rust
 /// makes a blocking D-Bus call).
-async fn show(title: &'static str, body: String) {
+async fn show(title: &'static str, body: String, sound: bool) {
     let result = tokio::task::spawn_blocking(move || {
-        notify_rust::Notification::new().summary(title).body(&body).show()
+        let mut notification = notify_rust::Notification::new();
+        notification.appname("Parley").summary(title).body(&body);
+        apply_sound(&mut notification, sound);
+        notification.show()
     })
     .await;
     match result {
@@ -436,6 +463,7 @@ struct DueReminder {
     event_id: String,
     minutes: u64,
     title: Option<String>,
+    sound: bool,
 }
 
 /// What the user did with a meeting reminder.
@@ -462,6 +490,7 @@ fn show_reminder_blocking(reminder: &DueReminder) -> ReminderResponse {
 
     let mut notification = notify_rust::Notification::new();
     notification.appname("Parley").summary(summary);
+    apply_sound(&mut notification, reminder.sound);
     if supports_actions {
         notification
             .body(&format!("{body}. Open the brief to catch up on past meetings."))
@@ -501,7 +530,7 @@ fn reminder_response(action: &str) -> ReminderResponse {
 /// event ids are added to `already_notified`.
 async fn reminder_tick(pool: sqlx::SqlitePool, already_notified: &mut HashSet<String>) -> Vec<DueReminder> {
     let settings = load_settings(Some(pool.clone())).await;
-    if !settings.notification_preferences.show_meeting_reminders {
+    if settings.manual_dnd_mode || !settings.notification_preferences.show_meeting_reminders {
         return Vec::new();
     }
     let reminder_minutes = &settings.notification_preferences.meeting_reminder_minutes;
@@ -533,7 +562,7 @@ async fn reminder_tick(pool: sqlx::SqlitePool, already_notified: &mut HashSet<St
     due.into_iter()
         .map(|(event_id, minutes, title)| {
             already_notified.insert(event_id.clone());
-            DueReminder { event_id, minutes, title }
+            DueReminder { event_id, minutes, title, sound: settings.notification_sound }
         })
         .collect()
 }
@@ -567,8 +596,11 @@ fn is_newer(current: &str, latest_tag: &str) -> Result<bool, String> {
 /// X.Y.Z is available", "You're up to date", or a friendly error. No
 /// auto-install.
 pub fn check_for_updates(cx: &mut App) {
-    let io = AppServices::global(cx).io.clone();
+    let services = AppServices::global(cx);
+    let io = services.io.clone();
+    let pool = services.pool();
     io.spawn(async move {
+        let sound = load_settings(pool).await.notification_sound;
         let current = env!("CARGO_PKG_VERSION");
         let client = match reqwest::Client::builder()
             .timeout(Duration::from_secs(8))
@@ -578,7 +610,7 @@ pub fn check_for_updates(cx: &mut App) {
             Ok(c) => c,
             Err(e) => {
                 log::warn!("update check: failed to build http client: {}", e);
-                show("Parley", "Couldn't check for updates right now.".to_string()).await;
+                show("Parley", "Couldn't check for updates right now.".to_string(), sound).await;
                 return;
             }
         };
@@ -587,7 +619,7 @@ pub fn check_for_updates(cx: &mut App) {
             Ok(r) => r,
             Err(e) => {
                 log::warn!("update check: request failed: {}", e);
-                show("Parley", "Couldn't check for updates right now.".to_string()).await;
+                show("Parley", "Couldn't check for updates right now.".to_string(), sound).await;
                 return;
             }
         };
@@ -596,7 +628,7 @@ pub fn check_for_updates(cx: &mut App) {
             Ok(r) => r,
             Err(e) => {
                 log::warn!("update check: bad response: {}", e);
-                show("Parley", "Couldn't check for updates right now.".to_string()).await;
+                show("Parley", "Couldn't check for updates right now.".to_string(), sound).await;
                 return;
             }
         };
@@ -610,15 +642,16 @@ pub fn check_for_updates(cx: &mut App) {
                         release.tag_name.trim_start_matches('v'),
                         release.html_url
                     ),
+                    sound,
                 )
                 .await;
             }
             Ok(false) => {
-                show("Parley", "You're up to date.".to_string()).await;
+                show("Parley", "You're up to date.".to_string(), sound).await;
             }
             Err(e) => {
                 log::warn!("update check: version compare failed: {}", e);
-                show("Parley", "Couldn't check for updates right now.".to_string()).await;
+                show("Parley", "Couldn't check for updates right now.".to_string(), sound).await;
             }
         }
     });
@@ -630,8 +663,8 @@ mod tests {
 
     fn settings_all_on() -> SettingsMini {
         SettingsMini {
-            consent_given: true,
-            system_permission_granted: true,
+            recording_notifications: true,
+            notification_sound: true,
             manual_dnd_mode: false,
             notification_preferences: PreferencesMini {
                 show_recording_started: true,
@@ -647,19 +680,27 @@ mod tests {
     }
 
     #[test]
-    fn no_consent_blocks_everything_except_test() {
-        let mut settings = settings_all_on();
-        settings.consent_given = false;
-        assert!(!should_notify(&settings, &Kind::Started));
-        assert!(should_notify(&settings, &Kind::Test));
+    fn legacy_consent_fields_do_not_silence_notifications() {
+        // Rows saved by the settings page carry `consent_given: false`
+        // and `system_permission_granted: false`; they must not gate.
+        let settings: SettingsMini = serde_json::from_str(
+            r#"{"consent_given":false,"system_permission_granted":false,"manual_dnd_mode":false}"#,
+        )
+        .unwrap();
+        assert!(should_notify(&settings, &Kind::Paused));
+        assert!(should_notify(&settings, &Kind::MeetingReminder { minutes: 5, title: None }));
     }
 
     #[test]
-    fn no_system_permission_blocks_everything_except_test() {
+    fn recording_master_switch_gates_only_recording_events() {
         let mut settings = settings_all_on();
-        settings.system_permission_granted = false;
+        settings.recording_notifications = false;
+        assert!(!should_notify(&settings, &Kind::Started));
         assert!(!should_notify(&settings, &Kind::Stopped));
-        assert!(should_notify(&settings, &Kind::Test));
+        assert!(!should_notify(&settings, &Kind::Paused));
+        assert!(!should_notify(&settings, &Kind::Resumed));
+        assert!(should_notify(&settings, &Kind::TranscriptionComplete));
+        assert!(should_notify(&settings, &Kind::SystemError("boom".into())));
     }
 
     #[test]

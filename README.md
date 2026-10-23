@@ -30,14 +30,16 @@ Parley records your meetings, transcribes them live and writes the summary, the 
 - **Import and re-transcribe.** Turn an existing audio file into a meeting, or run a past meeting again with a different model or language.
 - **Export.** Markdown, PDF, Word, JSON or SRT subtitles.
 - **Crash safe.** Audio is checkpointed while recording; an interrupted meeting is recovered on the next launch.
-- **MCP server.** [`parley-mcp`](parley-mcp/README.md) exposes your meetings, transcripts, summaries and action items to Claude and other MCP clients, reading the local database directly.
+- **MCP server.** [`parley-mcp`](parley-mcp/README.md) exposes your meetings, transcripts, summaries and action items to Claude and other MCP clients, reading the local database directly. It ships in the AppImage and the installer puts it at `~/.local/bin/parley-mcp`; see the [guide](https://meetparley.app/docs/mcp.html).
 
 ### Your choice of AI
 
 Summaries, Ask and action items use a language model of your choosing:
 
 - **Built in**: a local model run by the bundled llama.cpp helper. Nothing to set up.
-- **Ollama**, on this machine or another one you run. Semantic search in Ask currently requires Ollama; without it Ask uses keyword search.
+- **Ollama**, on this machine or another one you run.
+
+Ask's semantic search (finding passages by meaning, not just keywords) runs on-device with a built-in embedding model, or with Ollama if that's your provider.
 - **Claude, Groq, OpenRouter, OpenAI** or any **OpenAI-compatible** endpoint, used only if you add a key.
 
 ## Screenshots
@@ -62,7 +64,7 @@ Parley is Linux-only (x86_64) and ships as an AppImage for any distribution with
 curl -fsSL https://meetparley.app/install.sh | sh
 ```
 
-This picks the Vulkan (GPU) build if you have an NVIDIA, AMD or Intel GPU with a Vulkan driver, or the CPU build otherwise, verifies its checksum, installs it as `~/.local/bin/parley` and adds Parley to your application menu, with no root needed. `curl -fsSL https://meetparley.app/install.sh | sh -s -- --uninstall` removes it again (your meetings and settings stay). The script is [`site/install.sh`](site/install.sh) if you'd like to read it first.
+This picks the Vulkan (GPU) build if you have an NVIDIA, AMD or Intel GPU with a Vulkan driver, or the CPU build otherwise, verifies its checksum, installs it as `~/.local/bin/parley` (plus the `parley-mcp` MCP server) and adds Parley to your application menu, with no root needed. `curl -fsSL https://meetparley.app/install.sh | sh -s -- --uninstall` removes it again (your meetings and settings stay). The script is [`site/install.sh`](site/install.sh) if you'd like to read it first.
 
 Or download the `.AppImage` from the [latest release](https://github.com/Hankanman/Parley/releases/latest) yourself, make it executable (`chmod +x`) and run it. AppImages need FUSE's `fusermount`, which most desktops already have (otherwise install your distribution's `fuse3` package).
 

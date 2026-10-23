@@ -175,6 +175,13 @@ pub fn spawn_background_init(
         });
     }
 
+    // The built-in semantic search model (~146 MB) for Ask Parley, so search
+    // by meaning works without Ollama. Fetched after the required models.
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+        crate::chat::across::builtin_embedder::spawn_model_download();
+    });
+
     // Auto-download missing built-in models. Only the speaker diarization
     // model (plus the silero VAD model it's paired with here) is fetched —
     // Whisper is user-selectable so we leave it to onboarding / settings,
@@ -453,6 +460,7 @@ pub async fn shutdown(db: Option<&DatabaseManager>) {
     if let Err(e) = summary::summary_engine::force_shutdown_sidecar().await {
         log::error!("Failed to force shutdown sidecar: {}", e);
     }
+    crate::chat::across::builtin_embedder::shutdown().await;
 
     // Unload the Whisper model (see #47 — it otherwise stays resident across
     // recordings, and would leak until process death). Best-effort and
