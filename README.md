@@ -10,7 +10,7 @@
 
 Parley records your meetings, transcribes them live and writes the summary, the decisions and the action items, all on your own machine. No account, no telemetry, and no cloud unless you choose to add one.
 
-**[meetparley.app](https://meetparley.app)** · [Download](https://github.com/Hankanman/Parley/releases/latest) · [40-second tour](https://meetparley.app/#video)
+**[meetparley.app](https://meetparley.app)** · [Download](https://github.com/Hankanman/Parley/releases/latest) · [User guide](https://meetparley.app/docs/) · [40-second tour](https://meetparley.app/#video)
 
 <img src="docs/images/hero.png" alt="Parley showing a meeting with its transcript, chapters and AI summary" width="900">
 
