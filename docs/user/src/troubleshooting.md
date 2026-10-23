@@ -32,7 +32,8 @@
 
 ## Ask says "keyword search only"
 
-Semantic search needs Ollama as the summary provider and the `nomic-embed-text` model; see [Ask Parley](ask.md#keyword-and-semantic-search).
+- *"the semantic search model is downloading"*: Parley fetches it (about 146 MB) in the background after starting. Leave Parley running with a network connection; Ask switches over by itself.
+- *"embeddings unavailable"* with Ollama as your provider: check Ollama is running and run `ollama pull nomic-embed-text`. See [Ask Parley](ask.md#keyword-and-semantic-search).
 
 ## No notifications
 

@@ -10,9 +10,9 @@ It reads the app's SQLite database directly, so **it works whether or not
 Parley is running**, and it's safe to use while a meeting is being recorded.
 
 Everything stays on your machine: this is a local process reading a local file.
-Nothing is sent anywhere except to the MCP client that spawned it, and, for
-`semantic_search` only, the search text to the Ollama server you configured
-in Parley.
+Nothing is sent anywhere except to the MCP client that spawned it (and, for
+`semantic_search` when Ollama is Parley's summary provider, the search text
+to that Ollama server).
 
 ## Get it
 
@@ -164,11 +164,19 @@ are searched as plain text. It is keyword search, not semantic: synonyms don't
 match.
 
 `semantic_search` matches meaning instead, using the transcript embeddings
-Parley builds for Ask Parley. It follows the app's rules: it needs Ollama as
-Parley's summary provider (and the `nomic-embed-text` model, or whatever
-`ask_embedding_model` names), embeds the query with that Ollama server, and
-only covers meetings the app has indexed, which it does in the background
-while Ask Parley is open.
+Parley builds for Ask Parley, and covers the meetings the app has indexed
+(it does so in the background while Ask Parley is open). The query is
+embedded with the same model the app used, by the app's rules:
+
+- **Built in** (the default): nomic-embed-text v1.5, which the app
+  downloads to `models/embeddings/` in its data directory, run by the app's
+  bundled `llama-helper`. `parley-mcp` starts the helper itself, found in this
+  order: `$PARLEY_LLAMA_HELPER`; `llama-helper` next to `parley-mcp` (a source
+  build); the `parley` AppImage next to `parley-mcp` (the installer's layout),
+  run as `parley --llama-helper`; the AppImage Parley last ran from (it
+  records the path in its data directory).
+- **Ollama**, when it is Parley's summary provider: that server, with the
+  `ask_embedding_model` setting (default `nomic-embed-text`).
 
 Against a database from an older Parley build that hasn't created the FTS5
 index yet, it falls back to an unranked case-insensitive substring match.

@@ -418,6 +418,90 @@ impl ModelState {
 }
 
 // ============================================================================
+// Embeddings
+// ============================================================================
+
+/// Context window for embedding requests. Parley embeds transcript chunks of
+/// about 800 characters and short queries, far inside this; longer texts are
+/// truncated to it.
+const EMBED_CONTEXT: u32 = 2048;
+/// Most texts packed into one decode (each is its own sequence).
+const EMBED_MAX_SEQS: usize = 32;
+
+impl ModelState {
+    /// One pooled embedding per text. Texts are packed into as few decodes
+    /// as fit in the batch, one sequence each.
+    fn embed(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let model = self.model.as_ref().context("Model not loaded")?;
+        let n_ctx = EMBED_CONTEXT.min(model.n_ctx_train().max(512));
+        let threads: i32 = std::thread::available_parallelism()
+            .map(|n| ((n.get() as i32 / 2) + 2).max(1))
+            .unwrap_or(2);
+        // Embedding models attend bidirectionally, so a whole sequence must
+        // fit in one micro-batch: n_ubatch = n_batch = n_ctx.
+        let ctx_params = LlamaContextParams::default()
+            .with_n_ctx(NonZeroU32::new(n_ctx))
+            .with_n_batch(n_ctx)
+            .with_n_ubatch(n_ctx)
+            .with_n_threads(threads)
+            .with_n_threads_batch(threads)
+            .with_n_seq_max(texts.len().clamp(1, EMBED_MAX_SEQS) as u32)
+            .with_embeddings(true);
+        let mut ctx = model
+            .new_context(&self.backend, ctx_params)
+            .context("unable to create the embedding context")?;
+
+        let mut tokenized = Vec::with_capacity(texts.len());
+        for text in texts {
+            let mut tokens = model
+                .str_to_token(text, AddBos::Always)
+                .context("failed to tokenize text for embedding")?;
+            tokens.truncate(n_ctx as usize);
+            if tokens.is_empty() {
+                anyhow::bail!("nothing to embed in an empty text");
+            }
+            tokenized.push(tokens);
+        }
+
+        let mut vectors = Vec::with_capacity(texts.len());
+        let mut batch = LlamaBatch::new(n_ctx as usize, 1);
+        let mut pending = 0usize;
+        let flush = |batch: &mut LlamaBatch,
+                         ctx: &mut llama_cpp_2::context::LlamaContext,
+                         count: usize,
+                         vectors: &mut Vec<Vec<f32>>|
+         -> Result<()> {
+            ctx.clear_kv_cache();
+            ctx.decode(batch).context("llama_decode() failed while embedding")?;
+            for seq in 0..count {
+                let v = ctx
+                    .embeddings_seq_ith(seq as i32)
+                    .map_err(|e| anyhow::anyhow!("no embedding for sequence {seq}: {e}"))?;
+                vectors.push(v.to_vec());
+            }
+            batch.clear();
+            Ok(())
+        };
+        for tokens in &tokenized {
+            if pending > 0
+                && (pending == EMBED_MAX_SEQS || batch.n_tokens() as usize + tokens.len() > n_ctx as usize)
+            {
+                flush(&mut batch, &mut ctx, pending, &mut vectors)?;
+                pending = 0;
+            }
+            batch
+                .add_sequence(tokens, pending as i32, false)
+                .context("failed to add text to the embedding batch")?;
+            pending += 1;
+        }
+        if pending > 0 {
+            flush(&mut batch, &mut ctx, pending, &mut vectors)?;
+        }
+        Ok(vectors)
+    }
+}
+
+// ============================================================================
 // Main Loop with Keep-Alive Protocol
 // ============================================================================
 
@@ -520,6 +604,17 @@ fn main() -> Result<()> {
                                     error: Some(format!("Generation failed: {}", e)),
                                 })?;
                             }
+                        }
+                    }
+                    Ok(Request::Embed { model_path, texts }) => {
+                        let result = state
+                            .load_model_if_needed(PathBuf::from(model_path), EMBED_CONTEXT)
+                            .and_then(|()| state.embed(&texts));
+                        match result {
+                            Ok(vectors) => send_response(&Response::Embeddings { vectors })?,
+                            Err(e) => send_response(&Response::Error {
+                                message: format!("Embedding failed: {e:#}"),
+                            })?,
                         }
                     }
                     Ok(Request::Ping) => {

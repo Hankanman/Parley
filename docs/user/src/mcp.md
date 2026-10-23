@@ -49,7 +49,7 @@ It can read:
 - the briefs and follow-up email drafts you've made in Parley,
 - your action items.
 
-It can search transcripts by keyword, or by meaning if you use [Ollama](models.md#ollama) (the same semantic search as [Ask Parley](ask.md#keyword-and-semantic-search)). Semantic search only covers meetings Parley has indexed, which it does while Ask Parley is open.
+It can search transcripts by keyword, or by meaning, using the same on-device semantic search as [Ask Parley](ask.md#keyword-and-semantic-search). Searching by meaning covers the meetings Parley has indexed, which it does while Ask Parley is open, and needs Parley to have been started once from its AppImage so `parley-mcp` can borrow its built-in model runner.
 
 It can also add notes, add, edit, complete and delete action items, and replace a meeting's summary. Anything it creates is marked as coming from the agent.
 

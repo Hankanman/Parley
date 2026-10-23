@@ -333,14 +333,18 @@ pub struct UpdateSummaryResult {
 #[derive(Clone)]
 pub struct ParleyMcp {
     pool: SqlitePool,
+    /// Parley's app data directory (the database's folder), where the app
+    /// keeps the semantic search model.
+    data_dir: std::path::PathBuf,
     tool_router: ToolRouter<Self>,
 }
 
 #[tool_router(router = tool_router)]
 impl ParleyMcp {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: SqlitePool, data_dir: std::path::PathBuf) -> Self {
         Self {
             pool,
+            data_dir,
             tool_router: Self::tool_router(),
         }
     }
@@ -552,9 +556,10 @@ impl ParleyMcp {
         description = "Search transcripts by meaning rather than exact words, \
                        using the embeddings Parley builds for Ask Parley: finds \
                        passages about a topic even when they're phrased \
-                       differently. Needs Ollama as Parley's summary provider \
-                       and only covers meetings Parley has indexed; otherwise \
-                       use `search_transcripts`."
+                       differently. Runs on this computer with Parley's \
+                       built-in model (or the user's Ollama, if that's their \
+                       provider) and only covers meetings Parley has indexed; \
+                       otherwise use `search_transcripts`."
     )]
     pub async fn semantic_search(
         &self,
@@ -572,7 +577,7 @@ impl ParleyMcp {
         let person = optional(args.person);
         let limit = args.limit.unwrap_or(10).clamp(1, 50) as usize;
 
-        let backend = semantic::resolve_backend(&self.pool)
+        let backend = semantic::resolve_backend(&self.pool, &self.data_dir)
             .await
             .map_err(|e| ErrorData::invalid_params(e, None))?;
         let model_id = backend.model_id();
@@ -588,7 +593,7 @@ impl ParleyMcp {
                 None,
             ));
         }
-        let vector = semantic::embed_query(&backend, &query).await.map_err(|e| {
+        let vector = semantic::embed_query(&backend, &self.data_dir, &query).await.map_err(|e| {
             tracing::warn!(error = %e, "semantic search: embedding failed");
             ErrorData::internal_error(format!("{e}. Use `search_transcripts` instead."), None)
         })?;
@@ -1004,7 +1009,7 @@ impl ServerHandler for ParleyMcp {
                  `list_meetings` with its `series_id` or attendees.\n\n\
                  Notes: `search_transcripts` is ranked full-text keyword search \
                  (all words must match); `semantic_search` matches meaning but \
-                 needs Ollama and covers only indexed meetings. All timestamps \
+                 covers only meetings Parley has indexed. All timestamps \
                  are UTC. Anything you create is tagged source=\"agent\" so the \
                  user can tell it apart from their own entries. \
                  `update_summary` overwrites the whole summary; read it first \

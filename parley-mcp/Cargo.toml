@@ -16,16 +16,21 @@ rmcp = { version = "2.2.0", features = ["server", "macros", "transport-io"] }
 schemars = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.32", features = ["macros", "rt-multi-thread", "io-std", "signal"] }
+tokio = { version = "1.32", features = ["macros", "rt-multi-thread", "io-std", "io-util", "signal", "process", "time"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 chrono = "0.4.31"
 uuid = { version = "1.0", features = ["v4"] }
 dirs = "5.0.1"
-# Embeds the query for `semantic_search` with the user's Ollama server (the
-# same reqwest the app uses).
+# Embeds the query for `semantic_search`: with the bundled llama-helper
+# (its wire protocol), or the user's Ollama server (the same reqwest the app
+# uses).
+llama-protocol = { path = "../llama-protocol" }
 reqwest = { version = "0.11", features = ["json"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Release profile lives at the workspace root (Cargo only honors profiles
 # from the root manifest). See top-level Cargo.toml.
+
+[dev-dependencies]
+tempfile = "3.3.0"

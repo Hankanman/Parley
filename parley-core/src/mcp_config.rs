@@ -77,6 +77,30 @@ fn default_db_path() -> Option<PathBuf> {
         .map(|d| d.join("meeting_minutes.sqlite"))
 }
 
+/// File in the app data dir holding the path of the AppImage Parley last ran
+/// from. `parley-mcp` reads it to find an AppImage it can start with
+/// `--llama-helper` for semantic search.
+pub const APPIMAGE_PATH_FILE: &str = "appimage-path";
+
+/// Record `$APPIMAGE` (set by the AppImage runtime) in [`APPIMAGE_PATH_FILE`]
+/// so `parley-mcp` can find this build. No-op outside an AppImage.
+pub fn record_appimage_path() {
+    let Some(appimage) = std::env::var_os("APPIMAGE") else {
+        return;
+    };
+    let Ok(dir) = crate::paths::app_data_dir() else {
+        return;
+    };
+    let file = dir.join(APPIMAGE_PATH_FILE);
+    let path = appimage.to_string_lossy().into_owned();
+    if std::fs::read_to_string(&file).ok().as_deref() == Some(path.as_str()) {
+        return;
+    }
+    if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&file, &path)) {
+        log::warn!("couldn't record the AppImage path for parley-mcp: {e}");
+    }
+}
+
 /// Where [`install_bundled_binary`] puts the binary: `~/.local/bin`, the same
 /// directory `install.sh` installs `parley` into by default.
 pub fn install_path() -> Option<PathBuf> {

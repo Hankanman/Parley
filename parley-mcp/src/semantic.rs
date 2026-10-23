@@ -3,14 +3,23 @@
 //! `parley_core::chat::across::embeddings`).
 //!
 //! This server only *reads* the index: the app builds and refreshes it in
-//! the background whenever Ask Parley is open. Searching needs one network
-//! call, embedding the query with the same Ollama model, and follows the
-//! app's rule: only when the summary provider is Ollama (so the endpoint is
-//! one the user already chose), with the `ask_embedding_model` setting
-//! (default `nomic-embed-text`; empty turns it off).
+//! the background whenever Ask Parley is open. Searching embeds the query
+//! with the same model, picked by the app's rules
+//! (`parley_core::chat::across::embeddings::resolve_embedder`):
+//!
+//! * the user's Ollama server when Ollama is the summary provider, with the
+//!   `ask_embedding_model` setting (default `nomic-embed-text`);
+//! * otherwise the built-in nomic-embed-text GGUF the app downloads, run by
+//!   the bundled `llama-helper` (see [`find_helper`]).
+//!
+//! An empty `ask_embedding_model` turns semantic search off either way.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::Duration;
+
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use serde::Serialize;
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
@@ -18,6 +27,15 @@ use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 use crate::db::format_offset;
 
 const KEY_ASK_EMBEDDING_MODEL: &str = "ask_embedding_model";
+/// The built-in model, as `parley_core::chat::across::builtin_embedder`
+/// names, stores and sizes it.
+const BUILTIN_MODEL_NAME: &str = "nomic-embed-text-v1.5";
+const BUILTIN_MODEL_FILE: &str = "nomic-embed-text-v1.5.Q8_0.gguf";
+const BUILTIN_MODEL_BYTES: u64 = 146_146_432;
+/// Written by the app: the AppImage it last ran from.
+const APPIMAGE_PATH_FILE: &str = "appimage-path";
+/// Starting the helper (and mounting the AppImage) plus loading the model.
+const HELPER_TIMEOUT: Duration = Duration::from_secs(60);
 const DEFAULT_OLLAMA_MODEL: &str = "nomic-embed-text";
 const DEFAULT_OLLAMA_ENDPOINT: &str = "http://localhost:11434";
 /// Below this cosine similarity a chunk isn't related at all (as in the app).
@@ -27,62 +45,199 @@ const EXCERPT_CHARS: usize = 1200;
 
 /// Where the query gets embedded.
 #[derive(Debug, Clone, PartialEq)]
-pub struct EmbeddingBackend {
-    pub endpoint: String,
-    pub model: String,
+pub enum EmbeddingBackend {
+    Ollama { endpoint: String, model: String },
+    Builtin { model_path: PathBuf },
 }
 
 impl EmbeddingBackend {
     /// The id stored with every vector, e.g. `ollama:nomic-embed-text`.
     pub fn model_id(&self) -> String {
-        format!("ollama:{}", self.model)
+        match self {
+            EmbeddingBackend::Ollama { model, .. } => format!("ollama:{model}"),
+            EmbeddingBackend::Builtin { .. } => format!("builtin:{BUILTIN_MODEL_NAME}"),
+        }
     }
 
     /// nomic-embed-text retrieves much better with its task prefix.
     fn query_prefix(&self) -> &'static str {
-        if self.model.contains("nomic-embed") {
-            "search_query: "
-        } else {
-            ""
+        match self {
+            EmbeddingBackend::Ollama { model, .. } if !model.contains("nomic-embed") => "",
+            _ => "search_query: ",
         }
     }
 }
 
 /// The embedding backend for the current settings, or why there isn't one.
-pub async fn resolve_backend(pool: &SqlitePool) -> Result<EmbeddingBackend, String> {
+/// `data_dir` is Parley's app data directory (the database's folder).
+pub async fn resolve_backend(pool: &SqlitePool, data_dir: &Path) -> Result<EmbeddingBackend, String> {
     let config: Option<(Option<String>, Option<String>)> =
         sqlx::query_as("SELECT provider, ollamaEndpoint FROM settings LIMIT 1")
             .fetch_optional(pool)
             .await
             .map_err(|e| format!("couldn't read the model settings: {e}"))?;
     let (provider, endpoint) = config.unwrap_or((None, None));
-    if !provider.is_some_and(|p| p.trim().eq_ignore_ascii_case("ollama")) {
-        return Err("semantic search needs Ollama as Parley's summary provider \
-                    (Settings → Summary); use `search_transcripts` instead"
-            .into());
-    }
-    let model: Option<String> =
+    let setting: Option<String> =
         sqlx::query_scalar("SELECT value FROM app_settings WHERE key = ?")
             .bind(KEY_ASK_EMBEDDING_MODEL)
             .fetch_optional(pool)
             .await
             .map_err(|e| format!("couldn't read the embedding model setting: {e}"))?;
-    let model = model
+    let setting = setting
         .and_then(|json| serde_json::from_str::<String>(&json).ok())
-        .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_string());
-    let model = model.trim().to_string();
-    if model.is_empty() {
+        .map(|m| m.trim().to_string());
+    if setting.as_deref() == Some("") {
         return Err("semantic search is turned off in Parley's settings; use `search_transcripts`".into());
     }
-    let endpoint = endpoint
-        .map(|e| e.trim().trim_end_matches('/').to_string())
-        .filter(|e| !e.is_empty())
-        .unwrap_or_else(|| DEFAULT_OLLAMA_ENDPOINT.to_string());
-    Ok(EmbeddingBackend { endpoint, model })
+
+    if provider.is_some_and(|p| p.trim().eq_ignore_ascii_case("ollama")) {
+        let endpoint = endpoint
+            .map(|e| e.trim().trim_end_matches('/').to_string())
+            .filter(|e| !e.is_empty())
+            .unwrap_or_else(|| DEFAULT_OLLAMA_ENDPOINT.to_string());
+        let model = setting.unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_string());
+        return Ok(EmbeddingBackend::Ollama { endpoint, model });
+    }
+
+    let model_path = data_dir.join("models").join("embeddings").join(BUILTIN_MODEL_FILE);
+    let ready = std::fs::metadata(&model_path).is_ok_and(|m| m.len() == BUILTIN_MODEL_BYTES);
+    if !ready {
+        return Err("Parley hasn't finished downloading its semantic search model yet (it does so \
+                    in the background after launch); use `search_transcripts` meanwhile"
+            .into());
+    }
+    Ok(EmbeddingBackend::Builtin { model_path })
 }
 
-/// Embed `query` with Ollama's `/api/embed`, L2-normalised.
-pub async fn embed_query(backend: &EmbeddingBackend, query: &str) -> Result<Vec<f32>, String> {
+/// Embed `query`, L2-normalised.
+pub async fn embed_query(
+    backend: &EmbeddingBackend,
+    data_dir: &Path,
+    query: &str,
+) -> Result<Vec<f32>, String> {
+    let text = format!("{}{}", backend.query_prefix(), query);
+    let mut vector = match backend {
+        EmbeddingBackend::Ollama { endpoint, model } => embed_with_ollama(endpoint, model, &text).await?,
+        EmbeddingBackend::Builtin { model_path } => {
+            let helper = find_helper(data_dir).ok_or(
+                "couldn't find Parley's llama.cpp helper: run Parley once (from the AppImage) \
+                 so parley-mcp can find it, or set $PARLEY_LLAMA_HELPER",
+            )?;
+            embed_with_helper(&helper, model_path, &text).await?
+        }
+    };
+    normalize(&mut vector);
+    Ok(vector)
+}
+
+/// How to start `llama-helper`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HelperCommand {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+}
+
+impl HelperCommand {
+    fn direct(program: PathBuf) -> Self {
+        Self { program, args: vec![] }
+    }
+
+    /// The Parley AppImage (or binary), told to run its bundled helper.
+    fn via_parley(program: PathBuf) -> Self {
+        Self {
+            program,
+            args: vec!["--llama-helper".into()],
+        }
+    }
+}
+
+/// Find `llama-helper`, in order: `$PARLEY_LLAMA_HELPER`; a `llama-helper`
+/// next to this binary (a source build's `target/`); the `parley` AppImage
+/// next to this binary (`install.sh` puts both in `~/.local/bin`); the
+/// AppImage the app last ran from (recorded in its data dir); the build tree
+/// this binary came from.
+pub fn find_helper(data_dir: &Path) -> Option<HelperCommand> {
+    if let Some(path) = std::env::var_os("PARLEY_LLAMA_HELPER").map(PathBuf::from) {
+        if path.is_file() {
+            return Some(HelperCommand::direct(path));
+        }
+    }
+    let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf));
+    if let Some(dir) = &exe_dir {
+        let helper = dir.join("llama-helper");
+        if helper.is_file() {
+            return Some(HelperCommand::direct(helper));
+        }
+        let parley = dir.join("parley");
+        if parley.is_file() {
+            return Some(HelperCommand::via_parley(parley));
+        }
+    }
+    if let Ok(recorded) = std::fs::read_to_string(data_dir.join(APPIMAGE_PATH_FILE)) {
+        let path = PathBuf::from(recorded.trim());
+        if path.is_file() {
+            return Some(HelperCommand::via_parley(path));
+        }
+    }
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent()?;
+    ["release", "debug"]
+        .iter()
+        .map(|profile| workspace.join("target").join(profile).join("llama-helper"))
+        .find(|p| p.is_file())
+        .map(HelperCommand::direct)
+}
+
+/// Run one `Embed` request through a fresh helper process.
+async fn embed_with_helper(helper: &HelperCommand, model_path: &Path, text: &str) -> Result<Vec<f32>, String> {
+    use llama_protocol::{Request, Response};
+
+    let mut child = tokio::process::Command::new(&helper.program)
+        .args(&helper.args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("couldn't start {}: {e}", helper.program.display()))?;
+    let mut stdin = child.stdin.take().ok_or("helper has no stdin")?;
+    let mut stdout = BufReader::new(child.stdout.take().ok_or("helper has no stdout")?);
+
+    let request = Request::Embed {
+        model_path: model_path.to_string_lossy().into_owned(),
+        texts: vec![text.to_string()],
+    };
+    let exchange = async {
+        let mut line = serde_json::to_string(&request).map_err(|e| e.to_string())?;
+        line.push('\n');
+        stdin.write_all(line.as_bytes()).await.map_err(|e| e.to_string())?;
+        stdin.flush().await.map_err(|e| e.to_string())?;
+        loop {
+            let mut reply = String::new();
+            if stdout.read_line(&mut reply).await.map_err(|e| e.to_string())? == 0 {
+                return Err("the helper exited without answering".to_string());
+            }
+            match serde_json::from_str::<Response>(reply.trim()) {
+                Ok(Response::Embeddings { mut vectors }) if !vectors.is_empty() => return Ok(vectors.swap_remove(0)),
+                Ok(Response::Error { message }) => return Err(message),
+                Ok(other) => return Err(format!("unexpected helper response: {other:?}")),
+                // Not a protocol line; keep reading.
+                Err(_) => continue,
+            }
+        }
+    };
+    let result = tokio::time::timeout(HELPER_TIMEOUT, exchange)
+        .await
+        .unwrap_or_else(|_| Err("the helper took too long".to_string()));
+    let _ = stdin.write_all(b"{\"type\":\"shutdown\"}\n").await;
+    drop(stdin);
+    if tokio::time::timeout(Duration::from_secs(3), child.wait()).await.is_err() {
+        let _ = child.kill().await;
+    }
+    result
+}
+
+/// Embed `text` with Ollama's `/api/embed`.
+async fn embed_with_ollama(endpoint: &str, model: &str, text: &str) -> Result<Vec<f32>, String> {
     #[derive(serde::Deserialize)]
     struct Response {
         embeddings: Vec<Vec<f32>>,
@@ -92,33 +247,27 @@ pub async fn embed_query(backend: &EmbeddingBackend, query: &str) -> Result<Vec<
         .build()
         .map_err(|e| e.to_string())?;
     let response = client
-        .post(format!("{}/api/embed", backend.endpoint))
-        .json(&serde_json::json!({
-            "model": backend.model,
-            "input": [format!("{}{}", backend.query_prefix(), query)],
-        }))
+        .post(format!("{endpoint}/api/embed"))
+        .json(&serde_json::json!({ "model": model, "input": [text] }))
         .send()
         .await
-        .map_err(|e| format!("couldn't reach Ollama at {}: {e}", backend.endpoint))?;
+        .map_err(|e| format!("couldn't reach Ollama at {endpoint}: {e}"))?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
         return Err(format!(
-            "Ollama returned {status} (is `{}` pulled?): {}",
-            backend.model,
+            "Ollama returned {status} (is `{model}` pulled?): {}",
             body.chars().take(200).collect::<String>()
         ));
     }
-    let mut vector = response
+    response
         .json::<Response>()
         .await
         .map_err(|e| format!("bad Ollama embeddings response: {e}"))?
         .embeddings
         .into_iter()
         .next()
-        .ok_or("Ollama returned no embedding")?;
-    normalize(&mut vector);
-    Ok(vector)
+        .ok_or_else(|| "Ollama returned no embedding".to_string())
 }
 
 pub fn normalize(v: &mut [f32]) {
@@ -295,17 +444,39 @@ mod tests {
     #[tokio::test]
     async fn resolve_backend_follows_the_apps_rules() {
         let pool = pool().await;
-        assert!(resolve_backend(&pool).await.unwrap_err().contains("Ollama"));
+        let data = tempfile::tempdir().unwrap();
+
+        // Built-in by default, once the app has downloaded the model.
+        assert!(resolve_backend(&pool, data.path()).await.unwrap_err().contains("downloading"));
+        let model = data.path().join("models/embeddings").join(BUILTIN_MODEL_FILE);
+        std::fs::create_dir_all(model.parent().unwrap()).unwrap();
+        std::fs::File::create(&model).unwrap().set_len(BUILTIN_MODEL_BYTES).unwrap();
+        let backend = resolve_backend(&pool, data.path()).await.unwrap();
+        assert_eq!(backend.model_id(), "builtin:nomic-embed-text-v1.5");
+        assert_eq!(backend.query_prefix(), "search_query: ");
 
         sqlx::query("INSERT INTO settings (id, provider, model, whisperModel, ollamaEndpoint) VALUES ('1', 'ollama', 'gemma3:4b', 'x', 'http://gpu-box:11434/')")
             .execute(&pool).await.unwrap();
-        let backend = resolve_backend(&pool).await.unwrap();
-        assert_eq!(backend.endpoint, "http://gpu-box:11434");
-        assert_eq!(backend.model_id(), "ollama:nomic-embed-text");
+        let backend = resolve_backend(&pool, data.path()).await.unwrap();
+        assert_eq!(
+            backend,
+            EmbeddingBackend::Ollama { endpoint: "http://gpu-box:11434".into(), model: "nomic-embed-text".into() }
+        );
 
         sqlx::query("INSERT INTO app_settings (key, value, updated_at) VALUES ('ask_embedding_model', '\"\"', 'x')")
             .execute(&pool).await.unwrap();
-        assert!(resolve_backend(&pool).await.unwrap_err().contains("turned off"));
+        assert!(resolve_backend(&pool, data.path()).await.unwrap_err().contains("turned off"));
+    }
+
+    #[test]
+    fn find_helper_prefers_the_recorded_appimage_over_the_build_tree() {
+        let data = tempfile::tempdir().unwrap();
+        let appimage = data.path().join("Parley.AppImage");
+        std::fs::write(&appimage, b"").unwrap();
+        std::fs::write(data.path().join(APPIMAGE_PATH_FILE), appimage.to_string_lossy().as_bytes()).unwrap();
+        // The test binary lives in target/debug/deps, with no helper beside it.
+        let helper = find_helper(data.path()).unwrap();
+        assert_eq!(helper, HelperCommand::via_parley(appimage));
     }
 
     #[tokio::test]

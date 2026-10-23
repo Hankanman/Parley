@@ -37,7 +37,9 @@ Parley records your meetings, transcribes them live and writes the summary, the 
 Summaries, Ask and action items use a language model of your choosing:
 
 - **Built in**: a local model run by the bundled llama.cpp helper. Nothing to set up.
-- **Ollama**, on this machine or another one you run. Semantic search in Ask currently requires Ollama; without it Ask uses keyword search.
+- **Ollama**, on this machine or another one you run.
+
+Ask's semantic search (finding passages by meaning, not just keywords) runs on-device with a built-in embedding model, or with Ollama if that's your provider.
 - **Claude, Groq, OpenRouter, OpenAI** or any **OpenAI-compatible** endpoint, used only if you add a key.
 
 ## Screenshots

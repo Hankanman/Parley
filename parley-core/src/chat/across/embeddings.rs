@@ -3,18 +3,18 @@
 //!
 //! ## Backend
 //!
-//! Embeddings come from an [`Embedder`]. Today's implementation is
-//! [`OllamaEmbedder`] (`POST /api/embed`), used when the user's summary
-//! provider is Ollama — the server is already configured and running, and
-//! `ollama pull nomic-embed-text` is all it takes. The model name is the
-//! `ask_embedding_model` app setting (default [`DEFAULT_OLLAMA_MODEL`]; an
-//! empty string turns the semantic stage off). With any other provider the
-//! semantic stage is off and retrieval is FTS5-only.
+//! Embeddings come from an [`Embedder`], picked by [`resolve_embedder`]:
 //!
-//! The seam for a fully built-in path is the [`Embedder`] trait: a
-//! llama.cpp embedding mode in the `llama-helper` sidecar (a small GGUF such
-//! as nomic-embed-text or bge-small, downloaded through the summary model
-//! manager) only has to implement it and be returned by [`resolve_embedder`].
+//! * [`OllamaEmbedder`] (`POST /api/embed`) when the user's summary provider
+//!   is Ollama — the server is already configured and running. The model
+//!   name is the `ask_embedding_model` app setting (default
+//!   [`DEFAULT_OLLAMA_MODEL`]).
+//! * Otherwise [`BuiltinEmbedder`]: nomic-embed-text in the bundled
+//!   `llama-helper` sidecar, nothing to install. Its model downloads in the
+//!   background on first launch; until it's there, retrieval is FTS5-only.
+//!
+//! Setting `ask_embedding_model` to an empty string turns the semantic stage
+//! off with either backend.
 //!
 //! ## Storage and indexing
 //!
@@ -31,6 +31,7 @@
 //! remembered for [`FAILURE_COOLDOWN`] so asks don't each wait on it, and
 //! retrieval carries on with keywords only.
 
+use super::builtin_embedder::{self, BuiltinEmbedder};
 use super::retrieval::{
     load_segments, push_meeting_filters, AskFilters, ChunkHit, RetrievedSegment,
 };
@@ -203,26 +204,31 @@ fn recent_failure(model_id: &str) -> Option<String> {
 pub async fn resolve_embedder(
     pool: &SqlitePool,
 ) -> Result<Arc<dyn Embedder>, SemanticAvailability> {
-    let config = SettingsRepository::get_model_config(pool)
+    let config = SettingsRepository::get_model_config(pool).await.ok().flatten();
+    let setting = SettingsRepository::get_setting::<String>(pool, KEY_ASK_EMBEDDING_MODEL)
         .await
         .ok()
-        .flatten()
-        .ok_or_else(|| SemanticAvailability::Off("no model configured".into()))?;
-    if LLMProvider::from_str(&config.provider).ok() != Some(LLMProvider::Ollama) {
-        return Err(SemanticAvailability::Off(
-            "semantic search currently needs Ollama as the summary provider".into(),
-        ));
-    }
-    let model = SettingsRepository::get_setting::<String>(pool, KEY_ASK_EMBEDDING_MODEL)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_string());
-    let model = model.trim().to_string();
-    if model.is_empty() {
+        .flatten();
+    if setting.as_deref().is_some_and(|m| m.trim().is_empty()) {
         return Err(SemanticAvailability::Off("turned off in settings".into()));
     }
-    Ok(Arc::new(OllamaEmbedder::new(config.ollama_endpoint, model)))
+    let ollama = config
+        .as_ref()
+        .is_some_and(|c| LLMProvider::from_str(&c.provider).ok() == Some(LLMProvider::Ollama));
+    if ollama {
+        let model = setting
+            .map(|m| m.trim().to_string())
+            .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_string());
+        let endpoint = config.and_then(|c| c.ollama_endpoint);
+        return Ok(Arc::new(OllamaEmbedder::new(endpoint, model)));
+    }
+    if !builtin_embedder::model_is_ready() {
+        builtin_embedder::spawn_model_download();
+        return Err(SemanticAvailability::Off(
+            "the semantic search model is downloading".into(),
+        ));
+    }
+    Ok(Arc::new(BuiltinEmbedder))
 }
 
 /// Availability for the current settings (no network call).
@@ -730,12 +736,8 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn embedder_resolves_only_for_ollama() {
+    async fn embedder_uses_ollama_when_it_is_the_provider() {
         let pool = test_pool().await;
-        assert!(matches!(
-            resolve_embedder(&pool).await,
-            Err(SemanticAvailability::Off(_))
-        ));
         SettingsRepository::save_model_config(
             &pool,
             "ollama",
@@ -752,14 +754,16 @@ pub(crate) mod tests {
             .unwrap();
         assert!(matches!(
             resolve_embedder(&pool).await,
-            Err(SemanticAvailability::Off(_))
+            Err(SemanticAvailability::Off(reason)) if reason.contains("turned off")
         ));
+        // Other providers use the built-in model; an empty setting still
+        // turns it off.
         SettingsRepository::save_model_config(&pool, "claude", "x", "large-v3", None)
             .await
             .unwrap();
         assert!(matches!(
             resolve_embedder(&pool).await,
-            Err(SemanticAvailability::Off(_))
+            Err(SemanticAvailability::Off(reason)) if reason.contains("turned off")
         ));
     }
 }

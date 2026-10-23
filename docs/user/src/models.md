@@ -63,7 +63,7 @@ Runs entirely on your computer with llama.cpp. There are two models:
 
 Install [Ollama](https://ollama.com), then choose **Ollama** as the provider and pick one of your installed models. You can also type a model name (such as `gemma3:4b`) and click **Pull model** to download it from inside Parley.
 
-Ollama also unlocks **semantic search** in [Ask Parley](ask.md), which finds relevant passages even when they use different words from your question. For that, also pull the embedding model:
+With Ollama as the provider, Parley also uses it for [semantic search](ask.md#keyword-and-semantic-search) instead of its built-in model. Pull the embedding model once:
 
 ```bash
 ollama pull nomic-embed-text
