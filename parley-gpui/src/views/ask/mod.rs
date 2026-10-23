@@ -188,8 +188,12 @@ impl AskView {
                 return;
             }
             // Bounded: an hour of polling at most, even if something sticks.
+            // Each tick re-triggers indexing before checking whether anything
+            // is still busy, so a model download finishing mid-wait goes
+            // straight on to indexing instead of ending the loop.
+            let mut busy = across::semantic_index_busy();
             for _ in 0..1200 {
-                if !across::semantic_index_busy() {
+                if !busy {
                     break;
                 }
                 cx.background_executor().timer(std::time::Duration::from_secs(3)).await;
@@ -200,10 +204,11 @@ impl AskView {
                     .spawn(async move {
                         across::refresh_semantic_index(&pool).await;
                         let (availability, progress) = across::semantic_status(&pool).await;
-                        logic::semantic_status_text(&availability, progress)
+                        (logic::semantic_status_text(&availability, progress), across::semantic_index_busy())
                     })
                     .await;
-                let Ok(status) = status else { return };
+                let Ok((status, still_busy)) = status else { return };
+                busy = still_busy;
                 let updated = this.update(cx, |this, cx| {
                     this.status = Some(status);
                     cx.notify();
