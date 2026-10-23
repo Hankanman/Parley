@@ -36,7 +36,7 @@ Semantic search needs Ollama as the summary provider and the `nomic-embed-text` 
 
 ## No notifications
 
-Click **Send test notification** under Settings → Notifications. If it appears, check the **Events** toggles and that **Manual Do Not Disturb** is off. If it doesn't, check your desktop's own notification settings.
+Click **Send test notification** under Settings → Notifications. If it appears, check the **Events** toggles, that **Recording notifications** is on (for recording events) and that **Manual Do Not Disturb** is off. If it doesn't, check your desktop's own notification settings and Do Not Disturb mode.
 
 ## Logs and crash reports
 

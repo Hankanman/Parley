@@ -7,6 +7,7 @@ Everything Parley records and produces stays on your computer. There is no accou
 - **Downloading models**, from Hugging Face or GitHub. No meeting data is sent.
 - **Fetching your calendar feeds**, if you've [added any](calendar.md).
 - **Checking for updates**, only when you click *Check for updates* in the tray menu.
+- **Listing a provider's models**, when Settings → Summary shows a cloud provider or Ollama.
 - **Cloud AI providers**, only if you chose one in [Settings → Summary](models.md#cloud-providers). The transcript text needed for each request is sent to that provider. With the built-in model or a local Ollama, nothing leaves your computer.
 
 ## Where everything is stored

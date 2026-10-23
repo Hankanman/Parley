@@ -80,4 +80,4 @@ Paste your key under **API keys**, then choose a model from the list Parley fetc
 
 - **Templates → Default summary template**: the template pre-selected when you generate a summary. See [Meeting notes](meetings.md).
 - **Auto-summarize after recording**: write the summary and chapters automatically when a recording stops. Off by default.
-- **Show transcription confidence**: show a coloured dot by each transcript line for how sure Whisper was of it.
+- **Show transcription confidence**: show a coloured dot by each transcript line for how sure Whisper was of it. On by default.

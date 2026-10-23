@@ -6,17 +6,14 @@ It reads Parley's database directly on your computer, works whether or not Parle
 
 ## Getting parley-mcp
 
-`parley-mcp` isn't included in the AppImage yet, so for now you build it from source (you need [Rust](https://rustup.rs)):
+`parley-mcp` comes with Parley (version 0.5.1 and later):
 
-```bash
-git clone https://github.com/Hankanman/Parley.git
-cd Parley
-cargo build --release -p parley-mcp
-```
+- If you used the [install command](install.md#install-with-one-command), it's already installed at `~/.local/bin/parley-mcp`.
+- If you downloaded the AppImage yourself, open **Settings → Integrations** and click **Install parley-mcp**, which copies it to `~/.local/bin/parley-mcp`. After updating Parley, the same button reads **Update parley-mcp**.
 
-The program is then at `target/release/parley-mcp`. Copy it somewhere permanent, such as `~/.local/bin/`.
+Assistants can't use the copy inside the AppImage directly, because its location changes every time Parley starts.
 
-**Settings → Integrations** shows whether Parley can find it, and gives you ready-made setup commands with the right paths filled in, each with a copy button.
+**Settings → Integrations** also gives you ready-made setup commands with the right paths filled in, each with a copy button.
 
 ## Connecting an assistant
 
