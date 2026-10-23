@@ -62,6 +62,12 @@ pub async fn ensure_model() -> Result<PathBuf, String> {
     if DOWNLOADING.swap(true, Ordering::SeqCst) {
         return Err("the search model is still downloading".into());
     }
+    download_claimed(path).await
+}
+
+/// The download itself, once the caller has set [`DOWNLOADING`]; clears it
+/// when done.
+async fn download_claimed(path: PathBuf) -> Result<PathBuf, String> {
     let result = async {
         let part = path.with_extension("gguf.part");
         log::info!("Downloading the semantic search model (~146 MB) → {}", path.display());
@@ -92,8 +98,16 @@ pub fn spawn_model_download() {
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         return;
     };
-    handle.spawn(async {
-        if let Err(e) = ensure_model().await {
+    let Some(path) = model_path() else {
+        return;
+    };
+    // Claim the flag before spawning, so [`model_is_downloading`] is true
+    // as soon as this returns (the Ask page polls on it straight away).
+    if DOWNLOADING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    handle.spawn(async move {
+        if let Err(e) = download_claimed(path).await {
             log::warn!("Semantic search model download failed: {e}");
         }
     });
