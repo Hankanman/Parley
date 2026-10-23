@@ -1,5 +1,11 @@
 //! "Notifications" settings page: enable/disable and which events.
 //!
+//! The row also holds `time_based_reminders`, `meeting_reminders` and
+//! `respect_do_not_disturb` from the retired Tauri shell. They have no
+//! toggle here: the first was never implemented, the second duplicated the
+//! "Meeting reminders" event toggle, and the desktop's notification server
+//! already holds popups back during its own Do Not Disturb.
+//!
 //! Reads/writes the `app_settings` row under `KEY_NOTIFICATION_SETTINGS`
 //! through `state.rs`'s `NotificationSettings`.
 //! `parley-gpui/src/notifications.rs` (tray/DBus notifications) reads a
@@ -27,42 +33,21 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
                 toggle(
                     &view,
                     "Recording notifications",
-                    "Notify when a recording starts, stops, pauses, or resumes.",
+                    "Allow the recording started, stopped, paused and resumed notifications chosen below.",
                     |s| s.recording_notifications,
                     |s, v| s.recording_notifications = v,
                 ),
                 toggle(
                     &view,
-                    "Time-based reminders",
-                    "Remind about an in-progress meeting after a set duration.",
-                    |s| s.time_based_reminders,
-                    |s, v| s.time_based_reminders = v,
-                ),
-                toggle(
-                    &view,
-                    "Meeting reminders",
-                    "Remind before a calendar-linked meeting starts.",
-                    |s| s.meeting_reminders,
-                    |s, v| s.meeting_reminders = v,
-                ),
-                toggle(
-                    &view,
-                    "Respect Do Not Disturb",
-                    "Suppress notifications while the system DND mode is on.",
-                    |s| s.respect_do_not_disturb,
-                    |s, v| s.respect_do_not_disturb = v,
-                ),
-                toggle(
-                    &view,
                     "Notification sound",
-                    "Play a sound with each notification.",
+                    "Ask the desktop to play its message sound with each notification.",
                     |s| s.notification_sound,
                     |s, v| s.notification_sound = v,
                 ),
                 toggle(
                     &view,
                     "Manual Do Not Disturb",
-                    "Silence all notifications regardless of the system DND state.",
+                    "Silence all of Parley's notifications.",
                     |s| s.manual_dnd_mode,
                     |s, v| s.manual_dnd_mode = v,
                 ),
