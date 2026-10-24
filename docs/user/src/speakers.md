@@ -34,6 +34,14 @@ The **Speakers** page lists every saved voice. For each one you can:
 - **Merge into…** another speaker, if the same person was saved twice. Parley flags profiles with the same name.
 - **Delete** it. Past transcripts keep the name, but future meetings stop recognising the voice.
 
+## Re-detecting speakers
+
+Meetings recorded with older versions of Parley can have far too many speakers: the same person split into *Speaker 3*, *Speaker 7* and *Speaker 12*. To fix one meeting, click **Re-detect speakers** (the people icon) in its header. To fix them all, click **Re-detect speakers in all meetings** on the Speakers page.
+
+Parley runs speaker detection again from the saved audio, keeping the transcript text as it is. Any line you've named, or that belongs to a saved voice, keeps its name; only the *Speaker N* lines are regrouped. It takes under a minute per meeting, and Parley tells you how many speakers there were before and after.
+
+This needs the meeting's audio, so it isn't available for meetings recorded with **Auto-save recordings** off.
+
 ## How recognition works
 
 Voices are matched against saved profiles automatically. When a meeting is linked to a calendar event, people on the invite are matched more readily than people who aren't, and the number of attendees helps Parley decide how many speakers there are. Voice profiles are stored only in Parley's local database.

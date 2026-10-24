@@ -109,7 +109,7 @@ impl ChannelAudio {
     /// The segment's source and the samples to embed for it: the dominant
     /// channel's audio, or `None` (embed the mixdown) when neither channel
     /// dominates.
-    fn for_segment(&self, start_ms: f64, end_ms: f64) -> (SegmentSource, Option<&[f32]>) {
+    pub(crate) fn for_segment(&self, start_ms: f64, end_ms: f64) -> (SegmentSource, Option<&[f32]>) {
         let range = |track: &[f32]| {
             let a = ((start_ms / 1000.0 * 16_000.0).max(0.0) as usize).min(track.len());
             let b = ((end_ms / 1000.0 * 16_000.0).max(0.0) as usize).min(track.len());
