@@ -4388,7 +4388,7 @@ dependencies = [
 
 [[package]]
 name = "llama-helper"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "encoding_rs",
@@ -4401,7 +4401,7 @@ dependencies = [
 
 [[package]]
 name = "llama-protocol"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -5582,7 +5582,7 @@ dependencies = [
 
 [[package]]
 name = "parley-core"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5632,7 +5632,7 @@ dependencies = [
 
 [[package]]
 name = "parley-gpui"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5655,7 +5655,7 @@ dependencies = [
 
 [[package]]
 name = "parley-mcp"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -9674,7 +9674,7 @@ dependencies = [
 
 [[package]]
 name = "whisper-core"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "whisper-rs",
@@ -9682,7 +9682,7 @@ dependencies = [
 
 [[package]]
 name = "whisper-helper"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -9696,7 +9696,7 @@ dependencies = [
 
 [[package]]
 name = "whisper-protocol"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "serde",
  "serde_json",
