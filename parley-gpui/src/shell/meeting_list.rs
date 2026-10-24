@@ -81,6 +81,9 @@ pub struct ContentMatch {
     pub meeting_id: String,
     pub title: String,
     pub snippet: String,
+    /// Where the matching line starts in the recording, so a click can
+    /// scroll the transcript there.
+    pub seconds: Option<f64>,
 }
 
 /// Reduces raw search rows (one per matching transcript segment, best first,
@@ -197,7 +200,12 @@ mod tests {
     }
 
     fn content_match(id: &str) -> ContentMatch {
-        ContentMatch { meeting_id: id.to_string(), title: format!("Meeting {id}"), snippet: "…hit…".to_string() }
+        ContentMatch {
+            meeting_id: id.to_string(),
+            title: format!("Meeting {id}"),
+            snippet: "…hit…".to_string(),
+            seconds: None,
+        }
     }
 
     #[test]

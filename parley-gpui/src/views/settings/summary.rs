@@ -219,6 +219,8 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
         ),
     );
 
+    page = page.group(super::ask_search::group(&view, cx));
+
     page = page.group(
         SettingGroup::new().title("Language & summaries").items(vec![
             SettingItem::new(
