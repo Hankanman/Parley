@@ -5627,6 +5627,7 @@ dependencies = [
  "which 6.0.3",
  "whisper-protocol",
  "whisper-rs",
+ "zip 8.6.0",
 ]
 
 [[package]]

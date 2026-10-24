@@ -172,7 +172,37 @@ pub(super) fn render_docx(blocks: &[Block], created_at: &str) -> Result<Vec<u8>,
     docx.build()
         .pack(&mut buf)
         .map_err(|e| format!("Failed to build DOCX: {e}"))?;
-    Ok(buf.into_inner())
+    mark_normal_as_default(&buf.into_inner())
+}
+
+/// docx-rs always writes a "Normal" paragraph style but never flags it
+/// `w:default="1"`, and readers that resolve the default style by that flag
+/// (python-docx, some converters) then fail on every unstyled paragraph.
+/// Rewrite `word/styles.xml` with the flag; every other part is copied
+/// through untouched.
+fn mark_normal_as_default(package: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::{Read, Write};
+    const NORMAL: &str = r#"<w:style w:type="paragraph" w:styleId="Normal">"#;
+    const DEFAULT_NORMAL: &str = r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal">"#;
+
+    let err = |e: &dyn std::fmt::Display| format!("Failed to finish DOCX: {e}");
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(package)).map_err(|e| err(&e))?;
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| err(&e))?;
+        let name = entry.name().to_string();
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data).map_err(|e| err(&e))?;
+        if name == "word/styles.xml" {
+            let xml = String::from_utf8(data).map_err(|e| err(&e))?;
+            data = xml.replacen(NORMAL, DEFAULT_NORMAL, 1).into_bytes();
+        }
+        out.start_file(name, options).map_err(|e| err(&e))?;
+        out.write_all(&data).map_err(|e| err(&e))?;
+    }
+    Ok(out.finish().map_err(|e| err(&e))?.into_inner())
 }
 
 fn paragraph_style(id: &str, name: &str, size: usize, bold: bool) -> Style {
@@ -350,6 +380,24 @@ mod tests {
         assert!(json.contains("third"));
         assert!(json.contains("☑"));
         assert!(json.contains("\"table\""));
+    }
+
+    #[test]
+    fn normal_is_the_default_paragraph_style() {
+        use std::io::Read;
+        let bytes = render_docx(&[Block::Paragraph(vec![Span::plain("x")])], "2026-07-15T10:00:00Z").unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+        let mut styles = String::new();
+        archive.by_name("word/styles.xml").unwrap().read_to_string(&mut styles).unwrap();
+        assert!(
+            styles.contains(r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal">"#),
+            "{styles}"
+        );
+        // Still a package docx-rs can read back.
+        document_json(&bytes);
+        if let Some(path) = std::env::var_os("PARLEY_DOCX_OUT") {
+            std::fs::write(path, &bytes).unwrap();
+        }
     }
 
     #[test]

@@ -9,9 +9,9 @@
 //! title is dropped — before replacing the meeting's rows in
 //! `meeting_chapters`. A failed or empty run leaves existing chapters alone.
 //!
-//! [`maybe_auto_chapter`] runs this after a recording, behind the same
-//! "auto-generate summary" switch that already opts the user into
-//! post-meeting LLM calls.
+//! [`maybe_auto_chapter`] runs this after a recording when Settings →
+//! Summary → "Auto-generate chapters after recording" is on (unset, it
+//! follows the auto-summary switch that used to cover both).
 
 pub mod parse;
 
@@ -399,15 +399,17 @@ async fn run(pool: &SqlitePool, meeting_id: &str) -> Result<Vec<MeetingChapter>,
         .map_err(|e| format!("failed to save chapters: {e}"))
 }
 
+/// `ui_config.isAutoChapters` (Settings → Summary → "Auto-generate
+/// chapters"). Unset — every install before the switch existed — follows
+/// `isAutoSummary`, which used to control chapters too.
 fn is_auto_enabled(ui_config: Option<&str>) -> bool {
-    ui_config
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-        .and_then(|v| v.get("isAutoSummary").and_then(|b| b.as_bool()))
-        .unwrap_or(false)
+    let config = ui_config.and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok());
+    let flag = |key: &str| config.as_ref().and_then(|v| v.get(key)).and_then(|b| b.as_bool());
+    flag("isAutoChapters").or_else(|| flag("isAutoSummary")).unwrap_or(false)
 }
 
-/// After a recording: chapter the meeting when post-meeting AI is switched
-/// on (Settings → Summary → auto-generate) and it has no chapters yet.
+/// After a recording: chapter the meeting when auto-chapters are on (see
+/// [`is_auto_enabled`]) and it has no chapters yet.
 /// Best-effort; failures are logged and emitted, never raised.
 pub async fn maybe_auto_chapter(
     sink: SharedEventSink,
@@ -666,6 +668,8 @@ mod tests {
     fn auto_flag() {
         assert!(is_auto_enabled(Some(r#"{"isAutoSummary":true}"#)));
         assert!(!is_auto_enabled(Some(r#"{"isAutoSummary":false}"#)));
+        assert!(is_auto_enabled(Some(r#"{"isAutoSummary":false,"isAutoChapters":true}"#)));
+        assert!(!is_auto_enabled(Some(r#"{"isAutoSummary":true,"isAutoChapters":false}"#)));
         assert!(!is_auto_enabled(Some("not json")));
         assert!(!is_auto_enabled(None));
     }

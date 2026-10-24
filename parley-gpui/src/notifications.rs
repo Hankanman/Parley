@@ -541,7 +541,7 @@ async fn reminder_tick(pool: sqlx::SqlitePool, already_notified: &mut HashSet<St
 
     let now = Utc::now();
     let horizon = now + chrono::Duration::minutes(max_minutes as i64 + 1);
-    let events = match CalendarRepository::list_events_in_range(&pool, now, horizon).await {
+    let events = match CalendarRepository::list_active_events_in_range(&pool, now, horizon).await {
         Ok(events) => events,
         Err(e) => {
             log::warn!("meeting reminder loop: failed to list upcoming events: {}", e);

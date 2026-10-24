@@ -126,6 +126,8 @@ sqlx = { version = "0.8", features = [ "runtime-tokio", "sqlite", "chrono"] }
 # already in the tree, rustybuzz being krilla's own shaper), so no font is
 # embedded in the binary.
 pulldown-cmark = { version = "0.13", default-features = false }
+# Same zip as docx-rs, to patch its styles.xml (see export::docx).
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 docx-rs = { version = "0.4", default-features = false }
 krilla = { version = "0.8", default-features = false, features = ["simple-text"] }
 fontdb = "0.23"

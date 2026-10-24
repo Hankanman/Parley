@@ -294,11 +294,11 @@ impl MeetingView {
         })];
         subscriptions.push(cx.subscribe(&ask_panel, |this, _, event: &ask::AskPanelEvent, cx| {
             let ask::AskPanelEvent::JumpTo(seconds) = event;
-            this.jump_to_time(*seconds, cx);
+            this.jump_and_play(*seconds, cx);
         }));
         subscriptions.push(cx.subscribe(&moments_panel, |this, _, event: &moments::MomentsEvent, cx| {
             let moments::MomentsEvent::JumpTo(seconds) = event;
-            this.jump_to_time(*seconds, cx);
+            this.jump_and_play(*seconds, cx);
         }));
         // Chapter/bookmark markers change transcript row heights.
         subscriptions.push(cx.observe(&moments_panel, |this, _, cx| {
@@ -307,7 +307,7 @@ impl MeetingView {
         }));
         subscriptions.push(cx.subscribe(&insights_panel, |this, _, event: &insights::InsightsPanelEvent, cx| {
             let insights::InsightsPanelEvent::JumpTo(seconds) = event;
-            this.jump_to_time(*seconds, cx);
+            this.jump_and_play(*seconds, cx);
         }));
 
         let templates = parley_core::summary::templates::list_templates();
@@ -558,6 +558,32 @@ impl MeetingView {
             });
         }));
         cx.notify();
+    }
+
+    /// A chapter, bookmark, citation or monologue was clicked: show the
+    /// transcript there and play the recording from that line, both
+    /// channels, for up to [`JUMP_PLAY_SECS`]. The row's stop button (or
+    /// any other playback) stops it.
+    fn jump_and_play(&mut self, seconds: f64, cx: &mut Context<Self>) {
+        self.jump_to_time(seconds, cx);
+        let Some(ix) = format::transcript_index_for_time(&self.transcripts, seconds) else {
+            return;
+        };
+        let segment = &self.transcripts[ix];
+        let Some(start) = segment.audio_start_time.filter(|s| s.is_finite()) else {
+            return;
+        };
+        let recording_end = self
+            .transcripts
+            .iter()
+            .filter_map(|t| t.audio_end_time.or(t.audio_start_time))
+            .filter(|s| s.is_finite())
+            .fold(start, f64::max);
+        let end = (start + JUMP_PLAY_SECS).min(recording_end);
+        if end - start < 0.5 || self.meeting_folder_path.is_none() {
+            return;
+        }
+        self.play_segment(segment.id.clone(), start, end, None, cx);
     }
 
     /// Show the transcript at `seconds` — now if it's loaded, otherwise as
@@ -2324,6 +2350,10 @@ impl MeetingView {
         .detach();
     }
 }
+
+/// How much of the recording a click on a chapter, bookmark or citation
+/// plays.
+const JUMP_PLAY_SECS: f64 = 60.0;
 
 /// "Speakers: 14 → 5 (212 lines updated, 30 named lines kept)".
 pub fn rediarize_summary(report: &parley_core::speaker_diarization::rediarize::RediarizeReport) -> String {

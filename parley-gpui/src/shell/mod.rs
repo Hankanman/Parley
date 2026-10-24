@@ -515,7 +515,7 @@ impl AppShell {
                 let now = chrono::Utc::now();
                 let result = io
                     .spawn(async move {
-                        parley_core::calendar::repository::CalendarRepository::list_events_in_range(
+                        parley_core::calendar::repository::CalendarRepository::list_active_events_in_range(
                             &pool,
                             now,
                             now + chrono::Duration::hours(UPCOMING_HORIZON_HOURS),
