@@ -187,6 +187,32 @@ impl CalendarRepository {
         Ok(inserted)
     }
 
+    /// [`Self::list_events_in_range`] without cancelled events — what
+    /// "Upcoming" and meeting reminders show.
+    pub async fn list_active_events_in_range(
+        pool: &SqlitePool,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<Vec<CalendarEvent>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, CalendarEventRow>(
+            "SELECT id, source_id, ics_uid, recurrence_id, summary, description,
+                    location, organizer_name, organizer_email, start_at, end_at,
+                    is_all_day, attendees_json, raw_ics, fetched_at
+             FROM calendar_events
+             WHERE start_at < ? AND end_at > ?
+             ORDER BY start_at ASC",
+        )
+        .bind(to.to_rfc3339())
+        .bind(from.to_rfc3339())
+        .fetch_all(pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter(|r| !super::autolink::is_cancelled_event(r.raw_ics.as_deref(), r.summary.as_deref()))
+            .filter_map(|r| CalendarEvent::try_from(r).ok())
+            .collect())
+    }
+
     pub async fn list_events_in_range(
         pool: &SqlitePool,
         from: DateTime<Utc>,

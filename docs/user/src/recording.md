@@ -45,7 +45,7 @@ Parley opens the new meeting straight away, and finishes up in the background:
 
 1. It works out **who spoke when** (see [Speakers](speakers.md)).
 2. If you have downloaded a larger Whisper model (large-v3), it **re-transcribes** the meeting with it for better accuracy. While this runs, the Record page says *Refining the last meeting…*.
-3. If **Settings → Summary → Auto-summarize after recording** is on, it writes the **summary** and **chapters**. Otherwise you generate a summary yourself from the meeting page.
+3. If **Settings → Summary → Auto-summarize after recording** is on, it writes the **summary**, and with **Auto-generate chapters after recording** on, the **chapters**. Otherwise you generate them yourself from the meeting page.
 
 ## Automatic call detection
 

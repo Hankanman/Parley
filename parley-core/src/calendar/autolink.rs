@@ -129,16 +129,17 @@ fn ics_props(raw: &str) -> impl Iterator<Item = (String, &str)> {
 }
 
 fn is_cancelled(c: &Candidate) -> bool {
-    let by_status = c.raw_ics.as_deref().is_some_and(|raw| {
+    is_cancelled_event(c.raw_ics.as_deref(), c.event.summary.as_deref())
+}
+
+/// Whether an event was cancelled: `STATUS:CANCELLED` in its ICS, or
+/// Outlook's "Canceled: …" title (Outlook keeps cancelled meetings in the
+/// feed with only the title changed).
+pub fn is_cancelled_event(raw_ics: Option<&str>, summary: Option<&str>) -> bool {
+    let by_status = raw_ics.is_some_and(|raw| {
         ics_props(raw).any(|(n, v)| n == "STATUS" && v.eq_ignore_ascii_case("CANCELLED"))
     });
-    let summary = c
-        .event
-        .summary
-        .as_deref()
-        .unwrap_or_default()
-        .trim_start()
-        .to_lowercase();
+    let summary = summary.unwrap_or_default().trim_start().to_lowercase();
     by_status || summary.starts_with("canceled:") || summary.starts_with("cancelled:")
 }
 
@@ -469,6 +470,16 @@ pub async fn find_event_for_recording(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cancelled_by_status_or_outlook_title() {
+        assert!(is_cancelled_event(Some("BEGIN:VEVENT\r\nSTATUS:CANCELLED\r\nEND:VEVENT"), Some("Sync")));
+        assert!(is_cancelled_event(None, Some("Canceled: Weekly sync")));
+        assert!(is_cancelled_event(None, Some("  cancelled: Weekly sync")));
+        assert!(!is_cancelled_event(Some("STATUS:CONFIRMED"), Some("Weekly sync")));
+        assert!(!is_cancelled_event(None, Some("Review cancelled orders")));
+        assert!(!is_cancelled_event(None, None));
+    }
+
     use super::*;
     use chrono::TimeZone;
 

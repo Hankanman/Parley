@@ -18,7 +18,7 @@
 //!   key's doc comment in `parley-core`).
 //! - Language / confidence indicator / auto-summary: the `ui_config` JSON
 //!   blob (`KEY_UI_CONFIG`), keys `primaryLanguage`/
-//!   `showConfidenceIndicator`/`isAutoSummary` — camelCase because the
+//!   `showConfidenceIndicator`/`isAutoSummary`/`isAutoChapters` — camelCase because the
 //!   retired React frontend wrote the same blob, kept for compatibility.
 
 use gpui_kit::component::{
@@ -270,6 +270,24 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
                     },
                 ),
             ),
+            SettingItem::new(
+                "Auto-generate chapters after recording",
+                SettingField::switch(
+                    // Unset follows the auto-summary switch, which used to
+                    // control chapters too (see `chapters::is_auto_enabled`).
+                    |cx: &App| {
+                        let cache = SettingsCache::global(cx);
+                        cache.ui_bool("isAutoChapters", cache.ui_bool("isAutoSummary", false))
+                    },
+                    {
+                        let view = view.clone();
+                        move |val: bool, cx: &mut App| {
+                            super::state::save_ui_field(cx, &view, "isAutoChapters", serde_json::Value::Bool(val));
+                        }
+                    },
+                ),
+            )
+            .description("Split each new meeting into topic chapters with the summary model."),
         ]),
     );
 

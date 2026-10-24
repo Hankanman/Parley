@@ -26,9 +26,11 @@ The transcript text itself can't be edited. If it's poor, try [re-transcribing](
 
 ## Chapters and bookmarks
 
-The **Chapters** strip above the transcript lets you jump around the meeting by topic. Click **Generate chapters** to have the AI split the meeting into chapters (this happens automatically if *Auto-summarize after recording* is on). Chapter headings also appear inside the transcript.
+The **Chapters** strip above the transcript lets you jump around the meeting by topic. Click **Generate chapters** to have the AI split the meeting into chapters (this happens automatically if *Auto-generate chapters after recording* is on). Chapter headings also appear inside the transcript.
 
 [Bookmarks](recording.md#bookmarks) you made while recording are listed here too. Click one to jump to it, give it a label, or delete it.
+
+Clicking a chapter, a bookmark, a citation in Ask or the longest monologue in Insights also plays the recording from that point, for up to a minute. Click ■ on the playing line to stop it.
 
 ## Summary
 
@@ -73,7 +75,7 @@ Under the summary, add your own **Notes** to a meeting. They're included the nex
 
 ## Ask
 
-The **Ask** tab answers questions about this meeting, such as *"What did Priya say about the launch date?"*. Answers cite the transcript with timestamps you can click. To ask across all your meetings, use [Ask Parley](ask.md).
+The **Ask** tab answers questions about this meeting, such as *"What did Priya say about the launch date?"*. Answers cite the transcript with timestamps you can click to jump there and hear it. To ask across all your meetings, use [Ask Parley](ask.md).
 
 ## Insights
 
