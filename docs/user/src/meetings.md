@@ -21,7 +21,7 @@ Each line shows who spoke, when, and what they said.
 - Click a **speaker name** to say who it really is; see [Speakers](speakers.md).
 - **Copy transcript** copies the whole transcript with timestamps.
 
-To find something inside transcripts, use **Search meetings…** at the top of the sidebar, which searches every meeting.
+To find something inside transcripts, use **Search meetings…** at the top of the sidebar, which searches every meeting. Click a result under *In transcripts* to open the meeting at the matching line.
 
 The transcript text itself can't be edited. If it's poor, try [re-transcribing](import.md#re-transcribing-a-meeting) with a larger model or a fixed language, and add tricky words to your [custom vocabulary](models.md#custom-vocabulary).
 
@@ -95,4 +95,4 @@ The header shows the [calendar event](calendar.md) a meeting is linked to, with 
 
 ### Export to a notes folder (Obsidian)
 
-To keep a copy of every meeting in a notes app such as Obsidian, open **Settings → Integrations → Export folder** and **Choose…** a folder, such as your vault. After every summary (and every time you save an edited summary) Parley writes a Markdown note named `YYYY-MM-DD Title.md`, with the title, date, duration, attendees and tags in its front matter. Parley only ever updates its own notes, but changes you make to them in another app are overwritten the next time that meeting's summary changes.
+To keep a copy of every meeting in a notes app such as Obsidian, open **Settings → Integrations → Export folder** and **Choose…** a folder, such as your vault. After every summary (and every time you save an edited summary) Parley writes a Markdown note named `YYYY-MM-DD Title.md`, with the title, date, duration, attendees and tags in its front matter. **Sync all now** writes or refreshes the note for every meeting that already has a summary, and the line beside it tells you if a note couldn't be written. Parley only ever updates its own notes, but changes you make to them in another app are overwritten the next time that meeting's summary changes.

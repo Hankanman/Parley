@@ -7,6 +7,7 @@
 //! comment for why.
 
 mod about;
+mod ask_search;
 mod appearance;
 mod calendar;
 mod export_folder;

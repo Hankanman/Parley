@@ -27,4 +27,6 @@ While Ask Parley is open, Parley indexes new meetings for semantic search in the
 
 If you use [Ollama](models.md#ollama) as your summary provider, Parley uses Ollama for semantic search instead; run `ollama pull nomic-embed-text` once for it.
 
+To turn semantic search off, or (with Ollama) use a different embedding model, go to **Settings → Summary → Ask Parley search**.
+
 Answers are written by the AI model chosen in [Settings → Summary](models.md#language-model-for-summaries-and-ask). With a cloud provider, the matching transcript passages are sent to it.

@@ -21,7 +21,7 @@ That's it: Parley opens on the **Record** page, ready for your first meeting. No
 
 The sidebar on the left holds everything:
 
-- **Search meetings…** filters your meetings by title as you type, and after a moment also searches inside transcripts (shown under *In transcripts*).
+- **Search meetings…** filters your meetings by title as you type, and after a moment also searches inside transcripts (shown under *In transcripts*; click one to open the meeting at that line).
 - **Meetings**
   - **Record**: start and control a recording. See [Recording a meeting](recording.md).
   - **Ask Parley**: ask questions across all your meetings. See [Ask Parley](ask.md).

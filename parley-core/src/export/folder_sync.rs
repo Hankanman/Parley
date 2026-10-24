@@ -76,11 +76,32 @@ pub async fn save_settings(
         .map_err(|e| format!("Failed to save export folder settings: {e}"))
 }
 
+/// The most recent failure to write a note, for Settings → Integrations to
+/// show. Cleared by the next successful write.
+static LAST_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// The most recent note-writing failure, if the last write failed.
+pub fn last_error() -> Option<String> {
+    LAST_ERROR.lock().ok().and_then(|e| e.clone())
+}
+
+fn record_result(result: &Result<Option<PathBuf>, String>) {
+    if let Ok(mut slot) = LAST_ERROR.lock() {
+        match result {
+            Ok(Some(_)) => *slot = None,
+            Ok(None) => {}
+            Err(e) => *slot = Some(e.clone()),
+        }
+    }
+}
+
 /// Hook for the summary pipeline: sync the meeting's note if folder sync is
 /// on. Best-effort — logs and returns; a failure here must never affect the
 /// summary, which is already saved.
 pub async fn sync_after_summary(pool: &SqlitePool, meeting_id: &str) {
-    match sync_meeting_note(pool, meeting_id).await {
+    let result = sync_meeting_note(pool, meeting_id).await;
+    record_result(&result);
+    match result {
         Ok(Some(path)) => info!(
             "export folder: wrote note for {meeting_id} to {}",
             path.display()
@@ -88,6 +109,45 @@ pub async fn sync_after_summary(pool: &SqlitePool, meeting_id: &str) {
         Ok(None) => {}
         Err(e) => warn!("export folder: failed to write note for {meeting_id}: {e}"),
     }
+}
+
+/// What [`sync_all`] did.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SyncAllReport {
+    pub written: usize,
+    /// `(meeting title, error)` for each note that couldn't be written.
+    pub failed: Vec<(String, String)>,
+}
+
+/// Write (or refresh) the note for every meeting that has a summary — the
+/// "Sync all now" button. Errors when folder sync is off or has no folder.
+pub async fn sync_all(pool: &SqlitePool) -> Result<SyncAllReport, String> {
+    if load_settings(pool).await.active_folder().is_none() {
+        return Err("Choose a folder and turn on note writing first.".to_string());
+    }
+    let meetings: Vec<(String, String)> = sqlx::query_as(
+        "SELECT m.id, m.title FROM meetings m
+         JOIN summary_processes sp ON sp.meeting_id = m.id
+         WHERE sp.result IS NOT NULL AND sp.result != ''
+         ORDER BY m.created_at",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list meetings: {e}"))?;
+    let mut report = SyncAllReport::default();
+    for (id, title) in meetings {
+        let result = sync_meeting_note(pool, &id).await;
+        record_result(&result);
+        match result {
+            Ok(Some(_)) => report.written += 1,
+            Ok(None) => {}
+            Err(e) => {
+                warn!("export folder: failed to write note for {id}: {e}");
+                report.failed.push((title, e));
+            }
+        }
+    }
+    Ok(report)
 }
 
 /// Write (or update) the meeting's note in the export folder. `Ok(None)`
@@ -387,6 +447,49 @@ fn replace_atomically(folder: &Path, target: &Path, content: &str) -> Result<(),
 
 #[cfg(test)]
 mod tests {
+
+    async fn sync_pool() -> SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn sync_all_writes_every_summarised_meeting() {
+        let pool = sync_pool().await;
+        assert!(sync_all(&pool).await.unwrap_err().contains("Choose a folder"));
+
+        let dir = tempfile::tempdir().unwrap();
+        save_settings(
+            &pool,
+            &ExportFolderSettings { enabled: true, folder: Some(dir.path().to_string_lossy().into()) },
+        )
+        .await
+        .unwrap();
+        let now = "2026-10-20T09:00:00+00:00";
+        for (id, title, summary) in [("m1", "Sync", Some("## Summary\nDone.")), ("m2", "No summary", None)] {
+            sqlx::query("INSERT INTO meetings (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)")
+                .bind(id).bind(title).bind(now).bind(now)
+                .execute(&pool).await.unwrap();
+            if let Some(summary) = summary {
+                sqlx::query("INSERT INTO summary_processes (meeting_id, status, created_at, updated_at, result) VALUES (?, 'completed', ?, ?, ?)")
+                    .bind(id).bind(now).bind(now).bind(summary)
+                    .execute(&pool).await.unwrap();
+            }
+        }
+
+        let report = sync_all(&pool).await.unwrap();
+        assert_eq!(report.written, 1);
+        assert!(report.failed.is_empty());
+        let notes: Vec<_> = fs::read_dir(dir.path()).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert_eq!(last_error(), None);
+    }
+
     use super::*;
     use crate::export::tests::sample;
 

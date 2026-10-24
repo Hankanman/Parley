@@ -8,7 +8,7 @@
 //! the shared settings state.
 
 use gpui_kit::component::{
-    ActiveTheme,
+    ActiveTheme, Disableable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     setting::{SettingField, SettingGroup, SettingItem},
@@ -24,6 +24,10 @@ use crate::runtime::Io;
 #[derive(Default)]
 struct ExportFolderCache {
     settings: ExportFolderSettings,
+    /// "Sync all now" is running.
+    syncing: bool,
+    /// Result of the last "Sync all now", shown under the button.
+    sync_status: Option<(bool, String)>,
 }
 
 impl Global for ExportFolderCache {}
@@ -101,7 +105,93 @@ pub fn group(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Set
                 }),
             )
             .keywords(["obsidian", "export folder", "vault"]),
+            SettingItem::new(
+                "Sync all meetings",
+                SettingField::render({
+                    let view = view.clone();
+                    move |_options, _window, cx| {
+                        let cache = cx.global::<ExportFolderCache>();
+                        let active = cache.settings.active_folder().is_some();
+                        let syncing = cache.syncing;
+                        // The last "Sync all" result, else the last failure
+                        // from writing a note after a summary.
+                        let status = cache.sync_status.clone().or_else(|| {
+                            folder_sync::last_error().map(|e| (false, format!("Last note couldn't be written: {e}")))
+                        });
+                        let (ok_color, err_color) = (cx.theme().muted_foreground, cx.theme().danger);
+                        h_flex()
+                            .gap_3()
+                            .items_center()
+                            .flex_wrap()
+                            .child(
+                                Button::new("sync-all-export-folder")
+                                    .outline()
+                                    .label(if syncing { "Syncing…" } else { "Sync all now" })
+                                    .loading(syncing)
+                                    .disabled(!active || syncing)
+                                    .on_click({
+                                        let view = view.clone();
+                                        move |_, _, cx| sync_all(view.clone(), cx)
+                                    }),
+                            )
+                            .when_some(status, |row, (ok, text)| {
+                                row.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(if ok { ok_color } else { err_color })
+                                        .child(text),
+                                )
+                            })
+                    }
+                }),
+            )
+            .description("Write or refresh the note for every meeting that has a summary."),
         ])
+}
+
+fn sync_all(view: Entity<SettingsView>, cx: &mut App) {
+    let Some(pool) = AppServices::global(cx).pool() else {
+        return;
+    };
+    {
+        let cache = cx.global_mut::<ExportFolderCache>();
+        cache.syncing = true;
+        cache.sync_status = None;
+    }
+    let _ = view.update(cx, |_, cx| cx.notify());
+    let io = Io::global(cx);
+    cx.spawn(async move |cx| {
+        let result = io.spawn(async move { folder_sync::sync_all(&pool).await }).await;
+        let status = match result {
+            Ok(Ok(report)) => sync_all_status(&report),
+            Ok(Err(e)) => (false, e),
+            Err(e) => (false, format!("Sync failed: {e}")),
+        };
+        let _ = cx.update(|cx| {
+            let cache = cx.global_mut::<ExportFolderCache>();
+            cache.syncing = false;
+            cache.sync_status = Some(status);
+            let _ = view.update(cx, |_, cx| cx.notify());
+        });
+    })
+    .detach();
+}
+
+/// "Wrote 12 notes." / "Wrote 10 notes; 2 failed (first: …)".
+fn sync_all_status(report: &folder_sync::SyncAllReport) -> (bool, String) {
+    let notes = |n: usize| if n == 1 { "1 note".to_string() } else { format!("{n} notes") };
+    match report.failed.first() {
+        None => (true, format!("Wrote {}.", notes(report.written))),
+        Some((title, error)) => (
+            false,
+            format!(
+                "Wrote {}; {} failed (first: \"{}\": {error}).",
+                notes(report.written),
+                report.failed.len(),
+                title.trim()
+            ),
+        ),
+    }
 }
 
 fn load(view: Entity<SettingsView>, cx: &mut App) {

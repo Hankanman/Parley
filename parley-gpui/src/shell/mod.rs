@@ -393,6 +393,7 @@ impl AppShell {
                             meeting_id: r.meeting_id,
                             title: r.meeting_title,
                             snippet: r.snippet,
+                            seconds: r.audio_start_time.filter(|s| s.is_finite()),
                         });
                         let already_shown: Vec<String> =
                             meeting_list::filter_by_title(&this.meetings, &query).into_iter().map(|m| m.id.clone()).collect();
@@ -455,12 +456,21 @@ impl AppShell {
         let title = if hit.title.trim().is_empty() { "Untitled meeting".to_string() } else { hit.title.clone() };
         let label = format!("{title} — {}", hit.snippet);
         let active = matches!(&self.route, Route::Meeting(active_id) if *active_id == hit.meeting_id);
+        let seconds = hit.seconds;
         SidebarMenuItem::new(label)
             .icon(IconName::Search)
             .active(active)
             .on_click(move |_, window, cx| {
                 let id = id.clone();
-                this.update(cx, |shell, cx| shell.attempt_navigate(Route::Meeting(id), window, cx));
+                this.update(cx, |shell, cx| {
+                    let route = Route::Meeting(id);
+                    shell.attempt_navigate(route.clone(), window, cx);
+                    // Scroll to the matching line — unless an "unsaved
+                    // summary edits" prompt is holding the navigation.
+                    if let (Some(seconds), true) = (seconds, shell.route == route) {
+                        shell.meeting.update(cx, |view, cx| view.jump_when_loaded(seconds, cx));
+                    }
+                });
             })
     }
 }
