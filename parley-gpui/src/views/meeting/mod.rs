@@ -182,6 +182,8 @@ pub struct MeetingView {
     retranscribe_models: Vec<String>,
     retranscribe_model_index: Option<usize>,
     retranscribe_in_progress: bool,
+    /// "Re-detect speakers" running for this meeting (#115).
+    rediarize_in_progress: bool,
     retranscribe_progress_pct: u32,
     retranscribe_progress_message: String,
     retranscribe_error: Option<String>,
@@ -349,6 +351,7 @@ impl MeetingView {
             retranscribe_models: Vec::new(),
             retranscribe_model_index: None,
             retranscribe_in_progress: false,
+            rediarize_in_progress: false,
             retranscribe_progress_pct: 0,
             retranscribe_progress_message: String::new(),
             retranscribe_error: None,
@@ -447,6 +450,7 @@ impl MeetingView {
         self._poll_task = None;
         self.retranscribe_open = false;
         self.retranscribe_in_progress = false;
+        self.rediarize_in_progress = false;
         self.retranscribe_error = None;
         self.retranscribe_progress_pct = 0;
         self.retranscribe_progress_message = String::new();
@@ -1252,6 +1256,50 @@ impl MeetingView {
                 log::error!("meeting: retranscription failed: {e}");
             }
         });
+    }
+
+    /// Re-run speaker detection over the saved audio, keeping the text and
+    /// any speakers the user named (#115).
+    fn start_rediarize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.meeting_id.clone() else {
+            return;
+        };
+        if self.meeting_folder_path.is_none() {
+            window.push_notification(Notification::error("This meeting has no saved audio."), cx);
+            return;
+        }
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        self.rediarize_in_progress = true;
+        cx.notify();
+        window.push_notification(Notification::info("Re-detecting speakers…"), cx);
+        let sink = AppServices::global(cx).sink.clone();
+        let io = Io::global(cx);
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let result = io
+                .spawn(async move {
+                    parley_core::speaker_diarization::rediarize::rediarize_meeting(&sink, &pool, &id).await
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                this.rediarize_in_progress = false;
+                match result {
+                    Ok(Ok(report)) => {
+                        notify(cx, Notification::success(rediarize_summary(&report)));
+                        this.reload_transcript(cx);
+                    }
+                    Ok(Err(e)) => notify(cx, Notification::error(format!("Couldn't re-detect speakers: {e}"))),
+                    Err(e) => notify(cx, Notification::error(format!("Couldn't re-detect speakers: {e}"))),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn cancel_retranscribe(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
@@ -2277,6 +2325,22 @@ impl MeetingView {
     }
 }
 
+/// "Speakers: 14 → 5 (212 lines updated, 30 named lines kept)".
+pub fn rediarize_summary(report: &parley_core::speaker_diarization::rediarize::RediarizeReport) -> String {
+    let mut text = format!(
+        "Speakers: {} → {} ({} line{} updated",
+        report.speakers_before,
+        report.speakers_after,
+        report.changed,
+        if report.changed == 1 { "" } else { "s" }
+    );
+    if report.kept > 0 {
+        text.push_str(&format!(", {} named line{} kept", report.kept, if report.kept == 1 { "" } else { "s" }));
+    }
+    text.push(')');
+    text
+}
+
 /// Show a notification on the main window from a context that doesn't carry
 /// a `Window` (an async task after an `.await`, or a core-event
 /// subscription callback) — via the `MainWindow` global stashed at startup.
@@ -2712,6 +2776,15 @@ impl MeetingView {
                             .tooltip("Retranscribe audio")
                             .disabled(!can_retranscribe || self.retranscribe_in_progress)
                             .on_click(cx.listener(|this, _, window, cx| this.open_retranscribe(window, cx))),
+                    )
+                    .child(
+                        Button::new("rediarize")
+                            .ghost()
+                            .icon(Lucide::Users)
+                            .tooltip("Re-detect speakers")
+                            .loading(self.rediarize_in_progress)
+                            .disabled(!can_retranscribe || self.rediarize_in_progress || self.retranscribe_in_progress)
+                            .on_click(cx.listener(|this, _, window, cx| this.start_rediarize(window, cx))),
                     )
                     .child(
                         Button::new("copy-summary-md")

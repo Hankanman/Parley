@@ -8,6 +8,7 @@ The buttons in the header let you:
 
 - **Rename** the meeting (the pencil).
 - **Retranscribe audio**; see [Re-transcribing a meeting](import.md#re-transcribing-a-meeting).
+- **Re-detect speakers**; see [Re-detecting speakers](speakers.md#re-detecting-speakers).
 - **Copy meeting as Markdown** or **as JSON**, to paste elsewhere.
 - **Export meeting…**; see [Exporting](#exporting).
 - **Delete meeting**. This removes the transcript, summary, notes and action items from Parley. The audio file stays in your recordings folder until you delete it there.
