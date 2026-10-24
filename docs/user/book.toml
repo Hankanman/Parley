@@ -15,6 +15,7 @@ preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/Hankanman/Parley"
 edit-url-template = "https://github.com/Hankanman/Parley/edit/main/docs/user/{path}"
 additional-css = ["theme/parley.css"]
+additional-js = ["theme/parley.js"]
 no-section-label = true
 
 [output.html.search]

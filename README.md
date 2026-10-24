@@ -30,7 +30,7 @@ Parley records your meetings, transcribes them live and writes the summary, the 
 - **Import and re-transcribe.** Turn an existing audio file into a meeting, or run a past meeting again with a different model or language.
 - **Export.** Markdown, PDF, Word, JSON or SRT subtitles.
 - **Crash safe.** Audio is checkpointed while recording; an interrupted meeting is recovered on the next launch.
-- **MCP server.** [`parley-mcp`](parley-mcp/README.md) exposes your meetings, transcripts, summaries and action items to Claude and other MCP clients, reading the local database directly. It ships in the AppImage and the installer puts it at `~/.local/bin/parley-mcp`; see the [guide](https://meetparley.app/docs/mcp.html).
+- **MCP server.** [`parley-mcp`](https://meetparley.app/docs/mcp.html) exposes your meetings, transcripts, summaries and action items to Claude and other MCP clients, reading the local database directly. It ships in the AppImage and the installer puts it at `~/.local/bin/parley-mcp`.
 
 ### Your choice of AI
 
@@ -54,7 +54,7 @@ All screenshots use the fictional demo data in [`parley-core/examples/demo/seed.
 
 ## Privacy
 
-Audio, transcripts, summaries, voice profiles and settings are stored on your disk and never uploaded by Parley. There is no telemetry or crash reporting. Parley only uses the network when you ask it to: downloading models, syncing calendar feeds you added, or calling a remote LLM provider you configured. See [PRIVACY_POLICY.md](PRIVACY_POLICY.md) for the full list.
+Audio, transcripts, summaries, voice profiles and settings are stored on your disk and never uploaded by Parley. There is no telemetry or crash reporting. Parley only uses the network when you ask it to: downloading models, syncing calendar feeds you added, or calling a remote LLM provider you configured. See [Your data and privacy](https://meetparley.app/docs/data.html) for where everything is stored, and the [privacy policy](PRIVACY_POLICY.md) for the full list.
 
 ## Installation
 
@@ -68,7 +68,7 @@ This picks the Vulkan (GPU) build if you have an NVIDIA, AMD or Intel GPU with a
 
 Or download the `.AppImage` from the [latest release](https://github.com/Hankanman/Parley/releases/latest) yourself, make it executable (`chmod +x`) and run it. AppImages need FUSE's `fusermount`, which most desktops already have (otherwise install your distribution's `fuse3` package).
 
-The first run walks you through downloading a Whisper model and the built-in summary model.
+The first run walks you through downloading a Whisper model and the built-in summary model. The [user guide](https://meetparley.app/docs/) covers everything after that: [installing](https://meetparley.app/docs/install.html), [recording](https://meetparley.app/docs/recording.html), [models and AI providers](https://meetparley.app/docs/models.html) and [troubleshooting](https://meetparley.app/docs/troubleshooting.html).
 
 ## Build from source
 
