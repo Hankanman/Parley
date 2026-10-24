@@ -55,6 +55,7 @@ pub mod model;
 pub mod offline;
 mod profile_matcher;
 mod refinement;
+pub mod rediarize;
 
 pub mod service;
 

@@ -70,6 +70,10 @@ pub struct SpeakersView {
     self_finishing: bool,
 
     pending_toasts: Vec<(NotificationType, String)>,
+
+    /// "Re-detect speakers in all meetings" (#115): (done, total) while it
+    /// runs.
+    rediarize_all: Option<(usize, usize)>,
 }
 
 impl SpeakersView {
@@ -88,6 +92,7 @@ impl SpeakersView {
             email_input,
             merging_id: None,
             relearning_id: None,
+            rediarize_all: None,
             self_status: None,
             self_mode: SelfVoiceMode::Idle,
             self_progress: None,
@@ -576,6 +581,112 @@ impl SpeakersView {
                      remove one you no longer need.",
                 ),
             )
+            .child(
+                v_flex()
+                    .pt_2()
+                    .gap_1()
+                    .items_start()
+                    .child(
+                        Button::new("rediarize-all")
+                            .outline()
+                            .icon(AssetIcon::Users)
+                            .label(match self.rediarize_all {
+                                Some((done, total)) => format!("Re-detecting… {done}/{total}"),
+                                None => "Re-detect speakers in all meetings".to_string(),
+                            })
+                            .disabled(self.rediarize_all.is_some())
+                            .on_click(cx.listener(|this, _, _, cx| this.start_rediarize_all(cx))),
+                    )
+                    .child(
+                        div().text_xs().text_color(cx.theme().muted_foreground).child(
+                            "Re-runs speaker detection on meetings with saved audio. Speakers \
+                             you've named are kept; the text isn't changed.",
+                        ),
+                    ),
+            )
+    }
+
+    /// Re-diarize every meeting that still has "Speaker N" lines, one at a
+    /// time, then report the total.
+    fn start_rediarize_all(&mut self, cx: &mut Context<Self>) {
+        use parley_core::speaker_diarization::rediarize;
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        let sink = AppServices::global(cx).sink.clone();
+        let io = Io::global(cx);
+        self.rediarize_all = Some((0, 0));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let ids = {
+                let pool = pool.clone();
+                io.spawn(async move { rediarize::meetings_to_rediarize(&pool).await }).await
+            };
+            let ids = match ids {
+                Ok(Ok(ids)) => Ok(ids),
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(e) => Err(e.to_string()),
+            };
+            let ids = match ids {
+                Ok(ids) => ids,
+                Err(e) => {
+                    let _ = this.update(cx, |this, cx| {
+                        this.rediarize_all = None;
+                        this.toast(NotificationType::Error, format!("Couldn't list meetings: {e}"));
+                        cx.notify();
+                    });
+                    return;
+                }
+            };
+            let total = ids.len();
+            let (mut before, mut after, mut done, mut failed) = (0usize, 0usize, 0usize, 0usize);
+            for id in ids {
+                let _ = this.update(cx, |this, cx| {
+                    this.rediarize_all = Some((done, total));
+                    cx.notify();
+                });
+                let (pool, sink) = (pool.clone(), sink.clone());
+                let result = io
+                    .spawn(async move { rediarize::rediarize_meeting(&sink, &pool, &id).await })
+                    .await;
+                match result {
+                    Ok(Ok(report)) => {
+                        before += report.speakers_before;
+                        after += report.speakers_after;
+                    }
+                    Ok(Err(e)) => {
+                        log::warn!("re-diarize all: {e}");
+                        failed += 1;
+                    }
+                    Err(e) => {
+                        log::warn!("re-diarize all: task failed: {e}");
+                        failed += 1;
+                    }
+                }
+                done += 1;
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.rediarize_all = None;
+                let message = if total == 0 {
+                    "No meetings need speakers re-detected.".to_string()
+                } else {
+                    let mut m = format!(
+                        "Re-detected speakers in {} meeting{}: {before} → {after} speaker labels in total.",
+                        total - failed,
+                        if total - failed == 1 { "" } else { "s" }
+                    );
+                    if failed > 0 {
+                        m.push_str(&format!(" {failed} couldn't be processed (see the log)."));
+                    }
+                    m
+                };
+                this.toast(NotificationType::Success, message);
+                this.refresh(cx);
+                crate::shell::refresh_meetings(cx);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn render_self_voice_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
