@@ -6,7 +6,8 @@ Open **Settings** from the sidebar or the tray menu. Changes are saved as soon a
 |---|---|
 | **Recording** | Recordings folder, default microphone and system audio, auto-save, live action items, call detection. See [Recording a meeting](recording.md). |
 | **Transcription** | Whisper model, custom vocabulary, model downloads. See [Transcription and AI models](models.md#transcription-whisper). |
-| **Summary** | AI provider and model, API keys, default template, transcription language, auto-summarize. See [Transcription and AI models](models.md#language-model-for-summaries-and-ask). |
+| **Summary** | AI provider and model, API keys, default template, summary output language, transcription language, auto-summarize. See [Transcription and AI models](models.md#language-model-for-summaries-and-ask). |
+| **Templates** | Create, duplicate and edit meeting templates, reorder sections, preview their layout, and choose a default. Built-in templates can be customized and restored. |
 | **Notifications** | Which desktop notifications to show. |
 | **Calendar** | Calendar feeds. See [Calendar and briefs](calendar.md). |
 | **Integrations** | The MCP server and the Markdown export folder. See [Using Parley with Claude (MCP)](mcp.md) and [Exporting](meetings.md#exporting). |

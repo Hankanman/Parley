@@ -43,6 +43,7 @@
 
 mod defaults;
 mod loader;
+pub mod manager;
 mod types;
 
 // Re-export public API

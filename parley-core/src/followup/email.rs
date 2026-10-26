@@ -10,6 +10,8 @@
 //! `action_items` table, which the user may have edited) are passed in too
 //! and, when there are any, replace whatever list the model wrote: they're
 //! the authoritative "who owes what".
+//! The summary output language also applies here. Localized drafts translate
+//! tracked task descriptions, keeping recorded owners, dates and status intact.
 //!
 //! **Generation** asks for JSON ([`json_schema`]) so the email always has the
 //! same shape, and renders it to plain text here ([`render_body`]). If the
@@ -30,6 +32,7 @@ use crate::summary::processor::{clean_llm_markdown_output, rough_token_count, Su
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
+use std::collections::BTreeMap;
 use tracing::{info, warn};
 
 /// Schema identifier sent to providers.
@@ -380,6 +383,24 @@ fn neutralize_tags(text: &str) -> String {
 
 /// "Send the deck — Ann, due Friday (done)".
 fn item_line(item: &EmailActionItem) -> String {
+    item_line_with_labels(item, None)
+}
+
+fn label<'a>(
+    labels: Option<&'a BTreeMap<String, String>>,
+    key: &str,
+    fallback: &'a str,
+) -> &'a str {
+    labels
+        .and_then(|labels| labels.get(key))
+        .map(String::as_str)
+        .unwrap_or(fallback)
+}
+
+fn item_line_with_labels(
+    item: &EmailActionItem,
+    labels: Option<&BTreeMap<String, String>>,
+) -> String {
     let mut line = one_line(&item.text, MAX_ITEM_CHARS);
     let owner = item
         .owner
@@ -391,14 +412,15 @@ fn item_line(item: &EmailActionItem) -> String {
         .as_deref()
         .map(|d| one_line(d, 80))
         .filter(|d| !d.is_empty());
+    let due_label = label(labels, "due", "due");
     match (owner, due) {
-        (Some(o), Some(d)) => line = format!("{o}: {line} (due {d})"),
+        (Some(o), Some(d)) => line = format!("{o}: {line} ({due_label} {d})"),
         (Some(o), None) => line = format!("{o}: {line}"),
-        (None, Some(d)) => line = format!("{line} (due {d})"),
+        (None, Some(d)) => line = format!("{line} ({due_label} {d})"),
         (None, None) => {}
     }
     if item.done {
-        line.push_str(" (done)");
+        line.push_str(&format!(" ({})", label(labels, "done", "done")));
     }
     line
 }
@@ -549,6 +571,17 @@ pub fn render_body(
     recipients: &[String],
     sender: Option<&str>,
 ) -> String {
+    render_body_with_labels(email, tracked, tone, recipients, sender, None)
+}
+
+fn render_body_with_labels(
+    email: &ParsedEmail,
+    tracked: &[EmailActionItem],
+    tone: Tone,
+    recipients: &[String],
+    sender: Option<&str>,
+    labels: Option<&BTreeMap<String, String>>,
+) -> String {
     let mut out = String::new();
     let greeting = if email.greeting.is_empty() {
         tone.default_greeting(recipients)
@@ -561,18 +594,34 @@ pub fn render_body(
         out.push_str(&email.opening);
         out.push_str("\n\n");
     }
-    push_section(&mut out, "Key decisions:", &email.decisions);
+    push_section(
+        &mut out,
+        label(labels, "decisions", "Key decisions:"),
+        &email.decisions,
+    );
     let items: Vec<String> = if tracked.is_empty() {
-        email.action_items.iter().map(item_line).collect()
+        email
+            .action_items
+            .iter()
+            .map(|item| item_line_with_labels(item, labels))
+            .collect()
     } else {
         tracked
             .iter()
             .take(MAX_LIST_ITEMS * 2)
-            .map(item_line)
+            .map(|item| item_line_with_labels(item, labels))
             .collect()
     };
-    push_section(&mut out, "Action items:", &items);
-    push_section(&mut out, "Next steps:", &email.next_steps);
+    push_section(
+        &mut out,
+        label(labels, "action_items", "Action items:"),
+        &items,
+    );
+    push_section(
+        &mut out,
+        label(labels, "next_steps", "Next steps:"),
+        &email.next_steps,
+    );
 
     let closing = if email.closing.is_empty() {
         tone.default_closing().to_string()
@@ -614,10 +663,8 @@ pub fn parse_plain_email(raw: &str, meeting_title: &str) -> Result<(String, Stri
     for line in cleaned.lines() {
         let stripped = strip_markdown_line(line);
         if subject.is_none() && body_lines.iter().all(|l| l.trim().is_empty()) {
-            let lower = stripped.trim().to_lowercase();
-            if let Some(rest) = lower.strip_prefix("subject:") {
-                let start = stripped.trim().len() - rest.len();
-                subject = Some(plain_line(&stripped.trim()[start..], MAX_SUBJECT_CHARS));
+            if let Some(text) = subject_line(&stripped) {
+                subject = Some(text);
                 continue;
             }
         }
@@ -631,6 +678,15 @@ pub fn parse_plain_email(raw: &str, meeting_title: &str) -> Result<(String, Stri
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| default_subject(meeting_title));
     Ok((subject, format!("{}\n", body.trim_end())))
+}
+
+// Match only the ASCII protocol marker; lowercasing the whole line changes
+// byte lengths for some Unicode subjects (for example Turkish capital İ).
+fn subject_line(line: &str) -> Option<String> {
+    let line = line.trim();
+    line.get(..8)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("subject:"))?;
+    Some(plain_line(line[8..].trim(), MAX_SUBJECT_CHARS))
 }
 
 fn default_subject(meeting_title: &str) -> String {
@@ -757,11 +813,166 @@ pub async fn draft_with<L: SummaryLlm>(
     input: &EmailInput,
     tone: Tone,
 ) -> Result<EmailDraft, String> {
+    draft_with_language(llm, input, tone, None, "").await
+}
+
+const EMAIL_LABELS: &[(&str, &str)] = &[
+    ("decisions", "Key decisions:"),
+    ("action_items", "Action items:"),
+    ("next_steps", "Next steps:"),
+    ("due", "due"),
+    ("done", "done"),
+];
+
+fn localized_schema(input: &EmailInput) -> Value {
+    let mut schema = json_schema();
+    let props: serde_json::Map<String, Value> = EMAIL_LABELS
+        .iter()
+        .map(|(key, _)| (key.to_string(), json!({"type": "string"})))
+        .collect();
+    schema["properties"]["display_labels"] = json!({
+        "type": "object", "required": props.keys().cloned().collect::<Vec<_>>(),
+        "properties": props, "additionalProperties": false
+    });
+    schema["required"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("display_labels"));
+    if !input.tracked_items.is_empty() {
+        let props: serde_json::Map<String, Value> = input
+            .tracked_items
+            .iter()
+            .take(MAX_LIST_ITEMS * 2)
+            .enumerate()
+            .map(|(i, _)| (format!("item_{}", i + 1), json!({"type": "string"})))
+            .collect();
+        schema["properties"]["tracked_item_texts"] = json!({
+            "type": "object", "required": props.keys().cloned().collect::<Vec<_>>(),
+            "properties": props, "additionalProperties": false
+        });
+        schema["required"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("tracked_item_texts"));
+    }
+    schema
+}
+
+fn language_prompt(
+    input: &EmailInput,
+    tone: Tone,
+    structured: bool,
+    language: Option<&str>,
+    reference: &str,
+) -> Result<EmailPrompt, String> {
+    let mut prompt = build_prompt(input, tone, structured);
+    if let Some(language) = language {
+        prompt.system.push_str("\n\n");
+        prompt
+            .system
+            .push_str(&crate::summary::language::email_instruction(language)?);
+        prompt.system.push_str(
+            "\nSubject, greeting and closing must be nonempty and in the output language.",
+        );
+        if structured {
+            prompt
+                .system
+                .push_str("\nReturn display_labels with translated versions of these labels: ");
+            for (key, english) in EMAIL_LABELS {
+                prompt.system.push_str(&format!("{key}: {english}; "));
+            }
+            if !input.tracked_items.is_empty() {
+                prompt.system.push_str("\nReturn tracked_item_texts with a faithful translation of each task description in <tracked_item_texts>, using the exact item_N keys. Do not add, omit or reorder tasks. Owners, deadlines and completion status come from the tracked records and must not be changed. Return an empty action_items array; the tracked list is authoritative.");
+                prompt.user.push_str("\n<tracked_item_texts>\n");
+                for (i, item) in input
+                    .tracked_items
+                    .iter()
+                    .take(MAX_LIST_ITEMS * 2)
+                    .enumerate()
+                {
+                    prompt.user.push_str(&format!(
+                        "item_{}: {}\n",
+                        i + 1,
+                        prompt_text(&item.text, MAX_ITEM_CHARS)
+                    ));
+                }
+                prompt.user.push_str("</tracked_item_texts>\n");
+            }
+        }
+        if language == "auto" && !reference.trim().is_empty() {
+            prompt.user.push_str(&format!(
+                "\n<language_reference>\n{}\n</language_reference>\n",
+                prompt_text(reference, 1500)
+            ));
+        }
+    }
+    Ok(prompt)
+}
+
+struct EmailTranslations {
+    labels: BTreeMap<String, String>,
+    tracked: Vec<EmailActionItem>,
+}
+
+impl EmailTranslations {
+    fn parse(raw: &str, email: &ParsedEmail, input: &EmailInput) -> Result<Self, String> {
+        if email.subject.is_empty() || email.greeting.is_empty() || email.closing.is_empty() {
+            return Err("The translated email needs a subject, greeting and sign-off.".into());
+        }
+        let value = extract_json_object(raw).ok_or("response contains no JSON object")?;
+        let text = |object: &str, key: &str, max: usize| {
+            value
+                .get(object)
+                .and_then(|v| v.get(key))
+                .and_then(Value::as_str)
+                .map(|s| plain_line(s, max))
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| format!("Missing translation: {object}.{key}"))
+        };
+        let labels = EMAIL_LABELS
+            .iter()
+            .map(|(key, _)| {
+                Ok((
+                    key.to_string(),
+                    text("display_labels", key, MAX_LINE_CHARS)?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, String>>()?;
+        let tracked = input
+            .tracked_items
+            .iter()
+            .take(MAX_LIST_ITEMS * 2)
+            .enumerate()
+            .map(|(i, original)| {
+                let mut item = original.clone();
+                item.text = text(
+                    "tracked_item_texts",
+                    &format!("item_{}", i + 1),
+                    MAX_ITEM_CHARS,
+                )?;
+                Ok(item)
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(Self { labels, tracked })
+    }
+}
+
+async fn draft_with_language<L: SummaryLlm>(
+    llm: &L,
+    input: &EmailInput,
+    tone: Tone,
+    language: Option<&str>,
+    reference: &str,
+) -> Result<EmailDraft, String> {
     let source = input.material.source();
     let now = Utc::now().to_rfc3339();
 
-    let structured = build_prompt(input, tone, true);
-    let schema = json_schema();
+    let structured = language_prompt(input, tone, true, language, reference)?;
+    let schema = if language.is_some() {
+        localized_schema(input)
+    } else {
+        json_schema()
+    };
     let attempt = llm
         .complete(
             &structured.system,
@@ -774,19 +985,31 @@ pub async fn draft_with<L: SummaryLlm>(
             None,
         )
         .await;
-    match attempt.and_then(|raw| parse_email_json(&raw)) {
-        Ok(email) => {
+    match attempt.and_then(|raw| {
+        let email = parse_email_json(&raw)?;
+        let translations = if language.is_some() {
+            Some(EmailTranslations::parse(&raw, &email, input)?)
+        } else {
+            None
+        };
+        Ok((email, translations))
+    }) {
+        Ok((email, translations)) => {
             let subject = if email.subject.is_empty() {
                 default_subject(&input.meeting_title)
             } else {
                 email.subject.clone()
             };
-            let body = render_body(
+            let body = render_body_with_labels(
                 &email,
-                &input.tracked_items,
+                translations
+                    .as_ref()
+                    .map(|t| t.tracked.as_slice())
+                    .unwrap_or(&input.tracked_items),
                 tone,
                 &input.recipients,
                 input.sender.as_deref(),
+                translations.as_ref().map(|t| &t.labels),
             );
             return Ok(EmailDraft {
                 subject,
@@ -801,10 +1024,22 @@ pub async fn draft_with<L: SummaryLlm>(
         }
     }
 
-    let plain = build_prompt(input, tone, false);
+    let plain = language_prompt(input, tone, false, language, reference)?;
     let raw = llm
         .complete(&plain.system, &plain.user, None, None, None)
         .await?;
+    let translated_subject = clean_llm_markdown_output(&raw)
+        .lines()
+        .map(strip_markdown_line)
+        .find(|line| !line.trim().is_empty())
+        .and_then(|line| subject_line(&line))
+        .filter(|s| !s.is_empty());
+    if language.is_some() && translated_subject.is_none() {
+        return Err(
+            "The model omitted the translated email subject. Try generating the draft again."
+                .into(),
+        );
+    }
     let (subject, body) = parse_plain_email(&raw, &input.meeting_title)?;
     Ok(EmailDraft {
         subject,
@@ -949,6 +1184,31 @@ pub fn transcript_budget(context_tokens: usize) -> usize {
         .clamp(MIN_TRANSCRIPT_TOKENS, MAX_TRANSCRIPT_TOKENS)
 }
 
+/// A bounded first-and-last excerpt lets automatic selection follow the
+/// transcript even when an older stored summary was written in English.
+async fn transcript_language_reference(
+    pool: &SqlitePool,
+    meeting_id: &str,
+) -> Result<String, String> {
+    let mut first: Vec<String> = sqlx::query_scalar(
+        "SELECT transcript FROM transcripts WHERE meeting_id = ? ORDER BY sequence_id ASC LIMIT 4",
+    )
+    .bind(meeting_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to read meeting language reference: {e}"))?;
+    let mut last: Vec<String> = sqlx::query_scalar(
+        "SELECT transcript FROM transcripts WHERE meeting_id = ? ORDER BY sequence_id DESC LIMIT 4",
+    )
+    .bind(meeting_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to read meeting language reference: {e}"))?;
+    last.reverse();
+    first.extend(last);
+    Ok(prompt_text(&first.join("\n"), 1500))
+}
+
 /// Draft a follow-up email for `meeting_id` with the summary model, and
 /// store it as the meeting's latest draft (replacing any earlier one).
 pub async fn draft_followup_email(
@@ -956,6 +1216,7 @@ pub async fn draft_followup_email(
     meeting_id: String,
     tone: Tone,
 ) -> Result<EmailDraft, String> {
+    let language = crate::summary::language::load(&pool).await?;
     let config = super::resolve_llm(&pool).await?;
     let budget = transcript_budget(config.token_threshold().await);
     let input = load_input(&pool, &meeting_id, budget).await?;
@@ -966,7 +1227,12 @@ pub async fn draft_followup_email(
         tone.as_str(),
         input.material.source().as_str()
     );
-    let draft = draft_with(&config, &input, tone).await?;
+    let reference = if language == "auto" {
+        transcript_language_reference(&pool, &meeting_id).await?
+    } else {
+        String::new()
+    };
+    let draft = draft_with_language(&config, &input, tone, Some(&language), &reference).await?;
     FollowupDraftRepository::save(&pool, &meeting_id, &draft)
         .await
         .map_err(|e| format!("failed to save the draft: {e}"))?;
@@ -1296,6 +1562,149 @@ mod tests {
         assert!(fitted.contains("line number 399 "));
         assert!(fitted.contains("omitted"));
         assert_eq!(fit_transcript(&lines[..2], 600), lines[..2].join("\n"));
+    }
+
+    fn spanish_json() -> Value {
+        json!({
+            "subject": "Resumen de la reunión", "greeting": "Hola a todos,",
+            "opening": "Acordamos publicar la nueva versión.",
+            "decisions": ["Publicar la versión en septiembre"],
+            "action_items": [{"text": "Preparar el anuncio", "owner": "Ana", "due": "2026-10-30"}],
+            "next_steps": ["Revisar los avances"], "closing": "Gracias,",
+            "display_labels": {"decisions": "Decisiones clave:", "action_items": "Tareas:",
+                "next_steps": "Próximos pasos:", "due": "vence", "done": "completada"}
+        })
+    }
+
+    #[tokio::test]
+    async fn selected_language_covers_subject_body_labels_and_every_tone() {
+        let response = spanish_json().to_string();
+        for tone in Tone::ALL {
+            let llm = MockLlm::new(vec![Ok(&response)]);
+            let draft = draft_with_language(&llm, &structured_input(), tone, Some("es"), "")
+                .await
+                .unwrap();
+            assert_eq!(draft.tone, tone);
+            assert_eq!(draft.subject, "Resumen de la reunión");
+            assert!(draft.body.starts_with("Hola a todos,"));
+            assert!(draft.body.contains("Decisiones clave:"));
+            assert!(draft.body.contains("Tareas:"));
+            assert!(draft.body.contains("Próximos pasos:"));
+            assert!(draft.body.contains("vence 2026-10-30"));
+            assert!(!draft.body.contains("Key decisions:"));
+            assert!(!draft.body.contains("Action items:"));
+            assert!(!draft.body.contains("(due "));
+            assert!(llm.calls.lock().unwrap()[0].0.contains("Español"));
+        }
+    }
+
+    #[tokio::test]
+    async fn translated_tracked_tasks_preserve_owners_dates_status_and_source_records() {
+        let mut input = structured_input();
+        input.tracked_items = vec![EmailActionItem {
+            text: "Send the minutes".into(),
+            owner: Some("Bob".into()),
+            due: Some("2026-10-30".into()),
+            done: true,
+        }];
+        let mut value = spanish_json();
+        value["tracked_item_texts"] = json!({"item_1": "Enviar el acta"});
+        let response = value.to_string();
+        let llm = MockLlm::new(vec![Ok(&response)]);
+        let draft = draft_with_language(&llm, &input, Tone::Concise, Some("es"), "")
+            .await
+            .unwrap();
+        assert!(draft
+            .body
+            .contains("Bob: Enviar el acta (vence 2026-10-30) (completada)"));
+        assert!(!draft.body.contains("Preparar el anuncio"));
+        assert!(!draft.body.contains("Ana:"));
+        assert_eq!(input.tracked_items[0].text, "Send the minutes");
+        let parsed = parse_email_json(&response).unwrap();
+        value["tracked_item_texts"] = json!({});
+        assert!(EmailTranslations::parse(&value.to_string(), &parsed, &input).is_err());
+    }
+
+    #[tokio::test]
+    async fn plain_fallback_retains_language_when_schema_is_rejected_or_translations_are_missing() {
+        for first in [Err("response_format unsupported"), Ok(GOOD_JSON)] {
+            let llm = MockLlm::new(vec![
+                first,
+                Ok("Subject: Resumen\n\nHola a todos,\nGracias por la reunión."),
+            ]);
+            let draft =
+                draft_with_language(&llm, &structured_input(), Tone::Friendly, Some("es"), "")
+                    .await
+                    .unwrap();
+            assert_eq!(draft.subject, "Resumen");
+            assert!(draft.body.starts_with("Hola a todos,"));
+            let calls = llm.calls.lock().unwrap();
+            assert_eq!(calls.len(), 2);
+            assert!(calls.iter().all(|call| call.0.contains("Español")));
+            assert!(calls[1].0.contains("leading Subject: marker in English"));
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_translated_greeting_and_subject_do_not_insert_english_defaults() {
+        let mut value = spanish_json();
+        value["greeting"] = json!("");
+        let response = value.to_string();
+        let llm = MockLlm::new(vec![
+            Ok(&response),
+            Ok("Hola a todos,\nResumen de la reunión."),
+        ]);
+        let error = draft_with_language(&llm, &structured_input(), Tone::Formal, Some("es"), "")
+            .await
+            .unwrap_err();
+        assert!(error.contains("translated email subject"));
+        let llm = MockLlm::new(vec![]);
+        assert!(draft_with_language(
+            &llm,
+            &structured_input(),
+            Tone::Concise,
+            Some("invalid"),
+            ""
+        )
+        .await
+        .is_err());
+        assert!(llm.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn plain_email_subjects_preserve_unicode_without_lowercase_byte_offsets() {
+        let (subject, body) = parse_plain_email(
+            "Subject: İletişim ve görüşme özeti\n\nMerhaba,\nTeşekkürler.",
+            "Meeting",
+        )
+        .unwrap();
+        assert_eq!(subject, "İletişim ve görüşme özeti");
+        assert!(body.starts_with("Merhaba,"));
+    }
+
+    #[tokio::test]
+    async fn automatic_language_uses_original_transcript_when_the_stored_summary_is_english() {
+        let pool = test_pool().await;
+        MeetingsRepository::create_recording_meeting(&pool, "lang", "Planning", None)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, speaker, sequence_id) VALUES ('lang-t', 'lang', 'Acordamos publicar la nueva versión el viernes.', 'x', 0, 'Ana', 1)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO summary_processes (meeting_id, status, created_at, updated_at, result) VALUES ('lang', 'completed', 'x', 'x', ?)")
+            .bind(json!({"markdown": "We agreed to ship the new version."}).to_string())
+            .execute(&pool).await.unwrap();
+        let input = load_input(&pool, "lang", 2000).await.unwrap();
+        assert!(matches!(input.material, Material::Summary(_)));
+        let reference = transcript_language_reference(&pool, "lang").await.unwrap();
+        let response = spanish_json().to_string();
+        let llm = MockLlm::new(vec![Ok(&response)]);
+        draft_with_language(&llm, &input, Tone::Concise, Some("auto"), &reference)
+            .await
+            .unwrap();
+        let calls = llm.calls.lock().unwrap();
+        assert!(calls[0].0.contains("original meeting transcript"));
+        assert!(calls[0].1.contains("<language_reference>"));
+        assert!(calls[0].1.contains("Acordamos publicar"));
     }
 
     async fn test_pool() -> SqlitePool {

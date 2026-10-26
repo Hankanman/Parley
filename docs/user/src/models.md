@@ -82,3 +82,31 @@ Paste your key under **API keys**, then choose a model from the list Parley fetc
 - **Auto-summarize after recording**: write the summary automatically when a recording stops. Off by default.
 - **Auto-generate chapters after recording**: split each new meeting into chapters automatically. Until you change it, it follows *Auto-summarize after recording*.
 - **Show transcription confidence**: show a coloured dot by each transcript line for how sure Whisper was of it. On by default.
+
+## Summary templates and output language
+
+![Template manager in Settings](../../images/template-manager.png)
+
+Open **Settings → Templates** to create a template or duplicate an existing one.
+Edit its name, description and sections. Each section has a title, instructions,
+a paragraph/list/short-text format, and an optional item-format hint. Use the
+arrows to reorder sections, then **Save template**. **Discard changes** restores
+the saved version. **Use as default** selects it for summaries; the meeting's
+summary toolbar can also select another template.
+
+Editing a built-in template saves a local override. **Restore built-in** removes
+that override and restores the original. Custom templates can be deleted; removal
+requires confirmation. Template files stay in the application data directory and
+survive application updates. Existing generated summaries keep their saved text.
+
+Under **Settings → Summary → Language & summaries**, choose **Summary output
+language** independently of the template and transcription language. **Follow
+transcript** uses the predominant language of the meeting. For example, choose
+**Español** to keep an English template but generate Spanish notes, titles and
+section headings. Regenerate a previous summary to apply a new template or
+language. The preference applies to summary reports (including automatic summaries)
+and newly generated or regenerated follow-up emails. Email subjects, greetings,
+section labels and sign-offs follow the same language. With **Follow transcript**,
+an excerpt of the original meeting guides the email language even when an older
+summary is in English. Existing email drafts and manual edits are preserved until
+you choose to regenerate.

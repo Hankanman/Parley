@@ -224,6 +224,23 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
     page = page.group(
         SettingGroup::new().title("Language & summaries").items(vec![
             SettingItem::new(
+                "Summary output language",
+                SettingField::dropdown(
+                    parley_core::summary::language::OPTIONS.iter()
+                        .map(|(id, name)| (SharedString::from(id.to_string()), SharedString::from(name.to_string()))).collect(),
+                    |cx: &App| {
+                        let value = SettingsCache::global(cx).ui_str(parley_core::summary::language::UI_KEY);
+                        SharedString::from(if value.is_empty() { "auto".into() } else { value })
+                    },
+                    {
+                        let view = view.clone();
+                        move |value: SharedString, cx: &mut App| super::state::save_ui_field(
+                            cx, &view, parley_core::summary::language::UI_KEY, serde_json::Value::String(value.to_string()),
+                        )
+                    },
+                ),
+            ).description("Applies to summaries and follow-up emails, including subjects, titles and headings. Templates can stay in any language; regenerate existing outputs to apply a change."),
+            SettingItem::new(
                 "Transcription language",
                 SettingField::input(
                     |cx: &App| SharedString::from(SettingsCache::global(cx).ui_str("primaryLanguage")),

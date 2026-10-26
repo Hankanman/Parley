@@ -18,6 +18,7 @@ mod notifications;
 mod recording;
 mod state;
 mod summary;
+mod templates;
 mod transcription;
 
 // Re-exported for `main.rs` to call once at startup after `state::load` —
@@ -31,10 +32,12 @@ use gpui_kit::*;
 use crate::app_state::AppServices;
 use crate::core_events::CoreEvent;
 
-pub struct SettingsView;
+pub struct SettingsView {
+    template_manager: Entity<templates::TemplateManager>,
+}
 
 impl SettingsView {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let view = cx.entity();
         state::load(view.clone(), cx);
         glossary::load(view.clone(), cx);
@@ -44,6 +47,7 @@ impl SettingsView {
         let core_events = AppServices::global(cx).core_events.clone();
         cx.subscribe(&core_events, |_this, _emitter, event: &CoreEvent, cx| {
             match event.name.as_str() {
+                "summary-templates-changed" => cx.notify(),
                 "model-download-progress" => {
                     if let Some(payload) = event.decode::<DownloadProgress>() {
                         cx.update_global::<state::SettingsCache, _>(|cache, _| {
@@ -129,7 +133,8 @@ impl SettingsView {
         })
         .detach();
 
-        Self
+        let template_manager = cx.new(|cx| templates::TemplateManager::new(window, cx));
+        Self { template_manager }
     }
 }
 
@@ -167,6 +172,7 @@ impl Render for SettingsView {
             recording::page(&view, cx),
             transcription::page(&view, cx),
             summary::page(&view, cx),
+            templates::page(&self.template_manager),
             notifications::page(&view, cx),
             calendar::page(&view, cx),
             integrations::page(&view, cx),
@@ -174,8 +180,15 @@ impl Render for SettingsView {
             about::page(cx),
         ];
 
-        div()
-            .size_full()
-            .child(Settings::new("app-settings").pages(pages))
+        let settings = Settings::new("app-settings").pages(pages);
+        // Like PARLEY_DEV_ROUTE, this permits isolated layout checks without
+        // clicking through the real desktop or changing the user's settings.
+        #[cfg(debug_assertions)]
+        let settings = match std::env::var("PARLEY_DEV_SETTINGS_PAGE").ok().as_deref() {
+            Some("templates") => settings.default_selected_index(gpui_kit::component::setting::SelectIndex { page_ix: 3, group_ix: None }),
+            Some("summary") => settings.default_selected_index(gpui_kit::component::setting::SelectIndex { page_ix: 2, group_ix: None }),
+            _ => settings,
+        };
+        div().size_full().child(settings)
     }
 }

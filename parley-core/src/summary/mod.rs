@@ -32,6 +32,7 @@ pub mod action_extraction;
 pub mod auto_summary;
 pub mod live_action_items;
 pub mod llm_client;
+pub mod language;
 pub mod markdown_export;
 pub mod processor;
 pub mod service;

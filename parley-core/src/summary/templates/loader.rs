@@ -19,7 +19,7 @@ pub fn set_custom_templates_dir(path: PathBuf) {
 }
 
 /// The user's custom templates directory, or `None` before startup wiring.
-fn get_custom_templates_dir() -> Option<PathBuf> {
+pub(super) fn get_custom_templates_dir() -> Option<PathBuf> {
     CUSTOM_TEMPLATES_DIR.read().ok()?.clone()
 }
 
@@ -64,6 +64,7 @@ fn load_custom_template(template_id: &str) -> Option<String> {
 /// # Returns
 /// Parsed and validated Template struct
 pub fn get_template(template_id: &str) -> Result<Template, String> {
+    super::manager::validate_id(template_id)?;
     info!("Loading template: {}", template_id);
 
     // Try custom template first, then the embedded built-in.

@@ -5,8 +5,8 @@ use crate::database::repositories::{
 use crate::events::{EventSinkExt, SharedEventSink};
 use crate::summary::llm_client::LlmConfig;
 use crate::summary::processor::{
-    extract_meeting_name_from_markdown, generate_meeting_summary, strip_first_heading_line,
-    SummaryStream,
+    extract_meeting_name_from_markdown, generate_meeting_summary_with_language,
+    strip_first_heading_line, SummaryStream,
 };
 use crate::summary::structured::StructuredSummary;
 use once_cell::sync::Lazy;
@@ -189,7 +189,15 @@ impl SummaryService {
         let custom_prompt =
             crate::bookmarks::with_bookmark_context(&pool, &meeting_id, custom_prompt).await;
 
-        let result = generate_meeting_summary(
+        let language = match super::language::load(&pool).await {
+            Ok(language) => language,
+            Err(error) => {
+                Self::update_process_failed(&pool, &meeting_id, &error).await;
+                Self::cleanup_cancellation_token(&meeting_id, registration_id);
+                return;
+            }
+        };
+        let result = generate_meeting_summary_with_language(
             &config,
             &text,
             &custom_prompt,
@@ -198,6 +206,7 @@ impl SummaryService {
             token_threshold,
             Some(&cancellation_token),
             Some(&stream),
+            &language,
         )
         .await;
 

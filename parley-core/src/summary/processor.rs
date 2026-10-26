@@ -565,13 +565,97 @@ pub async fn generate_meeting_summary<L: SummaryLlm>(
     cancellation_token: Option<&CancellationToken>,
     stream: Option<&dyn SummaryStream>,
 ) -> Result<SummaryOutput, String> {
+    generate_meeting_summary_impl(
+        llm,
+        text,
+        custom_prompt,
+        template_id,
+        notes,
+        token_threshold,
+        cancellation_token,
+        stream,
+        false,
+    )
+    .await
+}
+
+/// Generate a report in a language independent of the template. The language
+/// instruction also follows every map/reduce call, so long Spanish meetings
+/// do not turn into English intermediates before automatic language selection.
+pub async fn generate_meeting_summary_with_language<L: SummaryLlm>(
+    llm: &L,
+    text: &str,
+    custom_prompt: &str,
+    template_id: &str,
+    notes: &[String],
+    token_threshold: usize,
+    cancellation_token: Option<&CancellationToken>,
+    stream: Option<&dyn SummaryStream>,
+    language: &str,
+) -> Result<SummaryOutput, String> {
+    let llm = LanguageLlm {
+        inner: llm,
+        instruction: super::language::instruction(language)?,
+    };
+    generate_meeting_summary_impl(
+        &llm,
+        text,
+        custom_prompt,
+        template_id,
+        notes,
+        token_threshold,
+        cancellation_token,
+        stream,
+        true,
+    )
+    .await
+}
+
+struct LanguageLlm<'a, L> {
+    inner: &'a L,
+    instruction: String,
+}
+
+impl<L: SummaryLlm> SummaryLlm for LanguageLlm<'_, L> {
+    fn complete<'a>(
+        &'a self,
+        system_prompt: &'a str,
+        user_prompt: &'a str,
+        schema: Option<ResponseSchema<'a>>,
+        cancellation_token: Option<&'a CancellationToken>,
+        on_delta: Option<StreamSink<'a>>,
+    ) -> impl Future<Output = Result<String, String>> + Send + 'a {
+        async move {
+            let prompt = format!("{system_prompt}\n\n{}", self.instruction);
+            self.inner
+                .complete(&prompt, user_prompt, schema, cancellation_token, on_delta)
+                .await
+        }
+    }
+}
+
+async fn generate_meeting_summary_impl<L: SummaryLlm>(
+    llm: &L,
+    text: &str,
+    custom_prompt: &str,
+    template_id: &str,
+    notes: &[String],
+    token_threshold: usize,
+    cancellation_token: Option<&CancellationToken>,
+    stream: Option<&dyn SummaryStream>,
+    localized: bool,
+) -> Result<SummaryOutput, String> {
     check_cancelled(cancellation_token)?;
 
     // Load the template up front: a bad template id should fail before any
     // (possibly long) map-reduce work is spent.
     let template = templates::get_template(template_id)
         .map_err(|e| format!("Failed to load template '{}': {}", template_id, e))?;
-    let plan = SummaryPlan::new(&template, notes);
+    let plan = if localized {
+        SummaryPlan::new(&template, notes).with_localized_labels()
+    } else {
+        SummaryPlan::new(&template, notes)
+    };
     let notes = plan.notes();
 
     let total_tokens = rough_token_count(text);
@@ -1340,5 +1424,117 @@ mod builtin_smoke {
         .expect("summary");
         println!("{}\n---\n{:#?}", out.markdown, out.structured);
         assert!(out.structured.is_some(), "structured path should succeed");
+    }
+}
+
+#[cfg(test)]
+mod output_language_tests {
+    use super::*;
+    use serde_json::{json, Value};
+    use std::sync::Mutex;
+
+    struct LanguageLlmProbe {
+        systems: Mutex<Vec<String>>,
+        reject_schema: bool,
+    }
+    impl SummaryLlm for LanguageLlmProbe {
+        fn complete<'a>(
+            &'a self,
+            system: &'a str,
+            _user: &'a str,
+            schema: Option<ResponseSchema<'a>>,
+            _cancel: Option<&'a CancellationToken>,
+            _stream: Option<StreamSink<'a>>,
+        ) -> impl Future<Output = Result<String, String>> + Send + 'a {
+            async move {
+                self.systems.lock().unwrap().push(system.to_string());
+                match schema {
+                    Some(_) if self.reject_schema => Err("response_format unsupported".into()),
+                    Some(schema) => {
+                        let mut value = json!({
+                            "title": "Revisión del proyecto", "overview": "Se revisó el proyecto.",
+                            "decisions": [], "action_items": [], "open_questions": [],
+                            "discussion_highlights": "Se acordaron los siguientes pasos."
+                        });
+                        let mut labels = serde_json::Map::new();
+                        for key in schema.schema["properties"]["display_labels"]["properties"]
+                            .as_object()
+                            .unwrap()
+                            .keys()
+                        {
+                            labels.insert(
+                                key.clone(),
+                                Value::String(format!("Texto en español: {key}")),
+                            );
+                        }
+                        value["display_labels"] = Value::Object(labels);
+                        Ok(value.to_string())
+                    }
+                    None => Ok("# Notas de reunión\n\nResumen del proyecto.".into()),
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn selected_language_reaches_structured_and_markdown_fallback_calls() {
+        for reject_schema in [false, true] {
+            let llm = LanguageLlmProbe {
+                systems: Mutex::new(vec![]),
+                reject_schema,
+            };
+            let output = generate_meeting_summary_with_language(
+                &llm,
+                "Revisamos el proyecto.",
+                "",
+                "standard_meeting",
+                &[],
+                10000,
+                None,
+                None,
+                "es",
+            )
+            .await
+            .unwrap();
+            assert_eq!(output.structured.is_some(), !reject_schema);
+            assert!(output.markdown.contains("proyecto"));
+            assert!(llm
+                .systems
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|s| s.contains("Español")));
+        }
+    }
+
+    #[tokio::test]
+    async fn language_reaches_every_map_reduce_stage_and_auto_follows_transcript() {
+        for language in ["es", "auto"] {
+            let llm = LanguageLlmProbe {
+                systems: Mutex::new(vec![]),
+                reject_schema: false,
+            };
+            generate_meeting_summary_with_language(
+                &llm,
+                &"Se revisó el proyecto y se acordaron tareas. ".repeat(300),
+                "",
+                "standard_meeting",
+                &[],
+                700,
+                None,
+                None,
+                language,
+            )
+            .await
+            .unwrap();
+            let systems = llm.systems.lock().unwrap();
+            assert!(systems.len() > 2);
+            assert!(systems.iter().all(|s| s.contains("OUTPUT LANGUAGE:")));
+            if language == "auto" {
+                assert!(systems
+                    .iter()
+                    .all(|s| s.contains("original meeting transcript")));
+            }
+        }
     }
 }
