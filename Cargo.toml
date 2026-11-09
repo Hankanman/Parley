@@ -8,6 +8,7 @@ members = [
     "whisper-helper",
     "whisper-protocol",
     "whisper-core",
+    "gigaam-core",
     "parley-gpui"
 ]
 

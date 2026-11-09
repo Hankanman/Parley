@@ -1202,7 +1202,7 @@ impl MeetingView {
         let generation = self.generation;
         cx.spawn(async move |this, cx| {
             let models = io
-                .spawn(async move { parley_core::whisper_engine::whisper_get_available_models().await })
+                .spawn(async move { parley_core::audio::transcription::engine::model_catalog().await })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.generation != generation {
@@ -1214,6 +1214,7 @@ impl MeetingView {
                         .filter(|m| matches!(m.status, parley_core::whisper_engine::ModelStatus::Available))
                         .map(|m| m.name)
                         .collect();
+                    this.retranscribe_models.insert(0, String::new());
                     if this.retranscribe_model_index.is_none() && !this.retranscribe_models.is_empty() {
                         this.retranscribe_model_index = Some(0);
                     }
@@ -1261,8 +1262,8 @@ impl MeetingView {
         };
         let model = self
             .retranscribe_model_index
-            .and_then(|i| self.retranscribe_models.get(i).cloned());
-        let provider = model.as_ref().map(|_| "localWhisper".to_string());
+            .and_then(|i| self.retranscribe_models.get(i).cloned()).filter(|m| !m.is_empty());
+        let provider = model.as_ref().map(|m| if parley_core::gigaam::is_model(m) { "localGigaAM" } else { "localWhisper" }.to_string());
 
         self.retranscribe_in_progress = true;
         self.retranscribe_error = None;
@@ -3055,8 +3056,8 @@ impl MeetingView {
         let model_label = self
             .retranscribe_model_index
             .and_then(|i| self.retranscribe_models.get(i))
-            .cloned()
-            .unwrap_or_else(|| "Default".to_string());
+            .cloned().filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Active model from Settings".to_string());
 
         v_flex()
             .w_full()

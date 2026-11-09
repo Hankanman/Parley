@@ -190,6 +190,14 @@ impl SettingsRepository {
         provider: &str,
         model: &str,
     ) -> std::result::Result<(), sqlx::Error> {
+        if crate::audio::transcription::engine::selection_locked() {
+            return Err(sqlx::Error::Protocol(
+                "Finish the active transcription before changing its model".into(),
+            ));
+        }
+        if provider == crate::gigaam::PROVIDER && !crate::gigaam::is_model(model) {
+            return Err(sqlx::Error::Protocol("Unknown GigaAM model".into()));
+        }
         sqlx::query(
             r#"
             INSERT INTO transcript_settings (id, provider, model)

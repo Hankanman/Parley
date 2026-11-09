@@ -21,7 +21,7 @@ Parley records your meetings, transcribes them live and writes the summary, the 
 ## Features
 
 - **Records both sides of any call.** Microphone and system audio are captured straight from PipeWire, so it works with Meet, Zoom, Teams or anything else that makes sound, and no bot joins your meeting. The mic gets echo cancellation, noise suppression and automatic gain; the two sources are kept on separate channels.
-- **Live transcription on your device.** [Whisper](https://github.com/ggml-org/whisper.cpp) runs in-process, GPU-accelerated on NVIDIA (CUDA) or AMD/Intel (Vulkan), with a CPU fallback.
+- **Live transcription on your device.** [Whisper](https://github.com/ggml-org/whisper.cpp) runs in-process, GPU-accelerated on NVIDIA (CUDA) or AMD/Intel (Vulkan), with a CPU fallback. [GigaAM v3](docs/gigaam.md) adds native Russian ASR with four CTC/RNNT variants, CUDA or CPU inference, and automatic model unloading. Its models and runtime are prepared separately at build time; no Python service is needed.
 - **Knows who said what.** On-device speaker diarization, plus voice profiles: name a voice once and it is recognised in later meetings.
 - **Summaries from templates.** Stand-ups, client calls, retros, project syncs and more, with key decisions, chapters and bookmarks.
 - **Ask across every meeting.** Plain-language questions over all your transcripts, with answers that cite the meeting and timestamp they came from.
@@ -94,7 +94,7 @@ More detail: [`docs/BUILDING.md`](docs/BUILDING.md), [`docs/GPU_ACCELERATION.md`
 
 Parley is a single native process; there is no server and no webview.
 
-- **`parley-core`**: audio capture and processing, voice activity detection, Whisper transcription, speaker diarization, SQLite storage, and the summary / LLM providers. No UI dependency.
+- **`parley-core`**: audio capture and processing, voice activity detection, Whisper/GigaAM transcription, speaker diarization, SQLite storage, and the summary / LLM providers. No UI dependency.
 - **`parley-gpui`**: the desktop app, built with [GPUI](https://www.gpui.rs/) (the UI framework behind the Zed editor). It calls `parley-core` directly.
 - **`llama-helper`**: the sidecar that runs the built-in summary model with llama.cpp.
 - **`parley-mcp`**: the standalone MCP server.

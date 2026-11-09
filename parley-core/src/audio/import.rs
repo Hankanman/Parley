@@ -324,9 +324,8 @@ async fn run_import(
         return Err(anyhow!("Source file not found: {}", source.display()));
     }
 
-    // `provider` parameter is accepted for backward compatibility but only
-    // Whisper is supported now (Parakeet was removed).
-    let _ = provider;
+    // Resolve the selected local provider/model before inference.
+
     info!(
         "Starting import for '{}' from {} with language {:?}, model {:?}",
         title, source_path, language, model
@@ -494,7 +493,27 @@ async fn run_import(
 
     // Initialize Whisper for the import job (only if there's anything to transcribe).
     let whisper_engine = if total_segments > 0 {
-        Some(get_or_init_whisper(pool.as_ref(), model.as_deref()).await?)
+        Some({
+            let (selected_provider, selected_model) =
+                super::transcription::engine::resolve_selection(
+                    pool.as_ref(),
+                    model.as_deref(),
+                    provider.as_deref(),
+                )
+                .await
+                .map_err(|e| anyhow!(e))?;
+            if selected_provider == crate::gigaam::PROVIDER {
+                super::transcription::TranscriptionEngine::GigaAm(
+                    crate::gigaam::acquire(&selected_model)
+                        .await
+                        .map_err(|e| anyhow!(e))?,
+                )
+            } else {
+                super::transcription::TranscriptionEngine::Whisper(
+                    get_or_init_whisper(pool.as_ref(), Some(&selected_model)).await?,
+                )
+            }
+        })
     } else {
         None
     };

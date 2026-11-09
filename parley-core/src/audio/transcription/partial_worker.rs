@@ -106,6 +106,7 @@ fn source_str(source: DeviceType) -> &'static str {
 /// with.
 pub fn start_partial_decode_task(
     sink: SharedEventSink,
+    pool: Option<sqlx::SqlitePool>,
     mut receiver: mpsc::UnboundedReceiver<PartialAudioChunk>,
 ) {
     let handle = tokio::spawn(async move {
@@ -130,6 +131,13 @@ pub fn start_partial_decode_task(
             .unwrap_or(4) as i32;
         let partial_max_threads = (adaptive_threads / 2).max(1);
 
+        let engine = match super::engine::get_or_init_transcription_engine(pool.as_ref()).await {
+            Ok(engine) => engine,
+            Err(e) => {
+                debug!("Partial engine unavailable: {e}");
+                return;
+            }
+        };
         let mut states: HashMap<DeviceType, SourceState> = HashMap::new();
 
         while let Some(mut chunk) = receiver.recv().await {
@@ -158,8 +166,15 @@ pub fn start_partial_decode_task(
             }
 
             for (source, chunk) in latest {
-                if let Err(e) =
-                    decode_and_emit(&sink, &mut states, source, chunk, partial_max_threads).await
+                if let Err(e) = decode_and_emit(
+                    &engine,
+                    &sink,
+                    &mut states,
+                    source,
+                    chunk,
+                    partial_max_threads,
+                )
+                .await
                 {
                     debug!("partial decode skipped for {:?}: {}", source, e);
                 }
@@ -195,54 +210,68 @@ pub fn start_partial_decode_task(
 }
 
 async fn decode_and_emit(
+    selected_engine: &super::engine::TranscriptionEngine,
     sink: &SharedEventSink,
     states: &mut HashMap<DeviceType, SourceState>,
     source: DeviceType,
     chunk: PartialAudioChunk,
     max_threads: i32,
 ) -> Result<(), String> {
-    // Grab the shared whisper engine (same instance the final worker uses).
-    let engine = {
-        let guard = crate::whisper_engine::models::WHISPER_ENGINE
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        guard.as_ref().cloned()
-    };
-    let Some(engine) = engine else {
-        return Err("engine not loaded".into());
-    };
-    if !engine.is_model_loaded().await {
-        return Err("model not loaded".into());
-    }
+    let (text, _conf, _partial) = if let super::engine::TranscriptionEngine::GigaAm(engine) =
+        selected_engine
+    {
+        engine
+            .transcribe(
+                sliding_window(&chunk.samples, PARTIAL_WINDOW_SAMPLES).to_vec(),
+                true,
+            )
+            .await?
+    } else {
+        // Grab the shared whisper engine (same instance the final worker uses).
+        let engine = {
+            let guard = crate::whisper_engine::models::WHISPER_ENGINE
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            guard.as_ref().cloned()
+        };
+        let Some(engine) = engine else {
+            return Err("engine not loaded".into());
+        };
+        if !engine.is_model_loaded().await {
+            return Err("model not loaded".into());
+        }
 
-    let language = crate::utils::get_language_preference_internal();
-    // Only re-decode the trailing PARTIAL_WINDOW_SAMPLES of the utterance
-    // (issue #26) instead of the whole up-to-12s buffer the pipeline hands
-    // us in `chunk.samples` — decoding the full buffer on every ~1.2s tick
-    // is O(n^2) over an utterance's lifetime.
-    //
-    // Thread budget (issue #26): partials run concurrently with the final
-    // worker on the same Whisper context, so they're capped at half the
-    // hardware-adaptive thread count (computed once by the caller) — this
-    // leaves the authoritative final path headroom on CPU-only hardware.
-    // The queue-depth skip above (`SKIP_PARTIAL_QUEUE_DEPTH`) is the other
-    // half of the mitigation: once the final path is behind, partials stop
-    // competing with it for CPU entirely.
-    let windowed: Vec<f32> = sliding_window(&chunk.samples, PARTIAL_WINDOW_SAMPLES).to_vec();
-    // No context prompt: a partial is a fresh best-effort decode of the
-    // in-progress utterance; cross-segment context is a final-path concern.
-    // `greedy: true` skips beam search — partials are discarded previews,
-    // not the committed transcript, so the speed win is worth the lower
-    // per-decode quality here.
-    let options = crate::whisper_engine::TranscribeOptions {
-        max_threads: Some(max_threads),
-        greedy: true,
-        purpose: crate::whisper_engine::DecodePurpose::Partial,
+        let language = crate::utils::get_language_preference_internal();
+        // Only re-decode the trailing PARTIAL_WINDOW_SAMPLES of the utterance
+        // (issue #26) instead of the whole up-to-12s buffer the pipeline hands
+        // us in `chunk.samples` — decoding the full buffer on every ~1.2s tick
+        // is O(n^2) over an utterance's lifetime.
+        //
+        // Thread budget (issue #26): partials run concurrently with the final
+        // worker on the same Whisper context, so they're capped at half the
+        // hardware-adaptive thread count (computed once by the caller) — this
+        // leaves the authoritative final path headroom on CPU-only hardware.
+        // The queue-depth skip above (`SKIP_PARTIAL_QUEUE_DEPTH`) is the other
+        // half of the mitigation: once the final path is behind, partials stop
+        // competing with it for CPU entirely.
+        let windowed: Vec<f32> = sliding_window(&chunk.samples, PARTIAL_WINDOW_SAMPLES).to_vec();
+        // No context prompt: a partial is a fresh best-effort decode of the
+        // in-progress utterance; cross-segment context is a final-path concern.
+        // `greedy: true` skips beam search — partials are discarded previews,
+        // not the committed transcript, so the speed win is worth the lower
+        // per-decode quality here.
+        let options = crate::whisper_engine::TranscribeOptions {
+            max_threads: Some(max_threads),
+            greedy: true,
+            purpose: crate::whisper_engine::DecodePurpose::Partial,
+        };
+        let (text, _conf, _partial) = engine
+            .transcribe_audio_with_confidence_opts(windowed, language, None, options)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        (text, Some(_conf), _partial)
     };
-    let (text, _conf, _partial) = engine
-        .transcribe_audio_with_confidence_opts(windowed, language, None, options)
-        .await
-        .map_err(|e| e.to_string())?;
 
     let state = states.entry(source).or_default();
     if state.utterance_id != chunk.utterance_id {

@@ -32,6 +32,7 @@ pub mod events;
 pub mod export;
 pub mod followup;
 pub mod glossary;
+pub mod gigaam;
 pub mod groq;
 pub mod llm_providers;
 pub mod mcp_config;

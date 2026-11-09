@@ -29,6 +29,7 @@ openmp = ["whisper-rs/openmp"]
 backend_probe = ["dep:whisper-protocol"]
 
 [dependencies]
+gigaam-core = { path = "../gigaam-core" }
 # `preserve_order`: structured-summary JSON schemas list properties in render
 # order, and llama.cpp grammars / streaming rely on it. The app build already
 # gets this feature via other deps; enabling it here makes `-p parley-core`

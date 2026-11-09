@@ -9,10 +9,10 @@
 
 use gpui_kit::component::{
     button::Button,
-    h_flex, v_flex,
+    h_flex,
     label::Label,
     setting::{SettingField, SettingGroup, SettingItem, SettingPage},
-    ActiveTheme, Disableable, Icon,
+    v_flex, ActiveTheme, Disableable, Icon,
 };
 use gpui_kit::*;
 
@@ -23,12 +23,23 @@ use super::SettingsView;
 
 pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> SettingPage {
     let view = view.clone();
-    let models = SettingsCache::global(cx).whisper_models.clone();
+    let gigaam = SettingsCache::global(cx).transcript.provider == parley_core::gigaam::PROVIDER;
+    let models: Vec<_> = SettingsCache::global(cx)
+        .whisper_models
+        .iter()
+        .filter(|m| parley_core::gigaam::is_model(&m.name) == gigaam)
+        .cloned()
+        .collect();
 
     let available: Vec<(SharedString, SharedString)> = models
         .iter()
         .filter(|m| matches!(m.status, ModelStatus::Available))
-        .map(|m| (SharedString::from(m.name.clone()), SharedString::from(m.name.clone())))
+        .map(|m| {
+            (
+                SharedString::from(m.name.clone()),
+                SharedString::from(m.name.clone()),
+            )
+        })
         .collect();
 
     let mut catalog_items: Vec<SettingItem> = Vec::new();
@@ -36,27 +47,55 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
         catalog_items.push(model_row(&view, model));
     }
 
-    SettingPage::new("Transcription")
+    let page = SettingPage::new("Transcription")
         .icon(Icon::new(gpui_kit::assets::IconName::Mic))
+        .group(SettingGroup::new().title("Engine").item(SettingItem::new(
+            "Speech recognition",
+            SettingField::dropdown(
+                vec![(SharedString::from("localWhisper"), SharedString::from("Whisper")),
+                     (SharedString::from("localGigaAM"), SharedString::from("GigaAM v3 · Russian"))],
+                |cx: &App| SharedString::from(SettingsCache::global(cx).transcript.provider.clone()),
+                {
+                    let view = view.clone();
+                    move |value: SharedString, cx: &mut App| {
+                        if parley_core::audio::transcription::engine::selection_locked() { return; }
+                        let provider = value.to_string();
+                        let is_gigaam = provider == parley_core::gigaam::PROVIDER;
+                        let model = SettingsCache::global(cx).whisper_models.iter()
+                            .find(|m| parley_core::gigaam::is_model(&m.name) == is_gigaam && matches!(m.status, ModelStatus::Available))
+                            .map(|m| m.name.clone()).unwrap_or_else(|| if is_gigaam { parley_core::gigaam::DEFAULT_MODEL.into() } else { parley_core::config::DEFAULT_WHISPER_MODEL.into() });
+                        {
+                            let cache = cx.global_mut::<SettingsCache>();
+                            cache.transcript.provider = provider.clone();
+                            cache.transcript.model = model.clone();
+                        }
+                        super::state::save_transcript(cx, provider, model);
+                        let _ = view.update(cx, |_, cx| cx.notify());
+                    }
+                }
+            )
+        ).description(if gigaam { parley_core::gigaam::runtime_status() } else { "Local Whisper recognition".into() })))
         .group(
             SettingGroup::new().title("Active model").item(
                 SettingItem::new(
-                    "Whisper model",
+                    if gigaam { "GigaAM model" } else { "Whisper model" },
                     SettingField::dropdown(
                         available,
                         |cx: &App| SharedString::from(SettingsCache::global(cx).transcript.model.clone()),
                         {
                             let view = view.clone();
                             move |val: SharedString, cx: &mut App| {
+                                if parley_core::audio::transcription::engine::selection_locked() { return; }
                                 let model = val.to_string();
+                                let provider = if parley_core::gigaam::is_model(&model) { "localGigaAM" } else { "localWhisper" };
                                 {
                                     let cache = cx.global_mut::<SettingsCache>();
-                                    cache.transcript.provider = "localWhisper".to_string();
+                                    cache.transcript.provider = provider.to_string();
                                     cache.transcript.model = model.clone();
                                 }
                                 super::state::save_transcript(
                                     cx,
-                                    "localWhisper".to_string(),
+                                    provider.to_string(),
                                     model,
                                 );
                                 let _ = view.update(cx, |_, cx| cx.notify());
@@ -64,14 +103,26 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
                         },
                     ),
                 )
-                .description("Used for local, on-device transcription. Only downloaded models can be selected."),
+                .description("Used for local, on-device transcription. Only installed models can be selected. GigaAM v3 recognizes Russian."),
             ),
         )
-        .group(super::glossary::group(&view, cx))
-        .group(SettingGroup::new().title("Model catalog").items(catalog_items))
+        ;
+    let page = if gigaam {
+        page
+    } else {
+        page.group(super::glossary::group(&view, cx))
+    };
+    page.group(
+        SettingGroup::new()
+            .title("Model catalog")
+            .items(catalog_items),
+    )
 }
 
-fn model_row(view: &Entity<SettingsView>, model: parley_core::whisper_engine::ModelInfo) -> SettingItem {
+fn model_row(
+    view: &Entity<SettingsView>,
+    model: parley_core::whisper_engine::ModelInfo,
+) -> SettingItem {
     let view = view.clone();
     let name = model.name.clone();
 
@@ -82,7 +133,10 @@ fn model_row(view: &Entity<SettingsView>, model: parley_core::whisper_engine::Mo
             .find(|m| m.name == name)
             .map(|m| m.status.clone())
             .unwrap_or(model.status.clone());
-        let progress = SettingsCache::global(cx).download_progress.get(&name).copied();
+        let progress = SettingsCache::global(cx)
+            .download_progress
+            .get(&name)
+            .copied();
 
         let status_text = match (&status, progress) {
             (_, Some(pct)) => format!("Downloading… {}%", pct),
@@ -93,7 +147,8 @@ fn model_row(view: &Entity<SettingsView>, model: parley_core::whisper_engine::Mo
             (ModelStatus::Error(e), _) => format!("Error: {}", e),
         };
 
-        let is_downloading = matches!(status, ModelStatus::Downloading { .. }) || progress.is_some();
+        let is_downloading =
+            matches!(status, ModelStatus::Downloading { .. }) || progress.is_some();
         let is_corrupted = matches!(status, ModelStatus::Corrupted { .. });
         let is_available = matches!(status, ModelStatus::Available);
         let can_download = !is_available && !is_downloading;
@@ -103,7 +158,16 @@ fn model_row(view: &Entity<SettingsView>, model: parley_core::whisper_engine::Mo
 
         let mut actions = h_flex().gap_2();
 
-        if is_downloading {
+        if parley_core::gigaam::is_model(&name) {
+            actions = actions.child(
+                Label::new(if is_available {
+                    "Installed · Russian"
+                } else {
+                    "Not installed"
+                })
+                .text_xs(),
+            );
+        } else if is_downloading {
             let cancel_name = name.clone();
             let cancel_view = view.clone();
             actions = actions.child(
@@ -118,7 +182,11 @@ fn model_row(view: &Entity<SettingsView>, model: parley_core::whisper_engine::Mo
             actions = actions.child(
                 Button::new(SharedString::from(format!("download-{}", name)))
                     .outline()
-                    .label(if is_corrupted { "Re-download" } else { "Download" })
+                    .label(if is_corrupted {
+                        "Re-download"
+                    } else {
+                        "Download"
+                    })
                     .disabled(!can_download)
                     .on_click(move |_, _, cx| {
                         start_download(cx, &download_view, download_name.clone());
@@ -126,7 +194,10 @@ fn model_row(view: &Entity<SettingsView>, model: parley_core::whisper_engine::Mo
             );
         }
 
-        if (is_available || is_corrupted) && !is_downloading {
+        if !parley_core::gigaam::is_model(&name)
+            && (is_available || is_corrupted)
+            && !is_downloading
+        {
             let delete_name = name.clone();
             let delete_view = view.clone();
             actions = actions.child(
@@ -149,9 +220,12 @@ fn model_row(view: &Entity<SettingsView>, model: parley_core::whisper_engine::Mo
                     .gap_1()
                     .child(Label::new(name.clone()).text_sm())
                     .child(
-                        Label::new(format!("{} · {} MB · {}", model.accuracy, model.size_mb, status_text))
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground),
+                        Label::new(format!(
+                            "{} · {} MB · {}",
+                            model.accuracy, model.size_mb, status_text
+                        ))
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground),
                     ),
             )
             .child(actions)
@@ -193,8 +267,14 @@ fn cancel_download(cx: &mut App, view: &Entity<SettingsView>, model_name: String
     let _ = view.update(cx, |_, cx| cx.notify());
 
     io.spawn(async move {
-        if let Err(e) = parley_core::whisper_engine::whisper_cancel_download(model_name.clone()).await {
-            log::warn!("settings: failed to cancel model download '{}': {}", model_name, e);
+        if let Err(e) =
+            parley_core::whisper_engine::whisper_cancel_download(model_name.clone()).await
+        {
+            log::warn!(
+                "settings: failed to cancel model download '{}': {}",
+                model_name,
+                e
+            );
         }
     });
 }
@@ -208,7 +288,9 @@ fn delete_model(cx: &mut App, view: &Entity<SettingsView>, model_name: String) {
 
     cx.spawn(async move |cx| {
         let result = io
-            .spawn(parley_core::whisper_engine::whisper_delete_corrupted_model(model_name.clone()))
+            .spawn(parley_core::whisper_engine::whisper_delete_corrupted_model(
+                model_name.clone(),
+            ))
             .await;
 
         if let Ok(Err(e)) = result {

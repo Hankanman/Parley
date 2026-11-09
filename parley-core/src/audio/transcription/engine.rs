@@ -1,41 +1,79 @@
 // audio/transcription/engine.rs
 //
 // TranscriptionEngine enum and model initialization/validation logic.
-// Whisper is the sole local ASR engine (a prior remote-provider `Provider`
-// variant was removed as dead code — it had no live implementation).
+// Local Whisper and native GigaAM share the transcription pipeline.
 
 use log::{info, warn};
 use std::sync::Arc;
 
 // Transcription engine abstraction.
+#[derive(Clone)]
 pub enum TranscriptionEngine {
+    GigaAm(Arc<crate::gigaam::Engine>),
     Whisper(Arc<crate::whisper_engine::WhisperEngine>), // Local Whisper (direct access)
 }
 
 impl TranscriptionEngine {
+    pub fn is_whisper(&self) -> bool {
+        matches!(self, Self::Whisper(_))
+    }
+    pub async fn transcribe(
+        &self,
+        samples: Vec<f32>,
+        language: Option<String>,
+        prompt: Option<String>,
+        partial: bool,
+    ) -> Result<(String, Option<f32>, bool), String> {
+        match self {
+            Self::GigaAm(engine) => engine.transcribe(samples, partial).await,
+            Self::Whisper(engine) => {
+                let options = crate::whisper_engine::TranscribeOptions {
+                    greedy: partial,
+                    purpose: if partial {
+                        crate::whisper_engine::DecodePurpose::Partial
+                    } else {
+                        crate::whisper_engine::DecodePurpose::Final
+                    },
+                    ..Default::default()
+                };
+                engine
+                    .transcribe_audio_with_confidence_opts(samples, language, prompt, options)
+                    .await
+                    .map(|(t, c, p)| (t, Some(c), p))
+                    .map_err(|e| e.to_string())
+            }
+        }
+    }
     pub async fn is_model_loaded(&self) -> bool {
         match self {
             Self::Whisper(engine) => engine.is_model_loaded().await,
+            Self::GigaAm(_) => true,
         }
     }
 
     pub async fn get_current_model(&self) -> Option<String> {
         match self {
             Self::Whisper(engine) => engine.get_current_model().await,
+            Self::GigaAm(engine) => Some(engine.name.clone()),
         }
     }
 
     pub fn provider_name(&self) -> &str {
         match self {
             Self::Whisper(_) => "Whisper (direct)",
+            Self::GigaAm(_) => "GigaAM (native ONNX)",
         }
     }
 }
 
-/// Validate that the local Whisper model is ready before recording starts.
+/// Validate the selected local model before recording starts.
 pub async fn validate_transcription_model_ready(
     pool: Option<&sqlx::SqlitePool>,
 ) -> Result<(), String> {
+    let (provider, model) = resolve_selection(pool, None, None).await?;
+    if provider == crate::gigaam::PROVIDER {
+        return crate::gigaam::validate(&model);
+    }
     info!("🔍 Validating Whisper model...");
 
     if let Err(init_error) = crate::whisper_engine::models::whisper_init().await {
@@ -61,12 +99,16 @@ pub async fn validate_transcription_model_ready(
     }
 }
 
-/// Get or initialize the Whisper transcription engine for live recording.
-/// Remote providers (e.g., OpenAI) are not used during the live audio path —
-/// the worker pool is currently Whisper-only.
+/// Acquire the selected local engine for the lifetime of a recording task.
 pub async fn get_or_init_transcription_engine(
     pool: Option<&sqlx::SqlitePool>,
 ) -> Result<TranscriptionEngine, String> {
+    let (provider, model) = resolve_selection(pool, None, None).await?;
+    if provider == crate::gigaam::PROVIDER {
+        return Ok(TranscriptionEngine::GigaAm(
+            crate::gigaam::acquire(&model).await?,
+        ));
+    }
     info!("🎤 Initializing Whisper transcription engine");
     let whisper_engine = get_or_init_whisper(pool).await?;
     Ok(TranscriptionEngine::Whisper(whisper_engine))
@@ -247,5 +289,97 @@ async fn resolve_loadable_model(
             "{} and no other model is downloaded. Please download a model from settings.",
             why
         )),
+    }
+}
+
+/// Explicit model IDs override saved settings, so batch dialogs can select a
+/// different provider without accidentally treating GigaAM as a Whisper model.
+pub async fn resolve_selection(
+    pool: Option<&sqlx::SqlitePool>,
+    model: Option<&str>,
+    provider: Option<&str>,
+) -> Result<(String, String), String> {
+    if let Some(model) = model.filter(|s| !s.is_empty()) {
+        let inferred = if crate::gigaam::is_model(model) {
+            crate::gigaam::PROVIDER
+        } else {
+            "localWhisper"
+        };
+        if let Some(p) = provider {
+            if p != inferred && !(p == "whisper" && inferred == "localWhisper") {
+                return Err(format!("Model {model} does not belong to provider {p}"));
+            }
+        }
+        return Ok((inferred.into(), model.into()));
+    }
+    let saved = match pool {
+        Some(p) => {
+            crate::database::repositories::setting::SettingsRepository::get_transcript_config(p)
+                .await
+                .map_err(|e| e.to_string())?
+        }
+        None => None,
+    };
+    match saved {
+        Some(c) if c.provider == crate::gigaam::PROVIDER => Ok((
+            c.provider,
+            if c.model.is_empty() {
+                crate::gigaam::DEFAULT_MODEL.into()
+            } else {
+                c.model
+            },
+        )),
+        Some(c) if c.provider == "localWhisper" || c.provider == "whisper" => {
+            Ok(("localWhisper".into(), c.model))
+        }
+        Some(c) => Err(format!(
+            "Unsupported local transcription provider: {}",
+            c.provider
+        )),
+        None => Ok((
+            "localWhisper".into(),
+            crate::config::DEFAULT_WHISPER_MODEL.into(),
+        )),
+    }
+}
+
+pub fn selection_locked() -> bool {
+    crate::gigaam::is_busy()
+        || crate::whisper_engine::LIVE_ENGINE_LEASE.is_live_leased()
+        || crate::audio::import::is_import_in_progress()
+        || crate::audio::retranscription::is_retranscription_in_progress()
+}
+
+pub async fn model_catalog() -> Result<Vec<crate::whisper_engine::ModelInfo>, String> {
+    let mut models = crate::whisper_engine::whisper_get_available_models().await?;
+    models.extend(crate::gigaam::catalog());
+    Ok(models)
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+    #[tokio::test]
+    async fn explicit_model_selects_provider_and_rejects_mismatch() {
+        for model in gigaam_core::MODELS {
+            assert_eq!(
+                resolve_selection(None, Some(model), None).await.unwrap(),
+                (crate::gigaam::PROVIDER.into(), model.into())
+            );
+            assert!(resolve_selection(None, Some(model), Some("localWhisper"))
+                .await
+                .is_err());
+        }
+        assert_eq!(
+            resolve_selection(None, Some("large-v3-turbo"), None)
+                .await
+                .unwrap()
+                .0,
+            "localWhisper"
+        );
+        assert_eq!(
+            resolve_selection(None, None, None).await.unwrap().0,
+            "localWhisper"
+        );
     }
 }

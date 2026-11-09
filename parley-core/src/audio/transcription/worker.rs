@@ -68,7 +68,8 @@ pub struct TranscriptUpdate {
     pub sequence_id: u64,
     pub chunk_start_time: f64, // Legacy field, kept for compatibility
     pub is_partial: bool,
-    pub confidence: f32,
+    #[serde(default)]
+    pub confidence: Option<f32>,
     // Recording-relative timestamps for playback sync
     pub audio_start_time: f64, // Seconds from recording start (e.g., 125.3)
     pub audio_end_time: f64,   // Seconds from recording start (e.g., 128.6)
@@ -250,7 +251,36 @@ pub fn start_transcription_task(
                 },
             };
 
-            process_chunk(&engine, item, &sink, &mut echo_dedup).await;
+            if matches!(engine, TranscriptionEngine::GigaAm(_))
+                && item.chunk.data.len() > gigaam_core::MAX_SAMPLES
+            {
+                let speech = crate::audio::vad::SpeechSegment {
+                    samples: item.chunk.data.clone(),
+                    confidence: 1.0,
+                    source: item.chunk.device_type,
+                    start_timestamp_ms: item.chunk.timestamp * 1000.0,
+                    end_timestamp_ms: (item.chunk.timestamp
+                        + item.chunk.data.len() as f64 / item.chunk.sample_rate as f64)
+                        * 1000.0,
+                };
+                let mut parts =
+                    crate::audio::common::split_segment_bounded(&speech, gigaam_core::MAX_SAMPLES);
+                for part in parts.drain(..) {
+                    let sub = PendingChunk {
+                        chunk: AudioChunk {
+                            data: part.samples,
+                            sample_rate: item.chunk.sample_rate,
+                            timestamp: part.start_timestamp_ms / 1000.0,
+                            chunk_id: item.chunk.chunk_id,
+                            device_type: item.chunk.device_type,
+                        },
+                        embedding: None,
+                    };
+                    process_chunk(&engine, sub, &sink, &mut echo_dedup).await;
+                }
+            } else {
+                process_chunk(&engine, item, &sink, &mut echo_dedup).await;
+            }
             processed += 1;
         }
 
@@ -329,6 +359,7 @@ async fn process_chunk(
     // Provider-aware confidence threshold
     let confidence_threshold = match engine {
         TranscriptionEngine::Whisper(_) => 0.3,
+        TranscriptionEngine::GigaAm(_) => 0.0,
     };
     let confidence_str = match confidence_opt {
         Some(c) => format!("{:.2}", c),
@@ -340,7 +371,8 @@ async fn process_chunk(
 
     // Whisper's classic hallucinations on marginal audio: stock phrases and
     // bracketed sound markers with mediocre decoder confidence.
-    let hallucinated = is_likely_hallucination(&transcript, confidence_opt.unwrap_or(1.0));
+    let hallucinated =
+        engine.is_whisper() && is_likely_hallucination(&transcript, confidence_opt.unwrap_or(1.0));
     if hallucinated {
         info!(
             "Dropping likely hallucination: '{}' (confidence: {})",
@@ -464,7 +496,7 @@ async fn process_chunk(
         sequence_id,
         chunk_start_time: chunk_timestamp, // Legacy compatibility
         is_partial,
-        confidence: confidence_opt.unwrap_or(0.85), // Default for providers without confidence
+        confidence: confidence_opt,
         audio_start_time,
         audio_end_time,
         duration: chunk_duration,
@@ -605,6 +637,10 @@ async fn transcribe_chunk_with_provider(
 
     // Transcribe using the appropriate engine (with improved error handling)
     match engine {
+        TranscriptionEngine::GigaAm(engine) => engine
+            .transcribe(speech_samples, false)
+            .await
+            .map_err(TranscriptionError::EngineFailed),
         TranscriptionEngine::Whisper(whisper_engine) => {
             // Get language preference from global state
             let language = crate::utils::get_language_preference_internal();

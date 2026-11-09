@@ -1170,6 +1170,9 @@ impl Render for RecordingView {
                             .child(elapsed),
                     ),
             )
+            .when(parley_core::gigaam::is_busy(), |this| this.child(
+                div().text_xs().text_color(theme.muted_foreground).child(parley_core::gigaam::runtime_status())
+            ))
             .child(controls)
             .when(self.audio_panel_open, |this| {
                 let caption = match self.meter_source {

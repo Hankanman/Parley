@@ -1,8 +1,6 @@
 // audio/transcription/mod.rs
 //
-// Transcription module: engine management and worker pool. Whisper is the
-// sole local ASR engine (a prior remote-provider abstraction was removed as
-// dead code — see worker.rs for TranscriptionError).
+// Local transcription engines, live workers and queue accounting.
 
 // Issue #56 spike: runtime sidecar backend probing/selection. Off by
 // default — see backend_probe.rs's module doc comment for scope and status.

@@ -1,0 +1,9 @@
+# Build/export tools only; never imported by the installed Parley application.
+hydra-core==1.3.7
+numpy==2.5.4
+omegaconf==2.3.1
+onnx==1.19.1
+onnxruntime==1.23.2
+soundfile==0.14.0
+sentencepiece==0.2.2
+tqdm==4.70.1

@@ -165,9 +165,9 @@ impl ImportState {
         let io = AppServices::global(cx).io.clone();
         cx.spawn(async move |this, cx| {
             let models = io
-                .spawn(async move { parley_core::whisper_engine::whisper_get_available_models().await })
+                .spawn(async move { parley_core::audio::transcription::engine::model_catalog().await })
                 .await;
-            let available: Vec<ModelOption> = match models {
+            let mut available: Vec<ModelOption> = match models {
                 Ok(Ok(models)) => models
                     .into_iter()
                     .filter(|m| matches!(m.status, ModelStatus::Available))
@@ -178,6 +178,7 @@ impl ImportState {
                     .collect(),
                 _ => Vec::new(),
             };
+            available.insert(0, ModelOption { name: "".into(), label: "Use active model from Settings".into() });
             if available.is_empty() {
                 return;
             }
@@ -287,6 +288,7 @@ impl ImportState {
         self.model
             .as_ref()
             .and_then(|m| m.read(cx).selected_value().map(|v| v.to_string()))
+            .filter(|v| !v.is_empty())
     }
 
     fn start_import(&mut self, cx: &mut Context<Self>) {

@@ -207,7 +207,7 @@ async fn run_retranscription(
     let audio_path = find_audio_file(&folder_path)?;
 
     // `provider` is accepted for backward-compat but only Whisper is supported now.
-    let _ = provider;
+
     info!(
         "Starting retranscription for meeting {} with language {:?}, model {:?}",
         meeting_id, language, model
@@ -350,7 +350,26 @@ async fn run_retranscription(
     );
 
     // Initialize Whisper once (not per-segment)
-    let whisper_engine = Some(get_or_init_whisper(pool.as_ref(), model.as_deref()).await?);
+    let whisper_engine = Some({
+        let (selected_provider, selected_model) = super::transcription::engine::resolve_selection(
+            pool.as_ref(),
+            model.as_deref(),
+            provider.as_deref(),
+        )
+        .await
+        .map_err(|e| anyhow!(e))?;
+        if selected_provider == crate::gigaam::PROVIDER {
+            super::transcription::TranscriptionEngine::GigaAm(
+                crate::gigaam::acquire(&selected_model)
+                    .await
+                    .map_err(|e| anyhow!(e))?,
+            )
+        } else {
+            super::transcription::TranscriptionEngine::Whisper(
+                get_or_init_whisper(pool.as_ref(), Some(&selected_model)).await?,
+            )
+        }
+    });
 
     // Build a fresh diarizer for this batch (None if speaker model isn't
     // downloaded). The mixed-audio source means we can't recover mic vs

@@ -7,9 +7,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::audio::transcription::TranscriptionEngine;
 use crate::speaker_diarization::offline::SpeakerTurn;
 use crate::speaker_diarization::{Diarizer, RefineOptions, SegmentSource};
-use crate::whisper_engine::WhisperEngine;
 
 /// Unload the Whisper model after a batch job (import or retranscription).
 ///
@@ -109,7 +109,11 @@ impl ChannelAudio {
     /// The segment's source and the samples to embed for it: the dominant
     /// channel's audio, or `None` (embed the mixdown) when neither channel
     /// dominates.
-    pub(crate) fn for_segment(&self, start_ms: f64, end_ms: f64) -> (SegmentSource, Option<&[f32]>) {
+    pub(crate) fn for_segment(
+        &self,
+        start_ms: f64,
+        end_ms: f64,
+    ) -> (SegmentSource, Option<&[f32]>) {
         let range = |track: &[f32]| {
             let a = ((start_ms / 1000.0 * 16_000.0).max(0.0) as usize).min(track.len());
             let b = ((end_ms / 1000.0 * 16_000.0).max(0.0) as usize).min(track.len());
@@ -636,7 +640,7 @@ pub(crate) fn log_vad_diagnostics(speech_segments: &[crate::audio::vad::SpeechSe
 pub(crate) async fn run_batch_transcription(
     speech_segments: &[crate::audio::vad::SpeechSegment],
     language: Option<String>,
-    whisper_engine: Arc<WhisperEngine>,
+    whisper_engine: TranscriptionEngine,
     diarizer: Option<Arc<Diarizer>>,
     offline_turns: Option<&[SpeakerTurn]>,
     channels: Option<&ChannelAudio>,
@@ -652,17 +656,25 @@ pub(crate) async fn run_batch_transcription(
     // Split very long segments at silence boundaries for better transcription quality.
     // Hard cuts at arbitrary sample positions lose words at boundaries. Instead, scan
     // for the lowest-energy window near the target split point and cut there.
-    const MAX_SEGMENT_SAMPLES: usize = 25 * 16000; // 25 seconds at 16kHz
+    let max_segment_samples = if whisper_engine.is_whisper() {
+        25 * 16000
+    } else {
+        gigaam_core::MAX_SAMPLES
+    }; // 25 seconds at 16kHz
 
     let mut processable_segments: Vec<crate::audio::vad::SpeechSegment> = Vec::new();
     for segment in speech_segments {
-        if segment.samples.len() > MAX_SEGMENT_SAMPLES {
+        if segment.samples.len() > max_segment_samples {
             debug!(
                 "Splitting large segment ({:.0}ms, {} samples) at silence boundaries",
                 segment.end_timestamp_ms - segment.start_timestamp_ms,
                 segment.samples.len()
             );
-            let sub_segments = split_segment_at_silence(segment, MAX_SEGMENT_SAMPLES);
+            let sub_segments = if whisper_engine.is_whisper() {
+                split_segment_at_silence(segment, max_segment_samples)
+            } else {
+                split_segment_bounded(segment, max_segment_samples)
+            };
             debug!("Split into {} sub-segments", sub_segments.len());
             processable_segments.extend(sub_segments);
         } else {
@@ -709,6 +721,13 @@ pub(crate) async fn run_batch_transcription(
             return Err(anyhow!("Cancelled"));
         }
 
+        // A background batch never gets ahead of authoritative live segments.
+        while !whisper_engine.is_whisper() && super::transcription::queue::queue_depth() > 0 {
+            if cancel_flag.load(Ordering::SeqCst) {
+                return Err(anyhow!("Cancelled"));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
         let segment_duration_sec = (segment.end_timestamp_ms - segment.start_timestamp_ms) / 1000.0;
         on_segment_progress(i, processable_count, segment_duration_sec);
 
@@ -727,18 +746,23 @@ pub(crate) async fn run_batch_transcription(
         // glossary this is exactly the old tail-only prompt.
         let prompt = glossary.compose_prompt(&context_tail);
         let (text, conf, _) = whisper_engine
-            .transcribe_audio_with_confidence(segment.samples.clone(), language.clone(), prompt)
+            .transcribe(segment.samples.clone(), language.clone(), prompt, false)
             .await
-            .map_err(|e| anyhow!("Whisper transcription failed on segment {}: {}", i, e))?;
+            .map_err(|e| anyhow!("Transcription failed on segment {}: {}", i, e))?;
 
         // Same hallucination screen as the live path.
-        if crate::audio::transcription::worker::is_likely_hallucination(&text, conf) {
+        if whisper_engine.is_whisper()
+            && crate::audio::transcription::worker::is_likely_hallucination(
+                &text,
+                conf.unwrap_or(1.0),
+            )
+        {
             debug!(
                 "Segment {}/{}: dropping likely hallucination '{}' (conf={:.2})",
                 i + 1,
                 processable_count,
                 text.trim(),
-                conf
+                conf.unwrap_or(0.0)
             );
             continue;
         }
@@ -747,7 +771,11 @@ pub(crate) async fn run_batch_transcription(
         // near-miss spellings of glossary terms. Done before the text joins
         // the context tail, so later segments are conditioned on the
         // corrected spelling.
-        let text = glossary.clean_output(&text);
+        let text = if whisper_engine.is_whisper() {
+            glossary.clean_output(&text)
+        } else {
+            text
+        };
 
         let trimmed = text.trim();
         if !trimmed.is_empty() {
@@ -769,7 +797,7 @@ pub(crate) async fn run_batch_transcription(
                 i + 1,
                 processable_count,
                 segment_duration_sec,
-                conf,
+                conf.unwrap_or(0.0),
                 if trimmed.len() > 80 {
                     let mut end = 80;
                     while !trimmed.is_char_boundary(end) {
@@ -819,7 +847,7 @@ pub(crate) async fn run_batch_transcription(
                 sequence_id,
                 source,
             });
-            total_confidence += conf;
+            total_confidence += conf.unwrap_or(0.0);
         } else {
             debug!(
                 "Segment {}/{}: {:.1}s — empty transcription",
@@ -910,6 +938,22 @@ pub(crate) fn split_segment_at_silence(
     segment: &crate::audio::vad::SpeechSegment,
     max_samples: usize,
 ) -> Vec<crate::audio::vad::SpeechSegment> {
+    split_segment_impl(segment, max_samples, false)
+}
+
+/// GigaAM has a hard input limit. Search for a quiet boundary before the
+/// limit, and never let the silence search or fallback extend past it.
+pub(crate) fn split_segment_bounded(
+    segment: &crate::audio::vad::SpeechSegment,
+    max_samples: usize,
+) -> Vec<crate::audio::vad::SpeechSegment> {
+    split_segment_impl(segment, max_samples, true)
+}
+fn split_segment_impl(
+    segment: &crate::audio::vad::SpeechSegment,
+    max_samples: usize,
+    hard_limit: bool,
+) -> Vec<crate::audio::vad::SpeechSegment> {
     const SAMPLE_RATE: usize = 16000;
     // 100ms window for energy measurement (1600 samples at 16kHz)
     const ENERGY_WINDOW: usize = SAMPLE_RATE / 10;
@@ -952,7 +996,12 @@ pub(crate) fn split_segment_at_silence(
 
         // Search window: [target - SEARCH_RADIUS, target + SEARCH_RADIUS]
         let search_start = target.saturating_sub(SEARCH_RADIUS).max(pos + SAMPLE_RATE);
-        let search_end = (target + SEARCH_RADIUS).min(total.saturating_sub(ENERGY_WINDOW));
+        let search_end = (if hard_limit {
+            target
+        } else {
+            target + SEARCH_RADIUS
+        })
+        .min(total.saturating_sub(ENERGY_WINDOW));
 
         // Find the lowest-energy 100ms window in the search range
         let mut best_split = target.min(total); // fallback: exact target
@@ -992,6 +1041,11 @@ pub(crate) fn split_segment_at_silence(
             split_at
         };
 
+        let chunk_end = if hard_limit {
+            chunk_end.min(target)
+        } else {
+            chunk_end
+        };
         let chunk_samples = segment.samples[pos..chunk_end].to_vec();
         let chunk_start_ms = segment.start_timestamp_ms + (pos as f64 * ms_per_sample);
         let chunk_end_ms = segment.start_timestamp_ms + (chunk_end as f64 * ms_per_sample);
@@ -1213,5 +1267,45 @@ mod channel_tests {
         )
         .unwrap();
         assert!(has_split_capture_channels(dir.path()));
+    }
+}
+
+#[cfg(test)]
+mod gigaam_segment_tests {
+    use super::*;
+    #[test]
+    fn gigaam_splitting_is_bounded_lossless_and_preserves_timestamps() {
+        for silent in [false, true] {
+            let samples: Vec<f32> = (0..61 * 16000)
+                .map(|i| if silent { 0.0 } else { (i as f32 * 0.13).sin() })
+                .collect();
+            let segment = crate::audio::vad::SpeechSegment {
+                samples: samples.clone(),
+                start_timestamp_ms: 1234.0,
+                end_timestamp_ms: 62234.0,
+                confidence: 0.9,
+                source: crate::audio::recording_state::DeviceType::System,
+            };
+            let parts = split_segment_bounded(&segment, gigaam_core::MAX_SAMPLES);
+            assert!(parts
+                .iter()
+                .all(|p| !p.samples.is_empty() && p.samples.len() <= gigaam_core::MAX_SAMPLES));
+            assert_eq!(
+                parts
+                    .iter()
+                    .flat_map(|p| p.samples.iter().copied())
+                    .collect::<Vec<_>>(),
+                samples
+            );
+            assert_eq!(parts[0].start_timestamp_ms, segment.start_timestamp_ms);
+            assert_eq!(
+                parts.last().unwrap().end_timestamp_ms,
+                segment.end_timestamp_ms
+            );
+            assert!(parts
+                .windows(2)
+                .all(|p| (p[0].end_timestamp_ms - p[1].start_timestamp_ms).abs() < 1e-7));
+            assert!(parts.iter().all(|p| p.source == segment.source));
+        }
     }
 }
