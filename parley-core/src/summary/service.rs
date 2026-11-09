@@ -1,14 +1,14 @@
 use crate::database::repositories::{
-    action_item::ActionItemsRepository, meeting::MeetingsRepository,
-    meeting_note::MeetingNotesRepository, summary::SummaryProcessesRepository,
+    meeting::MeetingsRepository, meeting_note::MeetingNotesRepository,
+    summary::SummaryProcessesRepository,
 };
 use crate::events::{EventSinkExt, SharedEventSink};
 use crate::summary::llm_client::LlmConfig;
+use crate::summary::meeting_context::MeetingContext;
 use crate::summary::processor::{
     extract_meeting_name_from_markdown, generate_meeting_summary, strip_first_heading_line,
     SummaryStream,
 };
-use crate::summary::structured::StructuredSummary;
 use once_cell::sync::Lazy;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -189,12 +189,17 @@ impl SummaryService {
         let custom_prompt =
             crate::bookmarks::with_bookmark_context(&pool, &meeting_id, custom_prompt).await;
 
+        // Meeting date and participants: anchor relative dates and bound who
+        // can own an action item, then check the model's output against them.
+        let context = MeetingContext::load(&pool, &meeting_id).await;
+
         let result = generate_meeting_summary(
             &config,
             &text,
             &custom_prompt,
             &template_id,
             &notes,
+            &context,
             token_threshold,
             Some(&cancellation_token),
             Some(&stream),
@@ -310,42 +315,33 @@ impl SummaryService {
                         );
                     }
 
-                    match &output.structured {
-                        // The structured summary already carries its action
-                        // items: store them directly, no extra LLM pass.
-                        Some(structured) => {
-                            Self::store_structured_action_items(
-                                &sink,
-                                &pool,
-                                &meeting_id,
-                                structured,
-                            )
-                            .await
-                        }
-                        // Free-form fallback: extract structured action
-                        // items from the *transcript* (grounded to their
-                        // timestamps). Spawned rather than awaited — the
-                        // summary is already saved and on screen; a slow or
-                        // failing extraction must not delay or affect it.
-                        // Only runs once the summary is committed, so a
-                        // failure here can never roll one back.
-                        None => {
-                            crate::summary::transcript_action_items::spawn_transcript_extraction(
-                                sink.clone(),
-                                pool.clone(),
-                                meeting_id.clone(),
-                                model_provider.clone(),
-                                model_name.clone(),
-                            )
-                        }
-                    }
-
-                    // Best-effort, no-op unless the user turned on export
-                    // folder sync (Settings → Integrations); logs its own
-                    // errors. Runs after the structured action items are
-                    // stored so the note includes them; writes the stored
-                    // (final rendered) Markdown on both paths.
-                    crate::export::folder_sync::sync_after_summary(&pool, &meeting_id).await;
+                    // Extract action items from the *transcript*, grounded to
+                    // the sentence each came from — items whose quote isn't in
+                    // the transcript are dropped as hallucinations. The
+                    // structured summary's own action items are not stored:
+                    // they're the model's paraphrase with nothing to check
+                    // them against, and on long meetings with small models
+                    // they were often generic boilerplate. Spawned rather than
+                    // awaited — the summary is already saved and on screen; a
+                    // slow or failing extraction must not delay or affect it.
+                    //
+                    // Export folder sync (best-effort, no-op unless the user
+                    // turned it on in Settings → Integrations; logs its own
+                    // errors) runs after extraction so the note includes the
+                    // action items, whether or not extraction succeeded.
+                    let (sink, pool, meeting_id) = (sink.clone(), pool.clone(), meeting_id.clone());
+                    let (provider, model) = (model_provider.clone(), model_name.clone());
+                    tokio::spawn(async move {
+                        crate::summary::transcript_action_items::extract_and_log(
+                            &sink,
+                            &pool,
+                            &meeting_id,
+                            &provider,
+                            &model,
+                        )
+                        .await;
+                        crate::export::folder_sync::sync_after_summary(&pool, &meeting_id).await;
+                    });
                 }
             }
             Err(e) => {
@@ -368,40 +364,6 @@ impl SummaryService {
                     Self::update_process_failed(&pool, &meeting_id, &e).await;
                 }
             }
-        }
-    }
-
-    /// Replace the meeting's extractor-owned action items with the ones the
-    /// structured summary returned — the same slot (and the same cleanup and
-    /// carry-over rules) the transcript extraction pass writes to, so ticked
-    /// items survive a regeneration. Emits `action-items-extracted`.
-    async fn store_structured_action_items(
-        sink: &SharedEventSink,
-        pool: &SqlitePool,
-        meeting_id: &str,
-        structured: &StructuredSummary,
-    ) {
-        let items = crate::summary::action_extraction::normalize_structured_items(
-            structured
-                .action_items
-                .iter()
-                .map(|a| (a.text.clone(), a.owner.clone(), a.due.clone())),
-        );
-        match ActionItemsRepository::replace_summary_items(pool, meeting_id, &items).await {
-            Ok(count) => {
-                info!(
-                    "Stored {} action item(s) from the structured summary for {}",
-                    count, meeting_id
-                );
-                let _ = sink.emit_event(
-                    "action-items-extracted",
-                    &serde_json::json!({ "meeting_id": meeting_id, "count": count }),
-                );
-            }
-            Err(e) => error!(
-                "Failed to store structured action items for {}: {}",
-                meeting_id, e
-            ),
         }
     }
 

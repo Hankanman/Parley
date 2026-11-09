@@ -1,7 +1,6 @@
 //! Pure formatting helpers for the meeting page: transcript timestamps and
-//! the flattened transcript text sent to summary generation. The
-//! transcript format matches what the retired React frontend sent, so
-//! summaries of old and new meetings read the same.
+//! the flattened transcript text sent to summary generation (built in core,
+//! shared with the auto-summary path).
 
 use chrono::{DateTime, Utc};
 use parley_core::database::models::MeetingTranscript;
@@ -20,13 +19,10 @@ pub fn segment_timestamp(audio_start_time: Option<f64>, fallback_timestamp: &str
 }
 
 /// Flattens transcript segments into the plain-text transcript summary
-/// generation consumes: one `<timestamp> <text>` line per segment.
+/// generation consumes: one `<timestamp> Speaker: <text>` line per segment.
+/// Shared with the auto-summary path so both read the same transcript.
 pub fn build_transcript_text(transcripts: &[MeetingTranscript]) -> String {
-    transcripts
-        .iter()
-        .map(|t| format!("{} {}", segment_timestamp(t.audio_start_time, &t.timestamp), t.text))
-        .collect::<Vec<_>>()
-        .join("\n")
+    parley_core::summary::meeting_context::build_transcript_text(transcripts)
 }
 
 /// Header date, e.g. "11 Sep 2026, 14:03" in the meeting's local timezone.
@@ -261,8 +257,10 @@ mod tests {
 
     #[test]
     fn builds_one_line_per_segment() {
-        let transcripts = vec![seg("Hello", Some(0.0)), seg("World", Some(65.0))];
-        assert_eq!(build_transcript_text(&transcripts), "[00:00] Hello\n[01:05] World");
+        let mut a = seg("Hello", Some(0.0));
+        a.speaker = Some("Alice".to_string());
+        let transcripts = vec![a, seg("World", Some(65.0))];
+        assert_eq!(build_transcript_text(&transcripts), "[00:00] Alice: Hello\n[01:05] World");
     }
 
     #[test]

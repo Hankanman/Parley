@@ -9,12 +9,12 @@
 //! view's "Generate" button, so the same `summary-stream` events drive an
 //! open meeting page.
 
-use crate::database::models::MeetingTranscript;
 use crate::database::repositories::meeting::MeetingsRepository;
 use crate::database::repositories::setting::{
     SettingsRepository, KEY_DEFAULT_SUMMARY_TEMPLATE, KEY_UI_CONFIG,
 };
 use crate::events::SharedEventSink;
+use crate::summary::meeting_context::build_transcript_text;
 use crate::summary::service::SummaryService;
 use anyhow::{anyhow, Result};
 use sqlx::SqlitePool;
@@ -104,25 +104,6 @@ fn resolve_template(configured: Option<&str>) -> String {
         .into_iter()
         .next()
         .unwrap_or_else(|| FALLBACK_TEMPLATE.to_string())
-}
-
-/// One `<timestamp> <text>` line per segment — identical to the meeting
-/// view's `format::build_transcript_text`.
-fn build_transcript_text(transcripts: &[MeetingTranscript]) -> String {
-    transcripts
-        .iter()
-        .map(|t| {
-            let stamp = match t.audio_start_time {
-                Some(s) if s.is_finite() && s >= 0.0 => {
-                    let total = s.floor() as u64;
-                    format!("[{:02}:{:02}]", total / 60, total % 60)
-                }
-                _ => t.timestamp.clone(),
-            };
-            format!("{} {}", stamp, t.text)
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 #[cfg(test)]

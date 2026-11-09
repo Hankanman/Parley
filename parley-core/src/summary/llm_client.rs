@@ -256,7 +256,11 @@ impl LlmConfig {
                     .await
                 {
                     Ok(metadata) => {
-                        let optimal = single_pass_threshold(metadata.context_size as usize);
+                        let optimal = cap_for_model_size(
+                            single_pass_threshold(metadata.context_size as usize),
+                            parse_parameter_billions(&metadata.parameter_count),
+                            &self.model,
+                        );
                         info!(
                             "✓ Using dynamic context for {}: {} tokens (chunk size: {})",
                             self.model, metadata.context_size, optimal
@@ -275,7 +279,15 @@ impl LlmConfig {
             LLMProvider::BuiltInAI => {
                 use crate::summary::summary_engine::models;
                 match models::get_model_by_name(&self.model) {
-                    Some(model_def) => single_pass_threshold(model_def.context_size as usize),
+                    Some(model_def) => cap_for_model_size(
+                        single_pass_threshold(model_def.context_size as usize),
+                        model_def
+                            .name
+                            .rsplit(':')
+                            .next()
+                            .and_then(parse_parameter_billions),
+                        &self.model,
+                    ),
                     None => {
                         warn!("Unknown built-in model {}, using default 2048", self.model);
                         single_pass_threshold(2048)
@@ -296,6 +308,55 @@ impl LlmConfig {
             LLMProvider::CustomOpenAI => 32_000,
         }
     }
+}
+
+/// Most transcript (rough tokens) a model of `params_b` billion parameters is
+/// trusted with in one call, whatever its context window says. Small models
+/// accept long inputs but stop attending to most of them well before the
+/// window is full: gemma3:1b given an 18k-token, hour-long call summarised a
+/// fragment and filled the rest with generic business content (a "financial
+/// services" topic and a "2027 strategic plan" nobody mentioned). Capping the
+/// single pass sends long meetings through map-reduce in slices the model
+/// can actually read. `None` (unknown size, or large enough) leaves the
+/// window-derived threshold alone.
+fn small_model_cap(params_b: Option<f32>) -> Option<usize> {
+    match params_b? {
+        p if p < 3.0 => Some(6_000),
+        p if p < 8.0 => Some(16_000),
+        _ => None,
+    }
+}
+
+fn cap_for_model_size(threshold: usize, params_b: Option<f32>, model: &str) -> usize {
+    match small_model_cap(params_b) {
+        Some(cap) if cap < threshold => {
+            info!(
+                "Capping single-pass input for small model {} ({:.1}B) at {} tokens (window allows {})",
+                model,
+                params_b.unwrap_or_default(),
+                cap,
+                threshold
+            );
+            cap
+        }
+        _ => threshold,
+    }
+}
+
+/// Parameter count in billions from a size label: Ollama's
+/// `parameter_size` ("1.0B", "4.3B", "270M") or a model tag ("1b", "4b",
+/// "e2b"). `None` when it doesn't look like a size.
+fn parse_parameter_billions(label: &str) -> Option<f32> {
+    let label = label.trim().to_ascii_lowercase();
+    let label = label.trim_start_matches(|c: char| c.is_ascii_alphabetic());
+    let (number, scale) = if let Some(n) = label.strip_suffix('b') {
+        (n, 1.0)
+    } else if let Some(n) = label.strip_suffix('m') {
+        (n, 0.001)
+    } else {
+        return None;
+    };
+    number.parse::<f32>().ok().map(|n| n * scale)
 }
 
 /// Reserved for the prompt scaffolding around the transcript.
@@ -831,6 +892,28 @@ mod structured_request_tests {
 #[cfg(test)]
 mod threshold_tests {
     use super::*;
+
+    #[test]
+    fn parses_parameter_sizes() {
+        assert_eq!(parse_parameter_billions("1.0B"), Some(1.0));
+        assert_eq!(parse_parameter_billions("4.3B"), Some(4.3));
+        assert_eq!(parse_parameter_billions("1b"), Some(1.0));
+        assert_eq!(parse_parameter_billions("e2b"), Some(2.0));
+        assert!((parse_parameter_billions("270M").unwrap() - 0.27).abs() < 1e-6);
+        assert_eq!(parse_parameter_billions("unknown"), None);
+        assert_eq!(parse_parameter_billions("latest"), None);
+    }
+
+    #[test]
+    fn small_models_get_a_capped_single_pass() {
+        // gemma3:1b: 32k window -> 27k threshold, capped to 6k.
+        assert_eq!(cap_for_model_size(27_348, Some(1.0), "gemma3:1b"), 6_000);
+        assert_eq!(cap_for_model_size(60_000, Some(4.0), "gemma3:4b"), 16_000);
+        assert_eq!(cap_for_model_size(60_000, Some(27.0), "big"), 60_000);
+        assert_eq!(cap_for_model_size(60_000, None, "unknown"), 60_000);
+        // Never raises a threshold that's already smaller.
+        assert_eq!(cap_for_model_size(3_000, Some(1.0), "tiny-window"), 3_000);
+    }
 
     #[test]
     fn threshold_reserves_output_and_safety_buffer() {

@@ -1,6 +1,7 @@
 use crate::summary::llm_client::{
     generate_structured, generate_summary, LlmConfig, ResponseSchema, StreamSink,
 };
+use crate::summary::meeting_context::MeetingContext;
 use crate::summary::structured::{
     notes_block, notes_chunk_instructions, notes_instructions, StreamingRenderer,
     StructuredSummary, SummaryPlan, SCHEMA_NAME,
@@ -550,6 +551,8 @@ const MAX_LEADING_CHUNK_FAILURES: usize = 3;
 /// * `custom_prompt` - Optional user-provided context
 /// * `template_id` - Template identifier (e.g., "daily_standup")
 /// * `notes` - The user's meeting notes, merged in as priorities (#82)
+/// * `context` - Meeting date and participants (see [`MeetingContext`]):
+///   given to the model, then used to check the action items it returns
 /// * `token_threshold` - Token limit for single-pass processing
 /// * `cancellation_token` - Optional cancellation token to stop processing
 /// * `stream` - Optional live preview of the FINAL report (map/reduce
@@ -561,6 +564,7 @@ pub async fn generate_meeting_summary<L: SummaryLlm>(
     custom_prompt: &str,
     template_id: &str,
     notes: &[String],
+    context: &MeetingContext,
     token_threshold: usize,
     cancellation_token: Option<&CancellationToken>,
     stream: Option<&dyn SummaryStream>,
@@ -588,7 +592,9 @@ pub async fn generate_meeting_summary<L: SummaryLlm>(
     // Token budget for any single call's transcript payload, leaving room
     // for the prompt scaffolding around it — and the notes, which ride
     // along on every call.
-    let notes_tokens = rough_token_count(&notes_chunk_instructions(notes));
+    let context_block = context.prompt_block();
+    let notes_tokens =
+        rough_token_count(&notes_chunk_instructions(notes)) + rough_token_count(&context_block);
     let call_budget = token_threshold
         .saturating_sub(300)
         .saturating_sub(notes_tokens)
@@ -628,7 +634,7 @@ pub async fn generate_meeting_summary<L: SummaryLlm>(
 
             info!("Processing chunk {}/{}", i + 1, num_chunks);
             let user_prompt_chunk = format!(
-                "Provide a concise but comprehensive summary of the following transcript chunk. Capture all key points, decisions, action items, and mentioned individuals.{notes_addendum}\n\n<transcript_chunk>\n{chunk}\n</transcript_chunk>"
+                "{context_block}Provide a concise but comprehensive summary of the following transcript chunk. Capture the key points, any decisions explicitly agreed, any action items someone committed to (with who said it), and the people involved. Only report what the chunk says; if it contains no decisions or action items, say so.{notes_addendum}\n\n<transcript_chunk>\n{chunk}\n</transcript_chunk>"
             );
 
             match llm
@@ -680,14 +686,17 @@ pub async fn generate_meeting_summary<L: SummaryLlm>(
 
     info!("Generating final report with template: {}", template_id);
 
-    let user_prompt = final_user_prompt(&content_to_summarize, custom_prompt, notes);
+    let user_prompt = final_user_prompt(&content_to_summarize, custom_prompt, notes, context);
 
     check_cancelled(cancellation_token)?;
 
     // Structured JSON first.
-    if let Some((structured, markdown)) =
+    if let Some((mut structured, mut markdown)) =
         generate_structured_report(llm, &plan, &user_prompt, cancellation_token, stream).await?
     {
+        if check_structured_action_items(&mut structured, context, text) {
+            markdown = plan.render_markdown(&structured);
+        }
         info!("Summary generation completed (structured JSON)");
         return Ok(SummaryOutput {
             markdown,
@@ -722,10 +731,54 @@ pub async fn generate_meeting_summary<L: SummaryLlm>(
     })
 }
 
-/// The final call's user message: source material, then the optional user
-/// context and notes, each fenced so the model can tell them apart.
-fn final_user_prompt(content: &str, custom_prompt: &str, notes: &[String]) -> String {
-    let mut prompt = format!("\n<transcript_chunks>\n{}\n</transcript_chunks>\n", content);
+/// Hold the structured summary's action items to the meeting context: drop
+/// owners who aren't participants, due dates in a past year or naming a year
+/// nobody said, and owner / deadline text pasted into the task itself.
+/// Returns whether anything changed (so the Markdown needs re-rendering).
+fn check_structured_action_items(
+    summary: &mut StructuredSummary,
+    context: &MeetingContext,
+    transcript: &str,
+) -> bool {
+    let mut changed = false;
+    for item in &mut summary.action_items {
+        let text = crate::summary::action_extraction::strip_owner_and_due(
+            &item.text,
+            item.owner.as_deref(),
+            item.due.as_deref(),
+        );
+        let owner = context.check_owner(item.owner.clone(), Some(transcript));
+        let due = context.check_due(item.due.clone(), Some(transcript));
+        if owner != item.owner || due != item.due || text != item.text {
+            info!(
+                "Corrected summary action item {:?} (owner {:?} -> {:?}, due {:?} -> {:?})",
+                item.text, item.owner, owner, item.due, due
+            );
+            changed = true;
+        }
+        if !text.is_empty() {
+            item.text = text;
+        }
+        item.owner = owner;
+        item.due = due;
+    }
+    changed
+}
+
+/// The final call's user message: meeting context, source material, then the
+/// optional user context and notes, each fenced so the model can tell them
+/// apart.
+fn final_user_prompt(
+    content: &str,
+    custom_prompt: &str,
+    notes: &[String],
+    context: &MeetingContext,
+) -> String {
+    let mut prompt = context.prompt_block();
+    prompt.push_str(&format!(
+        "\n<transcript_chunks>\n{}\n</transcript_chunks>\n",
+        content
+    ));
     if !custom_prompt.is_empty() {
         prompt.push_str("\n\nUser Provided Context:\n\n<user_context>\n");
         prompt.push_str(custom_prompt);
@@ -820,6 +873,16 @@ async fn generate_structured_report<L: SummaryLlm>(
     Ok(None)
 }
 
+/// Rules shared by both final-report prompts, continuing their numbered
+/// list. They target the failures seen on real meetings: invented decisions,
+/// years from the model's training era, and owners nobody named.
+const GROUNDING_RULES: &str = r#"7. Transcript lines read `[mm:ss] Speaker: text`. A generic label such as "Speaker 2" is an unidentified person: never output it as a name.
+8. Decisions: list only what the participants explicitly agreed. Discussion, options and suggestions are not decisions. If nothing was clearly decided, leave decisions empty.
+9. Action items: include only tasks someone clearly committed to or was asked to do. Never add generic business tasks (strategic plans, partnerships, product lines) the transcript doesn't state.
+10. Owners: name a person only if the source makes clear who will do it, using a name from the participants in `<meeting_context>` or the speaker labels. Otherwise leave the owner empty.
+11. Due dates: give one only if the source states a deadline, written as spoken ("by Friday", "end of November"). Never add a year that wasn't said, and never give a date before the meeting date in `<meeting_context>`.
+"#;
+
 fn structured_system_prompt(plan: &SummaryPlan) -> String {
     let notes = if plan.notes().is_empty() {
         String::new()
@@ -836,9 +899,10 @@ fn structured_system_prompt(plan: &SummaryPlan) -> String {
 4. If a field has no relevant information, use "" for strings and [] for lists. Never invent content to fill a field.
 5. Write plain text inside strings: no markdown headings, links or images.
 6. If unsure about something, omit it.
-
+{}
 **FIELDS:**
 {}{}"#,
+        GROUNDING_RULES,
         plan.prompt_guidance(),
         notes
     )
@@ -866,7 +930,7 @@ fn markdown_system_prompt(template: &templates::Template, has_notes: bool) -> St
 4. If a section has no relevant info, write "None noted in this section."
 5. Output **only** the completed Markdown report.
 6. If unsure about something, omit it.
-
+{}
 **SECTION-SPECIFIC INSTRUCTIONS:**
 {}
 
@@ -874,7 +938,7 @@ fn markdown_system_prompt(template: &templates::Template, has_notes: bool) -> St
 {}
 </template>
 "#,
-        section_instructions, clean_template_markdown
+        GROUNDING_RULES, section_instructions, clean_template_markdown
     )
 }
 
@@ -1076,6 +1140,7 @@ mod generation_tests {
             "",
             "standard_meeting",
             notes,
+            &MeetingContext::default(),
             threshold,
             None,
             stream,
@@ -1216,6 +1281,7 @@ mod generation_tests {
             "",
             "standard_meeting",
             &notes,
+            &MeetingContext::default(),
             threshold,
             None,
             None,
@@ -1332,6 +1398,7 @@ mod builtin_smoke {
             "",
             "standard_meeting",
             &notes,
+            &MeetingContext::default(),
             config.token_threshold().await,
             None,
             None,

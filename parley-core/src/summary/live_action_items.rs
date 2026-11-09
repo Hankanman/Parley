@@ -21,6 +21,7 @@ use tracing::{info, warn};
 use crate::database::repositories::action_item::{normalize_text_key, NewActionItem};
 use crate::events::{EventSinkExt, SharedEventSink};
 use crate::summary::llm_client::LlmConfig;
+use crate::summary::meeting_context::MeetingContext;
 use crate::summary::transcript_action_items::{
     extract_window, names_task, states_commitment, Segment,
 };
@@ -67,6 +68,10 @@ pub fn start(sink: SharedEventSink, pool: SqlitePool, provider_name: String, mod
                 }
             };
 
+        // Today's date (and the user's name) so "Friday" isn't read as a
+        // date in the model's training era.
+        let context = MeetingContext::live(Some(&pool)).await;
+
         info!("Live action-item extraction started (generation {generation})");
         let mut interval = tokio::time::interval(INTERVAL);
         // Skip the immediate first tick — wait a full interval so there's
@@ -110,7 +115,8 @@ pub fn start(sink: SharedEventSink, pool: SqlitePool, provider_name: String, mod
                 continue;
             }
 
-            let items = extract_window(&config, &window).await;
+            let mut items = extract_window(&config, &window, &context).await;
+            context.check_items(&mut items, None);
             watermark = latest;
 
             // Superseded while we were awaiting the model? Drop the result.
