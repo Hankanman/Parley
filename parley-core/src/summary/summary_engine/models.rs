@@ -78,7 +78,10 @@ pub fn get_available_models() -> Vec<ModelDef> {
             context_size: 32768, // Gemma 3 1B's trained maximum (4B and up go to 128k)
             layer_count: 26,
             sampling: SamplingParams {
-                temperature: 1.0,
+                // Low: every built-in use (summaries, action items, follow-ups)
+                // is extractive, and at Gemma's chat default of 1.0 small models
+                // drift into invented content on long inputs.
+                temperature: 0.3,
                 top_k: 64,
                 top_p: 0.95,
                 stop_tokens: vec!["<end_of_turn>".to_string()],
@@ -99,7 +102,10 @@ pub fn get_available_models() -> Vec<ModelDef> {
             context_size: 65536, // trained to 128k; 64k fits 60-90 min meetings in one pass
             layer_count: 35,
             sampling: SamplingParams {
-                temperature: 1.0,
+                // Low: every built-in use (summaries, action items, follow-ups)
+                // is extractive, and at Gemma's chat default of 1.0 small models
+                // drift into invented content on long inputs.
+                temperature: 0.3,
                 top_k: 64,
                 top_p: 0.95,
                 stop_tokens: vec!["<end_of_turn>".to_string()],

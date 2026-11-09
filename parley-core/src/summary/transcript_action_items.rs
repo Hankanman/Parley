@@ -16,9 +16,10 @@ use crate::database::models::Transcript;
 use crate::database::repositories::action_item::{
     normalize_text_key, ActionItemsRepository, NewActionItem,
 };
-use crate::events::{EventSink, EventSinkExt, SharedEventSink};
+use crate::events::{EventSink, EventSinkExt};
 use crate::summary::action_extraction::parse_action_items;
 use crate::summary::llm_client::{generate_summary, LlmConfig};
+use crate::summary::meeting_context::MeetingContext;
 use sqlx::SqlitePool;
 use tracing::{info, warn};
 
@@ -105,6 +106,7 @@ pub async fn extract_from_transcript(
     let app_data_dir = crate::paths::app_data_dir().ok();
     let config = LlmConfig::resolve(pool, provider_name, model_name, app_data_dir).await?;
 
+    let context = MeetingContext::load(pool, meeting_id).await;
     let windows = window_segments(&segments);
     info!(
         "Transcript extraction for {meeting_id}: {} segment(s) in {} window(s)",
@@ -114,10 +116,18 @@ pub async fn extract_from_transcript(
 
     let mut collected: Vec<NewActionItem> = Vec::new();
     for window in &windows {
-        collected.extend(extract_window(&config, window).await);
+        collected.extend(extract_window(&config, window, &context).await);
     }
 
-    let deduped = dedupe(collected);
+    // Owners must be participants; due dates can't predate the meeting or
+    // name a year nobody said.
+    let mut deduped = dedupe(collected);
+    let transcript: String = segments
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    context.check_items(&mut deduped, Some(&transcript));
     let count = ActionItemsRepository::replace_summary_items(pool, meeting_id, &deduped)
         .await
         .map_err(|e| format!("failed to store action items: {e}"))?;
@@ -130,31 +140,36 @@ pub async fn extract_from_transcript(
     Ok(count)
 }
 
-/// Fire-and-forget wrapper for the summary-completion path (see `service.rs`).
-pub fn spawn_transcript_extraction(
-    sink: SharedEventSink,
-    pool: SqlitePool,
-    meeting_id: String,
-    provider_name: String,
-    model_name: String,
+/// [`extract_from_transcript`] with the outcome logged rather than returned,
+/// for the summary-completion path (see `service.rs`), which runs it in the
+/// background and has no one to report to.
+pub async fn extract_and_log(
+    sink: &dyn EventSink,
+    pool: &SqlitePool,
+    meeting_id: &str,
+    provider_name: &str,
+    model_name: &str,
 ) {
-    tokio::spawn(async move {
-        match extract_from_transcript(&sink, &pool, &meeting_id, &provider_name, &model_name).await
-        {
-            Ok(count) => {
-                info!("Transcript action-item extraction finished for {meeting_id}: {count}")
-            }
-            Err(e) => warn!("Transcript action-item extraction failed for {meeting_id}: {e}"),
-        }
-    });
+    match extract_from_transcript(sink, pool, meeting_id, provider_name, model_name).await {
+        Ok(count) => info!("Transcript action-item extraction finished for {meeting_id}: {count}"),
+        Err(e) => warn!("Transcript action-item extraction failed for {meeting_id}: {e}"),
+    }
 }
 
 /// Run one extraction pass over a single window: render the segments, call the
 /// model, parse, and ground each item's quote to a segment's timestamp.
 /// Returns grounded items — the caller dedupes across windows. Shared by the
 /// post-meeting pass and the live driver.
-pub(crate) async fn extract_window(config: &LlmConfig, window: &[Segment]) -> Vec<NewActionItem> {
-    let user_prompt = format!("Transcript:\n\n{}", render_window(window));
+pub(crate) async fn extract_window(
+    config: &LlmConfig,
+    window: &[Segment],
+    context: &MeetingContext,
+) -> Vec<NewActionItem> {
+    let user_prompt = format!(
+        "{}Transcript:\n\n{}",
+        context.prompt_block(),
+        render_window(window)
+    );
     let response = match generate_summary(config, SYSTEM_PROMPT, &user_prompt, None, None).await {
         Ok(r) => r,
         Err(e) => {
@@ -323,7 +338,7 @@ Return ONLY a JSON array. No prose, no explanation, no markdown fences.
 
 Each element is an object with these keys:
   "text":     (required) the task, rewritten as a short concrete imperative that starts with a verb (e.g. "Send the Q3 budget to Finance"). Rephrase it in your own words — NEVER copy a transcript sentence verbatim. Do not put the owner's name or the deadline in this field.
-  "assignee": (optional) the real name of the person who will do it, if the transcript clearly says who. Never use a role, a team, or a diarization label like "Speaker 1". Omit if it is not clearly stated.
+  "assignee": (optional) the real name of the person who will do it, if the transcript clearly says who — usually the speaker who said "I'll…", or the person asked. Prefer a name from the participants in <meeting_context> when one is given. Never use a role, a team, or a diarization label like "Speaker 1". Omit if it is not clearly stated.
   "due_hint": (optional) the deadline exactly as spoken ("by Friday", "next sprint"). Do not convert it to a date. Omit if none.
   "quote":    (required) copy, verbatim, the single transcript sentence the task comes from.
 

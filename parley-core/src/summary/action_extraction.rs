@@ -227,27 +227,6 @@ fn find_json_array(text: &str) -> Option<&str> {
     None
 }
 
-/// Apply the same cleaning, sentinel handling, speaker-label stripping,
-/// de-duplication and cap to `(text, owner, due)` triples that came from a
-/// structured summary, so they're stored exactly like extracted items.
-pub(crate) fn normalize_structured_items(
-    items: impl IntoIterator<Item = (String, Option<String>, Option<String>)>,
-) -> Vec<NewActionItem> {
-    normalize_elements(
-        items
-            .into_iter()
-            .map(|(text, assignee, due_hint)| {
-                RawElement::Object(RawActionItem {
-                    text: Some(text),
-                    assignee,
-                    due_hint,
-                    quote: None,
-                })
-            })
-            .collect(),
-    )
-}
-
 /// Validate, clean and de-duplicate parsed elements into storable items.
 fn normalize_elements(elements: Vec<RawElement>) -> Vec<NewActionItem> {
     let mut out: Vec<NewActionItem> = Vec::new();
@@ -260,6 +239,7 @@ fn normalize_elements(elements: Vec<RawElement>) -> Vec<NewActionItem> {
         };
 
         let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let text = strip_owner_and_due(&text, assignee.as_deref(), due_hint.as_deref());
         if text.chars().count() < MIN_TEXT_LEN {
             continue;
         }
@@ -300,6 +280,84 @@ fn normalize_elements(elements: Vec<RawElement>) -> Vec<NewActionItem> {
     out
 }
 
+/// Separators models put between a task and the owner / deadline they paste
+/// into it ("Dom Bramley - Follow up with the client - 2024-10-27").
+const ECHO_SEPARATORS: &[char] = &['-', '\u{2013}', '\u{2014}', ':', ',', '|'];
+
+/// Separators that set an owner off from the task at the start of the text.
+/// No comma: "Ross, Mark, and Tom - Provide…" starts a list of owners, and
+/// stripping the first name would leave "Mark, and Tom - Provide…".
+const OWNER_PREFIX_SEPARATORS: &[char] = &['-', '\u{2013}', '\u{2014}', ':', '|'];
+
+/// Remove the owner and deadline when the model pasted them into the task
+/// text as well as their own fields. Only strips them when set off by a
+/// separator or brackets — "Send the report by Friday" is natural phrasing
+/// and left alone; "Send the report - Friday" / "(due: Friday)" is an echo.
+pub(crate) fn strip_owner_and_due(text: &str, owner: Option<&str>, due: Option<&str>) -> String {
+    let mut out = text.trim().to_string();
+
+    if let Some(owner) = owner.map(str::trim).filter(|o| !o.is_empty()) {
+        if let Some(head) = out.get(..owner.len()) {
+            if head.eq_ignore_ascii_case(owner) {
+                let rest = &out[owner.len()..];
+                let trimmed = rest.trim_start();
+                if trimmed.starts_with(OWNER_PREFIX_SEPARATORS) {
+                    out = trimmed
+                        .trim_start_matches(OWNER_PREFIX_SEPARATORS)
+                        .trim()
+                        .to_string();
+                }
+            }
+        }
+    }
+
+    if let Some(due) = due.map(str::trim).filter(|d| !d.is_empty()) {
+        let lower = out.to_lowercase();
+        let due_lower = due.to_lowercase();
+        // Indices below come from the lowercased copy; they only line up with
+        // `out` when lowercasing kept every byte length (true for ASCII and
+        // most text). Otherwise leave the text alone rather than mis-slice.
+        if lower.len() != out.len() || due_lower.len() != due.len() {
+            return out;
+        }
+        // "(due: Friday)" / "(Friday)" / "[due Friday]" at the end.
+        for (open, close) in [('(', ')'), ('[', ']')] {
+            if lower.ends_with(close) {
+                if let Some(start) = lower.rfind(open) {
+                    let inner = lower[start + 1..lower.len() - 1].trim();
+                    let inner = inner
+                        .strip_prefix("due")
+                        .map(|r| r.trim_start_matches([':', ' ']))
+                        .unwrap_or(inner)
+                        .trim();
+                    if inner == due_lower {
+                        out = out[..start].trim_end().to_string();
+                        break;
+                    }
+                }
+            }
+        }
+        // "... - Friday" / "..., due Friday" at the end.
+        let lower = out.to_lowercase();
+        if lower.ends_with(&due_lower) {
+            let head = out[..out.len() - due.len()].trim_end();
+            let head_trimmed = head
+                .strip_suffix("due")
+                .or_else(|| head.strip_suffix("Due"))
+                .map(str::trim_end)
+                .unwrap_or(head);
+            if head_trimmed.ends_with(ECHO_SEPARATORS) {
+                out = head_trimmed
+                    .trim_end_matches(ECHO_SEPARATORS)
+                    .trim_end()
+                    .to_string();
+            }
+        }
+    }
+
+    out
+}
+
 /// Trim an optional field and map blanks / "no value" sentinels to `None`.
 fn clean_optional(value: Option<String>) -> Option<String> {
     let trimmed = value?.trim().to_string();
@@ -328,7 +386,7 @@ fn clean_assignee(value: Option<String>) -> Option<String> {
 /// True for "Speaker", "Speaker 1", "speaker_2", "Speaker #3" — a generic voice
 /// label. A real name that merely starts with "Speaker" (e.g. "Speakerman", or
 /// "Speaker One and Two") has trailing non-digits and is kept.
-fn is_generic_speaker_label(s: &str) -> bool {
+pub(crate) fn is_generic_speaker_label(s: &str) -> bool {
     let lower = s.trim().to_lowercase();
     let Some(rest) = lower.strip_prefix("speaker") else {
         return false;
@@ -397,6 +455,51 @@ pub async fn extract_for_meeting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strips_owner_and_due_pasted_into_text() {
+        assert_eq!(
+            strip_owner_and_due(
+                "Dom Bramley - Follow up with the client - 2024-10-27",
+                Some("Dom Bramley"),
+                Some("2024-10-27")
+            ),
+            "Follow up with the client"
+        );
+        assert_eq!(
+            strip_owner_and_due("Rich: Finalize the deck", Some("Rich"), None),
+            "Finalize the deck"
+        );
+        // An owner list is left whole rather than half-stripped.
+        assert_eq!(
+            strip_owner_and_due(
+                "Ross, Mark, and Tom - Provide an outline",
+                Some("Ross"),
+                None
+            ),
+            "Ross, Mark, and Tom - Provide an outline"
+        );
+        assert_eq!(
+            strip_owner_and_due("Send the budget (due: Friday)", None, Some("Friday")),
+            "Send the budget"
+        );
+        assert_eq!(
+            strip_owner_and_due("Send the budget, due Friday", None, Some("Friday")),
+            "Send the budget"
+        );
+    }
+
+    #[test]
+    fn natural_phrasing_is_left_alone() {
+        assert_eq!(
+            strip_owner_and_due("Send the report by Friday", Some("Seb"), Some("Friday")),
+            "Send the report by Friday"
+        );
+        assert_eq!(
+            strip_owner_and_due("Richard to send the report", Some("Rich"), None),
+            "Richard to send the report"
+        );
+    }
 
     #[test]
     fn parses_a_bare_array() {
@@ -540,30 +643,6 @@ mod tests {
         assert!(items[0].assignee.is_none(), "Speaker 1 should be dropped");
         assert!(items[1].assignee.is_none(), "speaker_2 should be dropped");
         assert_eq!(items[2].assignee.as_deref(), Some("Amanda"));
-    }
-
-    #[test]
-    fn structured_items_get_the_same_normalization() {
-        let items = normalize_structured_items(vec![
-            (
-                "Send the deck".to_string(),
-                Some("Speaker 2".to_string()),
-                Some("TBD".to_string()),
-            ),
-            ("send the deck.".to_string(), None, None),
-            ("Ok".to_string(), None, None),
-            (
-                "Book the room".to_string(),
-                Some("Bob".to_string()),
-                Some("Monday".to_string()),
-            ),
-        ]);
-        assert_eq!(items.len(), 2);
-        assert!(items[0].assignee.is_none());
-        assert!(items[0].due_hint.is_none());
-        assert_eq!(items[1].assignee.as_deref(), Some("Bob"));
-        assert_eq!(items[1].due_hint.as_deref(), Some("Monday"));
-        assert!(items.iter().all(|i| i.source_start_secs.is_none()));
     }
 
     #[test]
