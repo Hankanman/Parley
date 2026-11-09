@@ -225,6 +225,12 @@ pub fn button_state(phase: RecordingPhase) -> ButtonState {
     }
 }
 
+/// Whether row `ix` is spoken by the same speaker as the row above it, so
+/// the live transcript folds it into that speaker's block.
+pub fn continues_speaker(rows: &[TranscriptRow], ix: usize) -> bool {
+    ix > 0 && rows.get(ix).zip(rows.get(ix - 1)).is_some_and(|(row, prev)| row.speaker == prev.speaker)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,6 +243,16 @@ mod tests {
             text: text.to_string(),
             source: "mic".to_string(),
         }
+    }
+
+    #[test]
+    fn consecutive_rows_from_one_speaker_share_a_block() {
+        let mut rows = vec![row(1, 0.0, "a"), row(2, 1.0, "b"), row(3, 2.0, "c")];
+        rows[2].speaker = "Speaker 1".to_string();
+        assert!(!continues_speaker(&rows, 0));
+        assert!(continues_speaker(&rows, 1));
+        assert!(!continues_speaker(&rows, 2));
+        assert!(!continues_speaker(&rows, 3));
     }
 
     #[test]

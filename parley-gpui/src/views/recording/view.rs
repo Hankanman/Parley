@@ -786,6 +786,22 @@ impl RecordingView {
             }
         });
         let _ = old_len;
+        // A row's header depends on the row above it, so the row after any
+        // changed position may have gained or lost its header.
+        let dirty = match change {
+            RowChange::Appended => None,
+            RowChange::InsertedAt(idx) | RowChange::ReplacedAt(idx) => Some((idx + 1, idx + 2)),
+            RowChange::Repositioned { removed_at, inserted_at } => {
+                Some((removed_at.min(inserted_at), removed_at.max(inserted_at) + 2))
+            }
+        };
+        if let Some((start, end)) = dirty.map(|(s, e)| (s.min(new_len), e.min(new_len)))
+            && start < end
+        {
+            self.scroller.update(cx, |s, cx| {
+                s.remeasure_items(start..end, cx);
+            });
+        }
         cx.notify();
     }
 
@@ -1229,6 +1245,9 @@ impl Render for RecordingView {
                         MessageScroller::new("live-transcript", self.scroller.clone(), move |ix, _window, cx| {
                             let entity = this_entity.read(cx);
                             let row = &entity.rows[ix];
+                            // Same speaker as the row above: join its block
+                            // (no repeated name/time header, tight spacing).
+                            let continues = logic::continues_speaker(&entity.rows, ix);
                             let theme = ActiveTheme::theme(cx);
                             let accent = if row.source == "mic" { theme.primary } else { theme.info };
                             crate::ui::fade_in(
@@ -1236,15 +1255,23 @@ impl Render for RecordingView {
                                     .w_full()
                                     .gap_3()
                                     .px_4()
-                                    .py_2()
+                                    .pb_0p5()
+                                    .when(!continues, |this| this.pt_3())
                                     .items_start()
-                                    .child(div().mt_1().w(px(3.)).h(px(14.)).rounded_full().bg(accent))
+                                    .child(
+                                        div()
+                                            .mt_1()
+                                            .w(px(3.))
+                                            .h(px(14.))
+                                            .rounded_full()
+                                            .when(!continues, |this| this.bg(accent)),
+                                    )
                                     .child(
                                         v_flex()
                                             .flex_1()
                                             .min_w_0()
                                             .gap_0p5()
-                                            .child(
+                                            .when(!continues, |this| this.child(
                                                 h_flex()
                                                     .gap_2()
                                                     .items_baseline()
@@ -1263,12 +1290,15 @@ impl Render for RecordingView {
                                                                 row.audio_start_time.max(0.0) as u64,
                                                             )),
                                                     ),
-                                            )
+                                            ))
                                             .child(div().text_sm().line_height(rems(1.45)).child(row.text.clone())),
                                     ),
                                 ("transcript-row", ix),
                             )
                         })
+                        // The kit pads 2rem under every row; spacing
+                        // comes from the speaker blocks instead.
+                        .with_row_style(StyleRefinement::default().pb_0())
                         .with_bottom_fade(theme.group_box.opacity(0.5)),
                     )
                 }

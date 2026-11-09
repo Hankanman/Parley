@@ -3199,6 +3199,10 @@ impl MeetingView {
             .child(
                 list(list_state, move |ix, _window, cx| {
                     let t = &transcripts[ix];
+                    // A segment from the same speaker as the one above joins
+                    // its block: no header of its own, so long turns read as
+                    // one paragraph run instead of a header per line.
+                    let continues = ix > 0 && transcripts[ix - 1].speaker == t.speaker;
                     let row_markers = markers.get(&t.id);
                     let time = format::segment_timestamp(t.audio_start_time, &t.timestamp);
                     let speaker = t.speaker.clone().unwrap_or_else(|| "Speaker".to_string());
@@ -3292,14 +3296,43 @@ impl MeetingView {
                         .w_full()
                         .gap_1()
                         .px_4()
-                        .py_2()
+                        .pb_1()
+                        .when(!continues, |this| this.pt_3())
                         .when(is_editing_this_row, |this| this.bg(cx.theme().muted.opacity(0.3)))
                         .when(highlighted_segment.as_deref() == Some(t.id.as_str()), |this| {
                             this.bg(cx.theme().primary.opacity(0.15))
                         })
-                        .when_some(row_markers, |this, m| this.child(moments::render_row_markers(m, cx)))
-                        .child(header_row)
-                        .child(div().text_sm().child(t.text.clone()));
+                        .when_some(row_markers, |this, m| this.child(moments::render_row_markers(m, cx)));
+                    let row = if continues {
+                        // The per-segment controls (play, reassign speaker,
+                        // confidence) stay reachable: they float over the
+                        // row's top-right corner on hover, and stay shown
+                        // while that segment is playing or being edited.
+                        let group = SharedString::from(format!("transcript-row-{}", t.id));
+                        let pinned = is_editing_this_row || is_playing || is_loading_clip;
+                        row.child(
+                            div()
+                                .relative()
+                                .group(group.clone())
+                                .child(div().text_sm().child(t.text.clone()))
+                                .child(
+                                    header_row
+                                        .absolute()
+                                        .top(px(-4.))
+                                        .right_0()
+                                        .px_1()
+                                        .rounded(cx.theme().radius)
+                                        .bg(cx.theme().popover)
+                                        .border_1()
+                                        .border_color(cx.theme().border)
+                                        .when(!pinned, |this| {
+                                            this.opacity(0.).group_hover(group, |s| s.opacity(1.))
+                                        }),
+                                ),
+                        )
+                    } else {
+                        row.child(header_row).child(div().text_sm().child(t.text.clone()))
+                    };
 
                     row.into_any_element()
                 })
