@@ -17,7 +17,7 @@ Everything Parley produces is stored locally and never uploaded by Parley:
 - **Voice profiles** used for speaker recognition: the same database
 - **Downloaded models**: `~/.local/share/io.github.hankanman.Parley/models/`
 
-Transcription (Whisper), voice activity detection, speaker diarization and the built-in summary models all run on your device.
+Transcription (Whisper, GigaAM and Parakeet), voice activity detection, speaker diarization and the built-in summary models all run on your device.
 
 ## When Parley uses the network
 

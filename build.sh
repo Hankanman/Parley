@@ -180,6 +180,26 @@ echo "==> Building parley-mcp (MCP server)"
 cargo build --release -p parley-mcp
 MCP_BIN="$ROOT/target/release/parley-mcp"
 
+# GigaAM and sherpa-onnx share ONE runtime. The build-only preparation step
+# supplies the GPU-enabled ABI-compatible runtime and its CUDA 13 libraries;
+# Whisper keeps its build-selected backend. Driver libs are never copied.
+GIGAAM_RUNTIME="${PARLEY_ONNX_RUNTIME_DIR:-$ROOT/target/gigaam-runtime}"
+if [[ -d "$GIGAAM_RUNTIME" ]]; then
+    if [[ ! -f "$GIGAAM_RUNTIME/libonnxruntime.so.1.24.4" ]]; then
+        echo "error: expected ONNX Runtime 1.24.4 in $GIGAAM_RUNTIME" >&2
+        exit 1
+    fi
+    # Do not carry an older runtime ELF into a rebuild after changing versions.
+    find "$ROOT/target/release" -maxdepth 1 -name 'libonnxruntime.so.1.*' \
+        ! -name 'libonnxruntime.so.1.24.4' -delete
+    for lib in "$GIGAAM_RUNTIME"/*.so*; do
+        # Atomic replacement also leaves a running development binary's mapped
+        # runtime intact until it exits.
+        cp -L "$lib" "$ROOT/target/release/$(basename "$lib").new"
+        mv -f "$ROOT/target/release/$(basename "$lib").new" "$ROOT/target/release/$(basename "$lib")"
+    done
+fi
+
 # ----- stage a self-contained dist dir -----
 DIST_DIR="$ROOT/target/gpui-dist"
 rm -rf "$DIST_DIR"

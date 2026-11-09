@@ -43,9 +43,19 @@ fi
 # ----- assemble AppDir -----
 APPDIR="$ROOT/target/gpui-appdir"
 rm -rf "$APPDIR"
-mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/512x512/apps"
+mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/lib" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/512x512/apps"
 
-cp "$DIST_DIR"/* "$APPDIR/usr/bin/"
+# Keep runtime providers and cuDNN's dlopen-loaded components beside the
+# ONE shared ONNX Runtime. linuxdeploy only follows ELF dependencies; it
+# cannot discover these dynamically loaded libraries from the main binary.
+cp "$DIST_DIR/parley" "$DIST_DIR/llama-helper" "$DIST_DIR/parley-mcp" "$APPDIR/usr/bin/"
+cp -P "$DIST_DIR"/*.so* "$APPDIR/usr/lib/"
+mkdir -p "$APPDIR/usr/share/licenses/gigaam"
+cp "$ROOT/scripts/gigaam-LICENSE" "$APPDIR/usr/share/licenses/gigaam/LICENSE"
+RUNTIME_LICENSES="${PARLEY_ONNX_RUNTIME_DIR:-$ROOT/target/gigaam-runtime}/licenses"
+if [[ -d "$RUNTIME_LICENSES" ]]; then
+    cp -a "$RUNTIME_LICENSES" "$APPDIR/usr/share/licenses/gigaam/runtime"
+fi
 chmod +x "$APPDIR/usr/bin/parley" "$APPDIR/usr/bin/llama-helper" "$APPDIR/usr/bin/parley-mcp" 2>/dev/null || true
 
 DESKTOP_FILE="$APPDIR/usr/share/applications/io.github.hankanman.Parley.desktop"
@@ -65,10 +75,9 @@ cp "$ICON_SRC" "$APPDIR/usr/share/icons/hicolor/512x512/apps/io.github.hankanman
 # already stripped the binaries, so this only affects linuxdeploy's pass.
 export NO_STRIP="${NO_STRIP:-1}"
 
-# rpath on parley-gpui is $ORIGIN (see parley-gpui/build.rs), and the
-# sherpa-onnx / onnxruntime .so files are already staged next to it in
-# usr/bin/, so linuxdeploy's ldd-based dependency scan resolves them without
-# needing LD_LIBRARY_PATH — but set it anyway as a safety net.
+# The dist libraries resolve dependencies during linuxdeploy's scan. The
+# packaged copies live in usr/lib; linuxdeploy rewrites executable rpaths
+# accordingly, keeping dynamically loaded ONNX providers beside the runtime.
 export LD_LIBRARY_PATH="$DIST_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 # linuxdeploy is chatty on stdout (mksquashfs progress, etc.) — this script's

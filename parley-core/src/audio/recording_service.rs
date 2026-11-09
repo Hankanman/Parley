@@ -255,7 +255,7 @@ fn subscribe_transcript_persistence(meeting_id: String) {
             audio_end_time: Some(update.audio_end_time),
             duration: Some(update.duration),
             display_time: Some(update.timestamp.clone()), // Use wall-clock timestamp for display
-            confidence: Some(update.confidence),
+            confidence: update.confidence,
             sequence_id: Some(update.sequence_id),
             speaker: update.speaker.clone(),
             voice_profile_id: update.voice_profile_id.clone(),
@@ -721,7 +721,7 @@ pub async fn start(
     // Start the streaming-partial preview task (best-effort, additive to the
     // final path). Detached — it ends when the pipeline drops its sender.
     if let Some(rx) = partial_receiver {
-        transcription::start_partial_decode_task(ctx.sink.clone(), rx);
+        transcription::start_partial_decode_task(ctx.sink.clone(), ctx.pool.clone(), rx);
     }
 
     // Persist every finished segment for this session (SQLite writer +

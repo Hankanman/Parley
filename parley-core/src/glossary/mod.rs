@@ -22,9 +22,9 @@
 //! the note in `audio/transcription/worker.rs`), so the glossary doesn't
 //! touch the live path.
 //!
-//! **Whisper only.** Whisper is the only transcription engine in this
-//! build; there is no Parakeet (or other) provider wired up that could take
-//! hotwords. If one is added, it should read the same [`Glossary`].
+//! **Whisper only.** GigaAM and Parakeet do not consume the glossary prompt
+//! or correction pass. A future hotword integration should read the same
+//! [`Glossary`].
 
 pub mod correction;
 pub mod prompt;

@@ -50,3 +50,6 @@ spikes/gpui-shell/target/
 
 # AppImage built by ./build.sh
 /Parley-*.AppImage
+
+# Build-only model preparation scripts
+__pycache__/

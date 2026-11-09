@@ -278,7 +278,7 @@ pub fn load(view: Entity<SettingsView>, cx: &mut App) {
                     None => SummaryConfig::default(),
                 };
 
-                let whisper_models = parley_core::whisper_engine::whisper_get_available_models()
+                let whisper_models = parley_core::audio::transcription::engine::model_catalog()
                     .await
                     .unwrap_or_default();
 
