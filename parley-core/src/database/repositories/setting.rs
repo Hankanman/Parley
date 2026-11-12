@@ -65,12 +65,21 @@ pub struct SettingsRepository;
 // NOTE: Handle data exclusion in the higher layer as this is database abstraction layer(using SELECT *)
 
 impl SettingsRepository {
+    /// Return the active model, including the custom endpoint's model for
+    /// rows saved before the two model fields were kept in sync.
     pub async fn get_model_config(
         pool: &SqlitePool,
     ) -> std::result::Result<Option<Setting>, sqlx::Error> {
-        let setting = sqlx::query_as::<_, Setting>("SELECT * FROM settings LIMIT 1")
+        let mut setting = sqlx::query_as::<_, Setting>("SELECT * FROM settings LIMIT 1")
             .fetch_optional(pool)
             .await?;
+        if let Some(setting) = &mut setting {
+            if setting.provider == "custom-openai" {
+                if let Some(config) = setting.get_custom_openai_config() {
+                    setting.model = config.model;
+                }
+            }
+        }
         Ok(setting)
     }
 
@@ -366,13 +375,16 @@ impl SettingsRepository {
             sqlx::Error::Protocol(format!("Failed to serialize config to JSON: {}", e).into())
         })?;
 
-        // Upsert into settings table
+        // Keep the active model in sync without changing another provider's
+        // selection when only its saved custom endpoint config is edited.
         sqlx::query(
             r#"
             INSERT INTO settings (id, provider, model, whisperModel, customOpenAIConfig)
             VALUES ('1', 'custom-openai', $1, 'large-v3', $2)
             ON CONFLICT(id) DO UPDATE SET
-                customOpenAIConfig = excluded.customOpenAIConfig
+                customOpenAIConfig = excluded.customOpenAIConfig,
+                model = CASE WHEN settings.provider = 'custom-openai'
+                    THEN excluded.model ELSE settings.model END
             "#,
         )
         .bind(&config.model)
@@ -468,5 +480,183 @@ impl SettingsRepository {
             sqlx::Error::Protocol(format!("Failed to serialize setting '{}': {}", key, e).into())
         })?;
         Self::set_setting_json(pool, key, &json).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::summary::llm_client::LlmConfig;
+
+    async fn test_pool() -> SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    fn custom_config(model: &str) -> CustomOpenAIConfig {
+        CustomOpenAIConfig {
+            endpoint: "http://localhost:8000/v1".into(),
+            api_key: None,
+            model: model.into(),
+            max_tokens: Some(2048),
+            temperature: Some(0.5),
+            top_p: Some(0.9),
+        }
+    }
+
+    async fn stored_model(pool: &SqlitePool) -> String {
+        sqlx::query_scalar("SELECT model FROM settings WHERE id = '1'")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn custom_config_initializes_both_model_fields() {
+        let pool = test_pool().await;
+        let config = custom_config("custom-model");
+        SettingsRepository::save_custom_openai_config(&pool, &config)
+            .await
+            .unwrap();
+
+        let active = SettingsRepository::get_model_config(&pool)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(active.provider, "custom-openai");
+        assert_eq!(active.model, "custom-model");
+        assert_eq!(stored_model(&pool).await, "custom-model");
+        assert_eq!(
+            active.get_custom_openai_config().unwrap().model,
+            "custom-model"
+        );
+    }
+
+    #[tokio::test]
+    async fn editing_active_custom_model_updates_storage_and_preserves_other_settings() {
+        let pool = test_pool().await;
+        SettingsRepository::save_model_config(
+            &pool,
+            "custom-openai",
+            "old-model",
+            "small",
+            Some("http://localhost:11434"),
+        )
+        .await
+        .unwrap();
+        SettingsRepository::save_api_key(&pool, "openai", "test-key")
+            .await
+            .unwrap();
+
+        for model in ["custom-model", "replacement-model", ""] {
+            SettingsRepository::save_custom_openai_config(&pool, &custom_config(model))
+                .await
+                .unwrap();
+            assert_eq!(stored_model(&pool).await, model);
+            let active = SettingsRepository::get_model_config(&pool)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(active.provider, "custom-openai");
+            assert_eq!(active.model, model);
+            assert_eq!(active.whisper_model, "small");
+            assert_eq!(
+                active.ollama_endpoint.as_deref(),
+                Some("http://localhost:11434")
+            );
+            assert_eq!(active.openai_api_key.as_deref(), Some("test-key"));
+        }
+    }
+
+    #[tokio::test]
+    async fn editing_inactive_custom_config_preserves_the_active_provider_and_model() {
+        let pool = test_pool().await;
+        SettingsRepository::save_model_config(&pool, "openai", "gpt-4o", "small", None)
+            .await
+            .unwrap();
+        SettingsRepository::save_custom_openai_config(&pool, &custom_config("custom-model"))
+            .await
+            .unwrap();
+
+        let active = SettingsRepository::get_model_config(&pool)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(active.provider, "openai");
+        assert_eq!(active.model, "gpt-4o");
+        assert_eq!(stored_model(&pool).await, "gpt-4o");
+        assert_eq!(active.whisper_model, "small");
+        assert_eq!(
+            active.get_custom_openai_config().unwrap().model,
+            "custom-model"
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_empty_or_stale_active_model_resolves_to_the_custom_model_without_a_write() {
+        let pool = test_pool().await;
+        let config = custom_config("custom-model");
+        SettingsRepository::save_custom_openai_config(&pool, &config)
+            .await
+            .unwrap();
+
+        // Reproduce rows written by the old UI, including a nonempty model
+        // left over from a previously selected provider.
+        for stale_model in ["", "gemma3:1b", "old-custom-model"] {
+            sqlx::query("UPDATE settings SET model = ? WHERE id = '1'")
+                .bind(stale_model)
+                .execute(&pool)
+                .await
+                .unwrap();
+            let active = SettingsRepository::get_model_config(&pool)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(active.model, "custom-model");
+            assert_eq!(stored_model(&pool).await, stale_model);
+
+            let resolved = LlmConfig::resolve(&pool, &active.provider, &active.model, None)
+                .await
+                .unwrap();
+            assert_eq!(resolved.model, "custom-model");
+            assert_eq!(
+                resolved.custom_openai_endpoint.as_deref(),
+                Some(config.endpoint.as_str())
+            );
+            assert!(resolved.api_key.is_empty());
+            assert_eq!(resolved.max_tokens, Some(2048));
+            assert_eq!(resolved.temperature, Some(0.5));
+            assert_eq!(resolved.top_p, Some(0.9));
+        }
+    }
+
+    #[tokio::test]
+    async fn cleared_custom_model_does_not_fall_back_to_a_stale_active_model() {
+        let pool = test_pool().await;
+        for model in ["", " \t "] {
+            SettingsRepository::save_custom_openai_config(&pool, &custom_config(model))
+                .await
+                .unwrap();
+            sqlx::query("UPDATE settings SET model = 'old-model' WHERE id = '1'")
+                .execute(&pool)
+                .await
+                .unwrap();
+
+            let active = SettingsRepository::get_model_config(&pool)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(active.model, model);
+            let error = LlmConfig::resolve(&pool, &active.provider, &active.model, None)
+                .await
+                .err()
+                .expect("a cleared model must be rejected");
+            assert!(error.contains("Settings → Summary"));
+        }
     }
 }

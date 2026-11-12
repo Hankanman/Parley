@@ -205,6 +205,17 @@ impl SettingsCache {
         cx.global::<SettingsCache>()
     }
 
+    fn set_custom_openai(&mut self, config: CustomOpenAIConfig) {
+        if self.summary.provider == "custom-openai" {
+            self.summary.model = config.model.clone();
+        }
+        self.api_key_present.insert(
+            "custom-openai".to_string(),
+            config.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false),
+        );
+        self.custom_openai = Some(config);
+    }
+
     pub fn ui_str(&self, key: &str) -> String {
         self.ui_config
             .get(key)
@@ -548,13 +559,7 @@ pub fn save_api_key(cx: &mut App, view: &Entity<SettingsView>, provider: String,
 /// Save the custom OpenAI-compatible endpoint config (`api_save_custom_openai_config`'s
 /// core logic).
 pub fn save_custom_openai(cx: &mut App, view: &Entity<SettingsView>, config: CustomOpenAIConfig) {
-    cx.global_mut::<SettingsCache>().custom_openai = Some(config.clone());
-    cx.global_mut::<SettingsCache>()
-        .api_key_present
-        .insert(
-            "custom-openai".to_string(),
-            config.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false),
-        );
+    cx.global_mut::<SettingsCache>().set_custom_openai(config.clone());
     let _ = view.update(cx, |_, cx| cx.notify());
 
     let Some(pool) = AppServices::global(cx).pool() else {
@@ -1052,6 +1057,56 @@ pub fn delete_builtin_model(view: Entity<SettingsView>, cx: &mut App, model_name
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn custom_config(model: &str) -> CustomOpenAIConfig {
+        CustomOpenAIConfig {
+            endpoint: "http://localhost:8000/v1".into(),
+            api_key: None,
+            model: model.into(),
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+        }
+    }
+
+    #[test]
+    fn editing_custom_model_updates_the_active_cache_without_reloading() {
+        let mut cache = SettingsCache {
+            summary: SummaryConfig {
+                provider: "custom-openai".into(),
+                model: "old-model".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for model in ["custom-model", "replacement-model", ""] {
+            cache.set_custom_openai(custom_config(model));
+            assert_eq!(cache.summary.model, model);
+            assert_eq!(cache.custom_openai.as_ref().unwrap().model, model);
+        }
+    }
+
+    #[test]
+    fn editing_inactive_custom_config_does_not_change_the_active_cache() {
+        let mut cache = SettingsCache {
+            summary: SummaryConfig {
+                provider: "openai".into(),
+                model: "gpt-4o".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut config = custom_config("custom-model");
+        config.api_key = Some("test-key".into());
+        cache.set_custom_openai(config);
+        assert_eq!(cache.summary.provider, "openai");
+        assert_eq!(cache.summary.model, "gpt-4o");
+        assert_eq!(cache.custom_openai.as_ref().unwrap().model, "custom-model");
+        assert_eq!(cache.api_key_present.get("custom-openai"), Some(&true));
+
+        cache.set_custom_openai(custom_config("custom-model"));
+        assert_eq!(cache.api_key_present.get("custom-openai"), Some(&false));
+    }
 
     #[test]
     fn ui_str_reads_a_present_string_field() {

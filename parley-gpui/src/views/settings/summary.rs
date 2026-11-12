@@ -101,8 +101,14 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
                         {
                             let view = view.clone();
                             move |val: SharedString, cx: &mut App| {
+                                let custom_model = SettingsCache::global(cx)
+                                    .custom_openai
+                                    .as_ref()
+                                    .map(|config| config.model.clone());
                                 set_summary(cx, &view, |cfg| {
-                                    cfg.model = model_for_provider(&cfg.model, &val);
+                                    cfg.model = model_for_provider(
+                                        &cfg.model, &val, custom_model.as_deref(),
+                                    );
                                     cfg.provider = val.to_string();
                                 });
                             }
@@ -301,8 +307,12 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
 /// carry over to a cloud provider (and vice versa — that is how a built-in
 /// provider ended up asked for "gpt-5"). Switching to built-in AI selects
 /// its default model; switching to anything else clears a built-in name so
-/// that provider's picker starts empty.
-fn model_for_provider(current: &str, provider: &str) -> String {
+/// that provider's picker starts empty. The custom provider restores the
+/// model entered in its own settings, including an explicitly empty value.
+fn model_for_provider(current: &str, provider: &str, custom_model: Option<&str>) -> String {
+    if provider == "custom-openai" {
+        return custom_model.unwrap_or_default().to_string();
+    }
     let is_builtin_model = models::get_model_by_name(current).is_some();
     if provider == "builtin-ai" {
         if is_builtin_model {
@@ -864,10 +874,34 @@ mod tests {
     #[test]
     fn switching_provider_drops_a_model_the_new_provider_does_not_know() {
         let builtin = models::get_default_model().name;
-        assert_eq!(model_for_provider("gpt-5", "builtin-ai"), builtin);
-        assert_eq!(model_for_provider(&builtin, "builtin-ai"), builtin);
-        assert_eq!(model_for_provider(&builtin, "openai"), "");
-        assert_eq!(model_for_provider("gpt-5", "openai"), "gpt-5");
-        assert_eq!(model_for_provider("llama3.2:3b", "ollama"), "llama3.2:3b");
+        assert_eq!(model_for_provider("gpt-5", "builtin-ai", None), builtin);
+        assert_eq!(model_for_provider(&builtin, "builtin-ai", None), builtin);
+        assert_eq!(model_for_provider(&builtin, "openai", None), "");
+        assert_eq!(model_for_provider("gpt-5", "openai", None), "gpt-5");
+        assert_eq!(model_for_provider("llama3.2:3b", "ollama", None), "llama3.2:3b");
+    }
+
+    #[test]
+    fn switching_to_custom_restores_its_saved_model() {
+        let builtin = models::get_default_model().name;
+        assert_eq!(
+            model_for_provider(&builtin, "custom-openai", Some("custom-model")),
+            "custom-model"
+        );
+        assert_eq!(
+            model_for_provider("gpt-5", "custom-openai", Some("custom-model")),
+            "custom-model"
+        );
+        // A custom server may use the same identifier as a built-in model.
+        assert_eq!(
+            model_for_provider("gpt-5", "custom-openai", Some(&builtin)),
+            builtin
+        );
+    }
+
+    #[test]
+    fn switching_to_unconfigured_custom_does_not_reuse_another_providers_model() {
+        assert_eq!(model_for_provider("gpt-5", "custom-openai", None), "");
+        assert_eq!(model_for_provider("gpt-5", "custom-openai", Some("")), "");
     }
 }
