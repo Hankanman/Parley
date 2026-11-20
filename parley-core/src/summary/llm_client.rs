@@ -175,6 +175,10 @@ impl LlmConfig {
     ) -> Result<Self, String> {
         let provider = LLMProvider::from_str(provider_name)?;
 
+        if model_name.trim().is_empty() {
+            return Err("No model configured — choose one in Settings → Summary.".to_string());
+        }
+
         // A model name left over from another provider (e.g. "gpt-5" after
         // switching to built-in AI) would otherwise fail every call — and
         // with no context size to go on, chunk the transcript to dust first.
@@ -886,6 +890,40 @@ mod structured_request_tests {
             response_format: None,
         });
         assert!(body.get("response_format").is_none());
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn blank_models_are_rejected_for_every_provider_before_reading_credentials() {
+        // No connection or schema: an unconfigured model should fail before
+        // any provider-specific settings are read.
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect_lazy("sqlite::memory:")
+            .unwrap();
+        for provider in [
+            "builtin-ai",
+            "ollama",
+            "openai",
+            "claude",
+            "groq",
+            "openrouter",
+            "custom-openai",
+        ] {
+            for model in ["", " \t\n "] {
+                let error = LlmConfig::resolve(&pool, provider, model, None)
+                    .await
+                    .err()
+                    .expect("a blank model must be rejected");
+                assert_eq!(
+                    error,
+                    "No model configured — choose one in Settings → Summary."
+                );
+            }
+        }
     }
 }
 
