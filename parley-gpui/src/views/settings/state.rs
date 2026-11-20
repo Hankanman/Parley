@@ -134,6 +134,8 @@ pub struct SettingsCache {
     pub loaded: bool,
     pub recording: RecordingPreferences,
     pub transcript: TranscriptConfig,
+    pub transcript_error: Option<String>,
+    transcript_saving: bool,
     pub summary: SummaryConfig,
     pub whisper_models: Vec<ModelInfo>,
     pub mic_devices: Vec<PwDevice>,
@@ -289,7 +291,7 @@ pub fn load(view: Entity<SettingsView>, cx: &mut App) {
                     None => SummaryConfig::default(),
                 };
 
-                let whisper_models = parley_core::whisper_engine::whisper_get_available_models()
+                let whisper_models = parley_core::audio::transcription::engine::model_catalog()
                     .await
                     .unwrap_or_default();
 
@@ -491,18 +493,48 @@ pub fn save_recording(cx: &mut App, preferences: RecordingPreferences) {
     });
 }
 
-/// Persist the transcript (Whisper) config to SQLite.
-pub fn save_transcript(cx: &mut App, provider: String, model: String) {
+/// Save the selection before updating the dropdowns.
+pub fn save_transcript(cx: &mut App, view: &Entity<SettingsView>, provider: String, model: String) {
+    if SettingsCache::global(cx).transcript_saving {
+        cx.global_mut::<SettingsCache>().transcript_error =
+            Some("A model selection is already being saved. Try again when it finishes.".into());
+        let _ = view.update(cx, |_, cx| cx.notify());
+        return;
+    }
     let Some(pool) = AppServices::global(cx).pool() else {
-        log::warn!("settings: no DB pool yet, transcript config not saved");
+        cx.global_mut::<SettingsCache>().transcript_error =
+            Some("Settings are still loading. Try changing the model again.".into());
+        let _ = view.update(cx, |_, cx| cx.notify());
         return;
     };
-    Io::global(cx).spawn(async move {
-        if let Err(e) = SettingsRepository::save_transcript_config(&pool, &provider, &model).await
-        {
-            log::warn!("settings: failed to save transcript config: {}", e);
-        }
-    });
+    cx.global_mut::<SettingsCache>().transcript_saving = true;
+    let io = Io::global(cx).clone();
+    let view = view.clone();
+    cx.spawn(async move |cx| {
+        let save_provider = provider.clone();
+        let save_model = model.clone();
+        let result = io
+            .spawn(async move {
+                SettingsRepository::save_transcript_config(&pool, &save_provider, &save_model).await
+            })
+            .await;
+        let _ = cx.update(|cx| {
+            let cache = cx.global_mut::<SettingsCache>();
+            cache.transcript_saving = false;
+            cache.transcript_error = match result {
+                Ok(Ok(())) => {
+                    cache.transcript.provider = provider;
+                    cache.transcript.model = model;
+                    None
+                }
+                Ok(Err(sqlx::Error::Protocol(message))) => Some(message),
+                Ok(Err(e)) => Some(format!("Could not save the transcription model: {e}")),
+                Err(e) => Some(format!("Could not save the transcription model: {e}")),
+            };
+            let _ = view.update(cx, |_, cx| cx.notify());
+        });
+    })
+    .detach();
 }
 
 /// Persist the summary/model config to SQLite.

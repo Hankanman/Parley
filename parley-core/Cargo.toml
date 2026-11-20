@@ -90,7 +90,10 @@ thiserror = "2.0.16"
 # .so loaded at runtime, which has different symbol-visibility and TLS
 # semantics. Prebuilt .so is fetched at build time, dropped next to the
 # binary, and resolved via rpath / LD_LIBRARY_PATH.
+sha2 = "0.10"
+sherpa-onnx-sys = { version = "=1.13.2", default-features = false, features = ["shared"] }
 sherpa-onnx = { version = "1.13.0", default-features = false, features = ["shared"] }
+
 
 # Async
 tokio = { version = "1.32.0", features = ["full", "tracing"] }
@@ -148,7 +151,13 @@ chrono-tz = "0.10"
 #   --features openblas (OpenBLAS optimization, requires BLAS_INCLUDE_DIRS)
 [target.'cfg(target_os = "linux")'.dependencies]
 whisper-rs = { version = "0.16.0", features = ["raw-api", "log_backend"] }
+libc = "0.2"
+libloading = "0.8"
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["std", "load-dynamic", "cuda"] }
 pipewire = { version = "0.10", features = ["v0_3_44"] }
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }
+
+[build-dependencies]
+cc = "1"

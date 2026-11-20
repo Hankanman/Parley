@@ -199,6 +199,17 @@ impl SettingsRepository {
         provider: &str,
         model: &str,
     ) -> std::result::Result<(), sqlx::Error> {
+        use crate::audio::transcription::engine::{MODEL_SELECTION_WRITE, selection_locked};
+
+        let _selection = MODEL_SELECTION_WRITE.lock().await;
+        if selection_locked().await {
+            return Err(sqlx::Error::Protocol(
+                "Finish the active transcription before changing its model".into(),
+            ));
+        }
+        if provider == crate::parakeet::PROVIDER && !crate::parakeet::is_model(model) {
+            return Err(sqlx::Error::Protocol("Unknown Parakeet model".into()));
+        }
         sqlx::query(
             r#"
             INSERT INTO transcript_settings (id, provider, model)

@@ -7,6 +7,7 @@
 #   $1  DIST_DIR   staged dir: parley-gpui binary + .so files + llama-helper + parley-mcp
 #   $2  VERSION    version string for the output filename
 #   $3  OUT_DIR    directory the final .AppImage is written into
+#   $4  CUDA_ONNX_DIR    non-empty when dist contains a CUDA ONNX Runtime
 #
 # Env:
 #   NO_STRIP=1     passed through to linuxdeploy (Fedora 43+ SHT_RELR
@@ -45,7 +46,16 @@ APPDIR="$ROOT/target/gpui-appdir"
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/512x512/apps"
 
-cp "$DIST_DIR"/* "$APPDIR/usr/bin/"
+if [[ -n "${4:-}" ]]; then
+    # ONNX Runtime loads its CUDA provider from its own directory. Keep the
+    # runtime, its providers and the providers' dependencies together where
+    # linuxdeploy resolves the linked libraries.
+    mkdir -p "$APPDIR/usr/lib"
+    cp -P "$DIST_DIR"/*.so* "$APPDIR/usr/lib/"
+    cp "$DIST_DIR/parley" "$DIST_DIR/llama-helper" "$DIST_DIR/parley-mcp" "$APPDIR/usr/bin/"
+else
+    cp "$DIST_DIR"/* "$APPDIR/usr/bin/"
+fi
 chmod +x "$APPDIR/usr/bin/parley" "$APPDIR/usr/bin/llama-helper" "$APPDIR/usr/bin/parley-mcp" 2>/dev/null || true
 
 DESKTOP_FILE="$APPDIR/usr/share/applications/io.github.hankanman.Parley.desktop"

@@ -1,4 +1,4 @@
-//! "Transcription" settings page: the Whisper model catalog (with
+//! "Transcription" settings page: the local model catalog (with
 //! download), which model is active, and language preference.
 //!
 //! Reads/writes the `transcript_settings` row via `SettingsRepository`, and
@@ -8,70 +8,141 @@
 //! `SettingsView` subscribes to and mirrors into `SettingsCache`.
 
 use gpui_kit::component::{
+    ActiveTheme, Disableable, Icon,
     button::Button,
-    h_flex, v_flex,
+    h_flex,
     label::Label,
     setting::{SettingField, SettingGroup, SettingItem, SettingPage},
-    ActiveTheme, Disableable, Icon,
+    v_flex,
 };
 use gpui_kit::*;
 
-use parley_core::whisper_engine::ModelStatus;
+use parley_core::{
+    audio::transcription::engine::provider_for_model, parakeet, whisper_engine::ModelStatus,
+};
 
-use super::state::SettingsCache;
 use super::SettingsView;
+use super::state::SettingsCache;
 
 pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> SettingPage {
     let view = view.clone();
-    let models = SettingsCache::global(cx).whisper_models.clone();
-
-    let available: Vec<(SharedString, SharedString)> = models
+    let provider = selected_provider(cx);
+    let is_parakeet = provider == parakeet::PROVIDER;
+    let models = SettingsCache::global(cx)
+        .whisper_models
         .iter()
+        .filter(|m| provider_for_model(&m.name) == provider);
+    let available: Vec<_> = models
+        .clone()
         .filter(|m| matches!(m.status, ModelStatus::Available))
         .map(|m| (SharedString::from(m.name.clone()), SharedString::from(m.name.clone())))
         .collect();
+    let catalog_items: Vec<_> = models.cloned().map(|m| model_row(&view, m)).collect();
 
-    let mut catalog_items: Vec<SettingItem> = Vec::new();
-    for model in models {
-        catalog_items.push(model_row(&view, model));
-    }
-
-    SettingPage::new("Transcription")
+    let page = SettingPage::new("Transcription")
         .icon(Icon::new(gpui_kit::assets::IconName::Mic))
-        .group(
-            SettingGroup::new().title("Active model").item(
-                SettingItem::new(
-                    "Whisper model",
-                    SettingField::dropdown(
-                        available,
-                        |cx: &App| SharedString::from(SettingsCache::global(cx).transcript.model.clone()),
-                        {
-                            let view = view.clone();
-                            move |val: SharedString, cx: &mut App| {
-                                let model = val.to_string();
-                                {
-                                    let cache = cx.global_mut::<SettingsCache>();
-                                    cache.transcript.provider = "localWhisper".to_string();
-                                    cache.transcript.model = model.clone();
-                                }
-                                super::state::save_transcript(
-                                    cx,
-                                    "localWhisper".to_string(),
-                                    model,
-                                );
-                                let _ = view.update(cx, |_, cx| cx.notify());
+        .group(SettingGroup::new().title("Engine").item(
+            SettingItem::new(
+                "Speech recognition",
+                SettingField::dropdown(
+                    vec![
+                        ("localWhisper".into(), "Whisper".into()),
+                        (parakeet::PROVIDER.into(), "Parakeet TDT v3 · Multilingual".into()),
+                    ],
+                    |cx: &App| SharedString::from(selected_provider(cx)),
+                    {
+                        let view = view.clone();
+                        move |value: SharedString, cx: &mut App| {
+                            let provider = value.to_string();
+                            if provider == selected_provider(cx) {
+                                return;
                             }
-                        },
-                    ),
-                )
-                .description("Used for local, on-device transcription. Only downloaded models can be selected."),
-            ),
+                            let model = if provider == parakeet::PROVIDER {
+                                parakeet::DEFAULT_MODEL.to_string()
+                            } else {
+                                SettingsCache::global(cx)
+                                    .whisper_models
+                                    .iter()
+                                    .find(|m| provider_for_model(&m.name) == provider
+                                        && matches!(m.status, ModelStatus::Available))
+                                    .map(|m| m.name.clone())
+                                    .unwrap_or_else(|| parley_core::config::DEFAULT_WHISPER_MODEL.into())
+                            };
+                            super::state::save_transcript(cx, &view, provider, model);
+                        }
+                    },
+                ),
+            )
+            .description(if is_parakeet { parakeet::runtime_status() } else { "Local Whisper recognition".into() }),
+        ))
+        .group(SettingGroup::new().title("Active model").item(
+            SettingItem::new(
+                if is_parakeet { "Parakeet model" } else { "Whisper model" },
+                SettingField::dropdown(
+                    available,
+                    |cx: &App| SharedString::from(SettingsCache::global(cx).transcript.model.clone()),
+                    {
+                        let view = view.clone();
+                        move |val: SharedString, cx: &mut App| {
+                            let model = val.to_string();
+                            super::state::save_transcript(cx, &view, provider_for_model(&model).into(), model);
+                        }
+                    },
+                ),
+            )
+            .description(if is_parakeet {
+                "Supports 25 languages. Choose INT8 for CPU or FP32 for CUDA."
+            } else {
+                "Used for local, on-device transcription. Only downloaded models can be selected."
+            }),
+        ));
+
+    let page = if is_parakeet {
+        page
+    } else {
+        page.group(super::glossary::group(&view, cx))
+    };
+    let page = if let Some(error) = SettingsCache::global(cx).transcript_error.clone() {
+        page.group(
+            SettingGroup::new()
+                .title("Active model error")
+                .item(SettingItem::render(move |_, _, _| {
+                    Label::new(error.clone()).text_sm().into_any_element()
+                })),
         )
-        .group(super::glossary::group(&view, cx))
-        .group(SettingGroup::new().title("Model catalog").items(catalog_items))
+    } else {
+        page
+    };
+    let page = if let Some(error) = SettingsCache::global(cx).download_error.clone() {
+        page.group(
+            SettingGroup::new()
+                .title("Model operation")
+                .item(SettingItem::render(move |_, _, _| {
+                    Label::new(error.clone()).text_sm().into_any_element()
+                })),
+        )
+    } else {
+        page
+    };
+    page.group(
+        SettingGroup::new()
+            .title("Model catalog")
+            .items(catalog_items),
+    )
 }
 
-fn model_row(view: &Entity<SettingsView>, model: parley_core::whisper_engine::ModelInfo) -> SettingItem {
+fn selected_provider(cx: &App) -> &'static str {
+    if SettingsCache::global(cx).transcript.provider == parakeet::PROVIDER {
+        parakeet::PROVIDER
+    } else {
+        "localWhisper"
+    }
+}
+
+fn model_row(
+    view: &Entity<SettingsView>,
+    model: parley_core::whisper_engine::ModelInfo,
+) -> SettingItem {
     let view = view.clone();
     let name = model.name.clone();
 
@@ -172,16 +243,18 @@ fn start_download(cx: &mut App, view: &Entity<SettingsView>, model_name: String)
     let _ = view.update(cx, |_, cx| cx.notify());
 
     io.spawn(async move {
-        if let Err(e) =
+        if let Err(e) = if parley_core::parakeet::is_model(&model_name) {
+            parley_core::parakeet::download(sink, model_name.clone()).await
+        } else {
             parley_core::whisper_engine::download_model_with_progress(sink, model_name.clone())
                 .await
-        {
+        } {
             log::warn!("settings: failed to download model '{}': {}", model_name, e);
         }
     });
 }
 
-/// Cancel an in-progress Whisper model download.
+/// Cancel an in-progress local model download.
 fn cancel_download(cx: &mut App, view: &Entity<SettingsView>, model_name: String) {
     let services = crate::app_state::AppServices::global(cx);
     let io = services.io.clone();
@@ -193,13 +266,21 @@ fn cancel_download(cx: &mut App, view: &Entity<SettingsView>, model_name: String
     let _ = view.update(cx, |_, cx| cx.notify());
 
     io.spawn(async move {
-        if let Err(e) = parley_core::whisper_engine::whisper_cancel_download(model_name.clone()).await {
-            log::warn!("settings: failed to cancel model download '{}': {}", model_name, e);
+        if let Err(e) = if parley_core::parakeet::is_model(&model_name) {
+            parley_core::parakeet::cancel(&model_name).await
+        } else {
+            parley_core::whisper_engine::whisper_cancel_download(model_name.clone()).await
+        } {
+            log::warn!(
+                "settings: failed to cancel model download '{}': {}",
+                model_name,
+                e
+            );
         }
     });
 }
 
-/// Delete a downloaded (or corrupted) Whisper model, then re-scan the
+/// Delete a downloaded (or corrupted) local model, then re-scan the
 /// catalog so its status flips back to Missing.
 fn delete_model(cx: &mut App, view: &Entity<SettingsView>, model_name: String) {
     let services = crate::app_state::AppServices::global(cx);
@@ -207,14 +288,26 @@ fn delete_model(cx: &mut App, view: &Entity<SettingsView>, model_name: String) {
     let view = view.clone();
 
     cx.spawn(async move |cx| {
+        let delete_name = model_name.clone();
         let result = io
-            .spawn(parley_core::whisper_engine::whisper_delete_corrupted_model(model_name.clone()))
+            .spawn(async move {
+                if parley_core::parakeet::is_model(&delete_name) {
+                    parley_core::parakeet::delete(&delete_name).await
+                } else {
+                    parley_core::whisper_engine::whisper_delete_corrupted_model(delete_name)
+                        .await
+                        .map(|_| ())
+                }
+            })
             .await;
 
-        if let Ok(Err(e)) = result {
-            log::warn!("settings: failed to delete model '{}': {}", model_name, e);
-        }
+        let error = match result {
+            Ok(Ok(())) => None,
+            Ok(Err(e)) => Some(e),
+            Err(e) => Some(e.to_string()),
+        };
         let _ = cx.update(|cx| {
+            cx.global_mut::<SettingsCache>().download_error = error;
             super::state::load(view.clone(), cx);
         });
     })

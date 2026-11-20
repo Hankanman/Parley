@@ -1199,22 +1199,39 @@ impl MeetingView {
             return;
         }
         let io = Io::global(cx);
+        let pool = AppServices::global(cx).pool();
         let generation = self.generation;
         cx.spawn(async move |this, cx| {
             let models = io
-                .spawn(async move { parley_core::whisper_engine::whisper_get_available_models().await })
+                .spawn(async move {
+                    let use_active = match pool.as_ref() {
+                        Some(pool) => parley_core::database::repositories::setting::SettingsRepository::get_transcript_config(pool)
+                            .await
+                            .ok()
+                            .flatten()
+                            .is_some_and(|config| config.provider == parley_core::parakeet::PROVIDER),
+                        None => false,
+                    };
+                    let models = parley_core::audio::transcription::engine::model_catalog().await?;
+                    Ok::<_, String>((models, use_active))
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.generation != generation {
                     return;
                 }
-                if let Ok(Ok(models)) = models {
+                if let Ok(Ok((models, use_active))) = models {
                     this.retranscribe_models = models
                         .into_iter()
                         .filter(|m| matches!(m.status, parley_core::whisper_engine::ModelStatus::Available))
                         .map(|m| m.name)
                         .collect();
-                    if this.retranscribe_model_index.is_none() && !this.retranscribe_models.is_empty() {
+                    if use_active {
+                        this.retranscribe_models.insert(0, String::new());
+                    }
+                    if this.retranscribe_model_index.is_none()
+                        && this.retranscribe_models.first().is_some_and(|model| !parley_core::parakeet::is_model(model))
+                    {
                         this.retranscribe_model_index = Some(0);
                     }
                 }
@@ -1261,8 +1278,11 @@ impl MeetingView {
         };
         let model = self
             .retranscribe_model_index
-            .and_then(|i| self.retranscribe_models.get(i).cloned());
-        let provider = model.as_ref().map(|_| "localWhisper".to_string());
+            .and_then(|i| self.retranscribe_models.get(i).cloned())
+            .filter(|m| !m.is_empty());
+        let provider = model
+            .as_ref()
+            .map(|m| parley_core::audio::transcription::engine::provider_for_model(m).to_string());
 
         self.retranscribe_in_progress = true;
         self.retranscribe_error = None;
@@ -3055,8 +3075,15 @@ impl MeetingView {
         let model_label = self
             .retranscribe_model_index
             .and_then(|i| self.retranscribe_models.get(i))
-            .cloned()
-            .unwrap_or_else(|| "Default".to_string());
+            .map(|model| {
+                if model.is_empty() {
+                    "Active model from Settings"
+                } else {
+                    model.as_str()
+                }
+            })
+            .unwrap_or("Default")
+            .to_string();
 
         v_flex()
             .w_full()

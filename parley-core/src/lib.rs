@@ -39,6 +39,7 @@ pub mod ollama;
 pub mod onboarding;
 pub mod openai;
 pub mod openrouter;
+pub mod parakeet;
 pub mod paths;
 pub mod speaker_diarization;
 pub mod state;

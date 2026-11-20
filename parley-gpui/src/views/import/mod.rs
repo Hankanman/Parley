@@ -163,27 +163,47 @@ impl ImportState {
     /// model picker, like the React dialog's model dropdown.
     fn load_models(&mut self, cx: &mut Context<Self>) {
         let io = AppServices::global(cx).io.clone();
+        let pool = AppServices::global(cx).pool();
         cx.spawn(async move |this, cx| {
             let models = io
-                .spawn(async move { parley_core::whisper_engine::whisper_get_available_models().await })
+                .spawn(async move {
+                    let use_active = match pool.as_ref() {
+                        Some(pool) => parley_core::database::repositories::setting::SettingsRepository::get_transcript_config(pool)
+                            .await
+                            .ok()
+                            .flatten()
+                            .is_some_and(|config| config.provider == parley_core::parakeet::PROVIDER),
+                        None => false,
+                    };
+                    let models = parley_core::audio::transcription::engine::model_catalog().await?;
+                    Ok::<_, String>((models, use_active))
+                })
                 .await;
-            let available: Vec<ModelOption> = match models {
-                Ok(Ok(models)) => models
-                    .into_iter()
-                    .filter(|m| matches!(m.status, ModelStatus::Available))
-                    .map(|m| ModelOption {
-                        name: m.name.clone().into(),
-                        label: m.name.into(),
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
+            let (models, use_active) = models.ok().and_then(Result::ok).unwrap_or_default();
+            let mut available: Vec<ModelOption> = models
+                .into_iter()
+                .filter(|m| matches!(m.status, ModelStatus::Available))
+                .map(|m| ModelOption {
+                    name: m.name.clone().into(),
+                    label: m.name.into(),
+                })
+                .collect();
+            if use_active {
+                available.insert(
+                    0,
+                    ModelOption {
+                        name: "".into(),
+                        label: "Use active model from Settings".into(),
+                    },
+                );
+            }
             if available.is_empty() {
                 return;
             }
+            let selected = (!parley_core::parakeet::is_model(&available[0].name))
+                .then(IndexPath::default);
             let _ = this.update_in(cx, |this, window, cx| {
-                this.model =
-                    Some(cx.new(|cx| SelectState::new(available, Some(IndexPath::default()), window, cx)));
+                this.model = Some(cx.new(|cx| SelectState::new(available, selected, window, cx)));
                 cx.notify();
             });
         })
@@ -287,6 +307,7 @@ impl ImportState {
         self.model
             .as_ref()
             .and_then(|m| m.read(cx).selected_value().map(|v| v.to_string()))
+            .filter(|v| !v.is_empty())
     }
 
     fn start_import(&mut self, cx: &mut Context<Self>) {
