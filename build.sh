@@ -55,6 +55,10 @@ setup_linux_build_env() {
                 echo "==> CUDAARCHS=$CUDAARCHS"
             fi
 
+            # Build whisper.cpp's ggml for a fixed AVX2 baseline instead of the
+            # CI runner's own CPU (issue #155). See cmake/ggml-portable.cmake.
+            export CMAKE_PROJECT_INCLUDE="${CMAKE_PROJECT_INCLUDE:-$ROOT/cmake/ggml-portable.cmake}"
+
             # rust-lld on modern Rust requires every input to be PIE-relocatable.
             # llama-cpp-sys-2's CUDA .cu.o files default to non-PIC, which triggers
             # `R_X86_64_32 cannot be used against local symbol; recompile with -fPIC`

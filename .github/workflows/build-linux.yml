@@ -66,7 +66,10 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          key: ${{ github.event.inputs.ubuntu-version || 'ubuntu-24.04' }}-x86_64-unknown-linux-gnu-gpui
+          # "-portable": whisper-rs-sys has no rerun-if-env-changed for
+          # CMAKE_PROJECT_INCLUDE (build.sh), so a cached native ggml build
+          # would be reused. Bump this suffix whenever ggml build flags change.
+          key: ${{ github.event.inputs.ubuntu-version || 'ubuntu-24.04' }}-x86_64-unknown-linux-gnu-gpui-portable
 
       - name: Install system dependencies
         run: |
@@ -99,6 +102,17 @@ jobs:
           if ! find squashfs-root -name 'libsherpa-onnx-c-api.so*' | grep -q .; then
             echo "::error::libsherpa-onnx-c-api.so is not bundled in the AppImage"; exit 1
           fi
+          # The AppImage must run on any x86-64 CPU with AVX2 (#155). Code
+          # compiled for the runner's own CPU shows up as AVX-512 registers
+          # (bundled libraries like onnxruntime dispatch at runtime, so only
+          # our own binaries are checked).
+          for bin in squashfs-root/usr/bin/parley squashfs-root/usr/bin/llama-helper; do
+            [ -f "$bin" ] || continue
+            n=$(objdump -d --no-show-raw-insn "$bin" | grep -cE '%(zmm|k[1-7])\b' || true)
+            if [ "$n" -gt 0 ]; then
+              echo "::error::$bin contains $n AVX-512 instructions; it would crash on CPUs without AVX-512"; exit 1
+            fi
+          done
           ./"$f" --appimage-help
           rm -rf squashfs-root
 
