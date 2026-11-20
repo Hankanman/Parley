@@ -172,7 +172,7 @@ pub(crate) fn find_audio_file(folder: &Path) -> Result<PathBuf> {
 
     for name in candidates {
         let path = folder.join(name);
-        if path.exists() {
+        if path.is_file() {
             return Ok(path);
         }
     }
@@ -181,6 +181,9 @@ pub(crate) fn find_audio_file(folder: &Path) -> Result<PathBuf> {
     if let Ok(entries) = std::fs::read_dir(folder) {
         for entry in entries.flatten() {
             let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
             if let Some(ext) = path.extension() {
                 let ext = ext.to_string_lossy().to_lowercase();
                 if AUDIO_EXTENSIONS.contains(&ext.as_str()) {
@@ -1058,6 +1061,32 @@ mod tests {
         std::fs::write(dir.path().join("audio.mp4"), b"fake").unwrap();
         let found = find_audio_file(dir.path()).unwrap();
         assert_eq!(found.file_name().unwrap(), "audio.mp4");
+    }
+
+    #[test]
+    fn test_find_audio_file_supports_every_import_extension() {
+        for extension in AUDIO_EXTENSIONS {
+            let folder = tempfile::tempdir().unwrap();
+            let media = folder.path().join(format!("audio.{extension}"));
+            std::fs::write(&media, b"media").unwrap();
+            assert_eq!(find_audio_file(folder.path()).unwrap(), media);
+        }
+    }
+
+    #[test]
+    fn test_find_audio_file_skips_directories_with_media_names() {
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::create_dir(folder.path().join("audio.mp4")).unwrap();
+        assert!(find_audio_file(folder.path()).is_err());
+        let video = folder.path().join("audio.mkv");
+        std::fs::write(&video, b"media").unwrap();
+        assert_eq!(find_audio_file(folder.path()).unwrap(), video);
+
+        std::fs::remove_file(video).unwrap();
+        std::fs::create_dir(folder.path().join("not_a_file.wav")).unwrap();
+        let fallback = folder.path().join("imported.FLAC");
+        std::fs::write(&fallback, b"media").unwrap();
+        assert_eq!(find_audio_file(folder.path()).unwrap(), fallback);
     }
 
     #[test]

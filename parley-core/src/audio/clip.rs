@@ -42,10 +42,10 @@ pub async fn extract_clip_wav(
 ) -> Result<Vec<u8>, String> {
     let folder_path = recording_folder(pool, meeting_id).await?;
 
-    let audio_path = std::path::Path::new(&folder_path).join("audio.mp4");
-    if !audio_path.is_file() {
-        return Err("No audio recording found for this meeting.".to_string());
-    }
+    // Imports retain their original container (e.g. audio.mkv or audio.wav).
+    // Use the same lookup as re-transcription and speaker re-detection.
+    let audio_path = super::retranscription::find_audio_file(std::path::Path::new(&folder_path))
+        .map_err(|_| "No audio recording found for this meeting.".to_string())?;
 
     let ffmpeg = find_ffmpeg_path().ok_or_else(|| "ffmpeg is not available.".to_string())?;
 
@@ -102,6 +102,7 @@ pub async fn extract_clip_wav(
                 }
             }
             cmd.args([
+                "-vn",
                 "-ar",
                 "16000",
                 "-c:a",
@@ -233,5 +234,93 @@ mod tests {
             recording_folder(&pool, "missing").await.unwrap_err(),
             "This meeting has no saved recording."
         );
+    }
+
+    #[tokio::test]
+    async fn missing_media_keeps_the_recording_error() {
+        let pool = test_pool().await;
+        let folder = tempfile::tempdir().unwrap();
+        sqlx::query("INSERT INTO meetings (id, title, created_at, updated_at, folder_path) VALUES ('missing-media', 'Missing media', 'x', 'x', ?)")
+            .bind(folder.path().to_string_lossy().as_ref()).execute(&pool).await.unwrap();
+        assert_eq!(
+            extract_clip_wav(&pool, "missing-media", 0.0, 1.0, None)
+                .await
+                .unwrap_err(),
+            "No audio recording found for this meeting."
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires FFmpeg with lavfi test sources and standard audio/video encoders"]
+    async fn imported_media_extracts_the_requested_transcript_interval() {
+        let ffmpeg = find_ffmpeg_path().expect("FFmpeg is required for this integration test");
+        let pool = test_pool().await;
+        let root = tempfile::tempdir().unwrap();
+        for (extension, video_codec, audio_codec) in [
+            ("mkv", Some("ffv1"), "pcm_s16le"),
+            ("mp4", Some("mpeg4"), "aac"),
+            ("wav", None, "pcm_s16le"),
+        ] {
+            let folder = root.path().join(extension);
+            std::fs::create_dir(&folder).unwrap();
+            let path = folder.join(format!("audio.{extension}"));
+            // One second of silence followed by a tone. A wrong seek can
+            // produce a valid WAV, so check the actual decoded samples too.
+            let mut command = std::process::Command::new(&ffmpeg);
+            command.args([
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=16x16:r=5:d=2",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=16000:duration=2",
+                "-af",
+                "volume=0:enable='lt(t,1)'",
+            ]);
+            if let Some(codec) = video_codec {
+                command.args(["-c:v", codec]);
+            } else {
+                command.arg("-vn");
+            }
+            let generated = command
+                .args(["-c:a", audio_codec, "-shortest"])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(
+                generated.status.success(),
+                "fixture: {}",
+                String::from_utf8_lossy(&generated.stderr)
+            );
+
+            sqlx::query("INSERT INTO meetings (id, title, created_at, updated_at, folder_path) VALUES (?, 'Imported media', 'x', 'x', ?)")
+                .bind(extension).bind(folder.to_string_lossy().as_ref()).execute(&pool).await.unwrap();
+            for (start, expected_tone) in [(0.1, false), (1.2, true)] {
+                let bytes = extract_clip_wav(&pool, extension, start, start + 0.5, None)
+                    .await
+                    .unwrap();
+                let (samples, rate, channels) = parse_wav_pcm16(&bytes).unwrap();
+                assert_eq!((rate, channels), (16000, 1));
+                let duration = samples.len() as f64 / rate as f64;
+                assert!(
+                    (0.45..=0.55).contains(&duration),
+                    "{extension}: {duration}s"
+                );
+                let rms = (samples.iter().map(|s| (*s as f64).powi(2)).sum::<f64>()
+                    / samples.len() as f64)
+                    .sqrt();
+                if expected_tone {
+                    assert!(rms > 500.0, "{extension}: expected tone, RMS={rms}");
+                } else {
+                    assert!(rms < 10.0, "{extension}: expected silence, RMS={rms}");
+                }
+            }
+        }
     }
 }
