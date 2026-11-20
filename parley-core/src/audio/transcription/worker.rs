@@ -250,7 +250,36 @@ pub fn start_transcription_task(
                 },
             };
 
-            process_chunk(&engine, item, &sink, &mut echo_dedup).await;
+            if !engine.is_whisper() && item.chunk.data.len() > engine.max_segment_samples() {
+                let speech = crate::audio::vad::SpeechSegment {
+                    samples: item.chunk.data.clone(),
+                    confidence: 1.0,
+                    source: item.chunk.device_type,
+                    start_timestamp_ms: item.chunk.timestamp * 1000.0,
+                    end_timestamp_ms: (item.chunk.timestamp
+                        + item.chunk.data.len() as f64 / item.chunk.sample_rate as f64)
+                        * 1000.0,
+                };
+                let mut parts = crate::audio::common::split_segment_bounded(
+                    &speech,
+                    engine.max_segment_samples(),
+                );
+                for part in parts.drain(..) {
+                    let sub = PendingChunk {
+                        chunk: AudioChunk {
+                            data: part.samples,
+                            sample_rate: item.chunk.sample_rate,
+                            timestamp: part.start_timestamp_ms / 1000.0,
+                            chunk_id: item.chunk.chunk_id,
+                            device_type: item.chunk.device_type,
+                        },
+                        embedding: None,
+                    };
+                    process_chunk(&engine, sub, &sink, &mut echo_dedup).await;
+                }
+            } else {
+                process_chunk(&engine, item, &sink, &mut echo_dedup).await;
+            }
             processed += 1;
         }
 
@@ -329,6 +358,7 @@ async fn process_chunk(
     // Provider-aware confidence threshold
     let confidence_threshold = match engine {
         TranscriptionEngine::Whisper(_) => 0.3,
+        TranscriptionEngine::Parakeet(_) => 0.0,
     };
     let confidence_str = match confidence_opt {
         Some(c) => format!("{:.2}", c),
@@ -340,7 +370,8 @@ async fn process_chunk(
 
     // Whisper's classic hallucinations on marginal audio: stock phrases and
     // bracketed sound markers with mediocre decoder confidence.
-    let hallucinated = is_likely_hallucination(&transcript, confidence_opt.unwrap_or(1.0));
+    let hallucinated =
+        engine.is_whisper() && is_likely_hallucination(&transcript, confidence_opt.unwrap_or(1.0));
     if hallucinated {
         info!(
             "Dropping likely hallucination: '{}' (confidence: {})",
@@ -605,6 +636,10 @@ async fn transcribe_chunk_with_provider(
 
     // Transcribe using the appropriate engine (with improved error handling)
     match engine {
+        TranscriptionEngine::Parakeet(engine) => engine
+            .transcribe(speech_samples, false)
+            .await
+            .map_err(TranscriptionError::EngineFailed),
         TranscriptionEngine::Whisper(whisper_engine) => {
             // Get language preference from global state
             let language = crate::utils::get_language_preference_internal();

@@ -459,7 +459,10 @@ pub async fn start(
 
     // Claim the start phase (rejects overlapping starts and starts during a
     // still-finalising stop) and check the live recording flag.
-    let _start_phase = begin_start_phase().await?;
+    let _start_phase = {
+        let _selection = transcription::engine::MODEL_SELECTION_WRITE.lock().await;
+        begin_start_phase().await?
+    };
 
     // The canonical state machine's first transition: Idle -> Starting,
     // before any of the awaits below (model validation, preferences, device
@@ -721,7 +724,7 @@ pub async fn start(
     // Start the streaming-partial preview task (best-effort, additive to the
     // final path). Detached — it ends when the pipeline drops its sender.
     if let Some(rx) = partial_receiver {
-        transcription::start_partial_decode_task(ctx.sink.clone(), rx);
+        transcription::start_partial_decode_task(ctx.sink.clone(), ctx.pool.clone(), rx);
     }
 
     // Persist every finished segment for this session (SQLite writer +

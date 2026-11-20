@@ -12,6 +12,7 @@
 #
 # Environment overrides (pre-set if you know better):
 #   CUDAHOSTCXX         host C++ compiler nvcc should use (default: auto-detect g++-15 on Fedora)
+#   PARLEY_ONNX_RUNTIME_DIR  Optional CUDA-enabled ONNX Runtime bundle
 #   CUDAARCHS           CUDA arch list (default: "75;80;86;89;90" — Turing→Hopper)
 #   NO_STRIP            keep set to 1 on Fedora 43+ (linuxdeploy SHT_RELR incompatibility)
 #
@@ -149,6 +150,17 @@ case "$MODE" in
         ;;
 esac
 
+CUDA_ONNX_DIR=""
+if [[ "$MODE" == cuda && -n "${PARLEY_ONNX_RUNTIME_DIR:-}" ]]; then
+    CUDA_ONNX_DIR=$(realpath "${PARLEY_ONNX_RUNTIME_DIR}")
+    if [[ ! -f "$CUDA_ONNX_DIR/libonnxruntime.so" ||
+          ! -f "$CUDA_ONNX_DIR/libonnxruntime_providers_cuda.so" ||
+          ! -f "$CUDA_ONNX_DIR/libonnxruntime_providers_shared.so" ]]; then
+        echo "error: expected libonnxruntime.so and its CUDA/shared providers in $CUDA_ONNX_DIR" >&2
+        exit 1
+    fi
+fi
+
 echo "==> Build mode: $MODE"
 
 setup_sccache
@@ -195,7 +207,18 @@ cp "$GPUI_BIN" "$DIST_DIR/parley"
 # target/release/ by sherpa-onnx-sys's build script (see parley-gpui's
 # $ORIGIN rpath in build.rs, which expects them next to the binary).
 shopt -s nullglob
-SO_FILES=("$ROOT"/target/release/*.so*)
+if [[ -n "$CUDA_ONNX_DIR" ]]; then
+    SO_FILES=("$ROOT"/target/release/libsherpa-onnx-*.so*)
+    for lib in "$CUDA_ONNX_DIR"/*.so*; do
+        # Drivers and the display loader must come from the host.
+        case "${lib##*/}" in
+            libcuda.so*|libnvidia-*|libvulkan.so*|libsherpa-onnx-*.so*) continue ;;
+        esac
+        SO_FILES+=("$lib")
+    done
+else
+    SO_FILES=("$ROOT"/target/release/*.so*)
+fi
 shopt -u nullglob
 if (( ${#SO_FILES[@]} == 0 )); then
     echo "error: no .so files found in target/release (expected libsherpa-onnx-c-api.so / libonnxruntime.so)" >&2
@@ -215,7 +238,7 @@ du -sh "$DIST_DIR"/* | sed 's/^/    /'
 # ----- package as an AppImage -----
 GPUI_VERSION=$("$ROOT/scripts/version.sh")
 echo "==> Packaging AppImage (version $GPUI_VERSION)"
-APPIMAGE=$("$ROOT/parley-gpui/packaging/linux/build-appimage.sh" "$DIST_DIR" "$GPUI_VERSION" "$ROOT")
+APPIMAGE=$("$ROOT/parley-gpui/packaging/linux/build-appimage.sh" "$DIST_DIR" "$GPUI_VERSION" "$ROOT" "$CUDA_ONNX_DIR")
 
 echo
 echo "==> Build succeeded"

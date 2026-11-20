@@ -1,41 +1,76 @@
 // audio/transcription/engine.rs
 //
 // TranscriptionEngine enum and model initialization/validation logic.
-// Whisper is the sole local ASR engine (a prior remote-provider `Provider`
-// variant was removed as dead code — it had no live implementation).
+// Whisper and Parakeet share the transcription pipeline.
 
 use log::{info, warn};
 use std::sync::Arc;
 
 // Transcription engine abstraction.
+#[derive(Clone)]
 pub enum TranscriptionEngine {
+    Parakeet(Arc<crate::parakeet::Engine>),
     Whisper(Arc<crate::whisper_engine::WhisperEngine>), // Local Whisper (direct access)
 }
 
 impl TranscriptionEngine {
+    pub fn max_segment_samples(&self) -> usize {
+        match self {
+            Self::Whisper(_) => 25 * 16_000,
+            Self::Parakeet(_) => crate::parakeet::MAX_SAMPLES,
+        }
+    }
+    pub fn is_whisper(&self) -> bool {
+        matches!(self, Self::Whisper(_))
+    }
+    pub async fn transcribe(
+        &self,
+        samples: Vec<f32>,
+        language: Option<String>,
+        prompt: Option<String>,
+    ) -> Result<(String, Option<f32>, bool), String> {
+        match self {
+            Self::Parakeet(engine) => engine.transcribe(samples, false).await,
+            Self::Whisper(engine) => engine
+                .transcribe_audio_with_confidence(samples, language, prompt)
+                .await
+                .map(|(text, confidence, partial)| (text, Some(confidence), partial))
+                .map_err(|e| e.to_string()),
+        }
+    }
+
     pub async fn is_model_loaded(&self) -> bool {
         match self {
             Self::Whisper(engine) => engine.is_model_loaded().await,
+            Self::Parakeet(_) => true,
         }
     }
 
     pub async fn get_current_model(&self) -> Option<String> {
         match self {
             Self::Whisper(engine) => engine.get_current_model().await,
+            Self::Parakeet(engine) => Some(engine.name.clone()),
         }
     }
 
     pub fn provider_name(&self) -> &str {
         match self {
             Self::Whisper(_) => "Whisper (direct)",
+            Self::Parakeet(_) => "Parakeet TDT v3 (native ONNX)",
         }
     }
 }
 
-/// Validate that the local Whisper model is ready before recording starts.
+/// Validate the selected local model before recording starts.
 pub async fn validate_transcription_model_ready(
     pool: Option<&sqlx::SqlitePool>,
 ) -> Result<(), String> {
+    let (provider, model) = resolve_selection(pool, None, None).await?;
+    if provider == crate::parakeet::PROVIDER {
+        return tokio::task::spawn_blocking(move || crate::parakeet::validate(&model))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
     info!("🔍 Validating Whisper model...");
 
     if let Err(init_error) = crate::whisper_engine::models::whisper_init().await {
@@ -61,12 +96,16 @@ pub async fn validate_transcription_model_ready(
     }
 }
 
-/// Get or initialize the Whisper transcription engine for live recording.
-/// Remote providers (e.g., OpenAI) are not used during the live audio path —
-/// the worker pool is currently Whisper-only.
+/// Acquire the selected local engine for the lifetime of a recording task.
 pub async fn get_or_init_transcription_engine(
     pool: Option<&sqlx::SqlitePool>,
 ) -> Result<TranscriptionEngine, String> {
+    let (provider, model) = resolve_selection(pool, None, None).await?;
+    if provider == crate::parakeet::PROVIDER {
+        return Ok(TranscriptionEngine::Parakeet(
+            crate::parakeet::acquire(&model).await?,
+        ));
+    }
     info!("🎤 Initializing Whisper transcription engine");
     let whisper_engine = get_or_init_whisper(pool).await?;
     Ok(TranscriptionEngine::Whisper(whisper_engine))
@@ -247,5 +286,214 @@ async fn resolve_loadable_model(
             "{} and no other model is downloaded. Please download a model from settings.",
             why
         )),
+    }
+}
+
+/// Explicit model IDs override saved settings, so batch dialogs can select a
+/// different provider without accidentally treating Parakeet as a Whisper model.
+pub async fn resolve_selection(
+    pool: Option<&sqlx::SqlitePool>,
+    model: Option<&str>,
+    provider: Option<&str>,
+) -> Result<(String, String), String> {
+    if let Some(model) = model.filter(|s| !s.is_empty()) {
+        let inferred = provider_for_model(model);
+        if let Some(p) = provider {
+            if p != inferred
+                && (p == crate::parakeet::PROVIDER || inferred == crate::parakeet::PROVIDER)
+            {
+                return Err(format!("Model {model} does not belong to provider {p}"));
+            }
+        }
+        return Ok((inferred.into(), model.into()));
+    }
+    let saved = match pool {
+        Some(pool) => {
+            match crate::database::repositories::setting::SettingsRepository::get_transcript_config(
+                pool,
+            )
+            .await
+            {
+                Ok(saved) => saved,
+                Err(e) => {
+                    warn!("Failed to get transcript config: {e}");
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+    if provider == Some(crate::parakeet::PROVIDER)
+        && saved
+            .as_ref()
+            .is_none_or(|c| c.provider != crate::parakeet::PROVIDER)
+    {
+        return Ok((
+            crate::parakeet::PROVIDER.into(),
+            crate::parakeet::DEFAULT_MODEL.into(),
+        ));
+    }
+    if provider.is_some_and(|p| p != crate::parakeet::PROVIDER) {
+        return Ok(("localWhisper".into(), String::new()));
+    }
+    match saved {
+        Some(c) if c.provider == crate::parakeet::PROVIDER => {
+            let model = if c.model.is_empty() {
+                crate::parakeet::DEFAULT_MODEL.into()
+            } else {
+                c.model
+            };
+            if !crate::parakeet::is_model(&model) {
+                return Err(format!("Unknown Parakeet model: {model}"));
+            }
+            Ok((c.provider, model))
+        }
+        Some(c) if c.provider == "localWhisper" || c.provider == "whisper" => {
+            Ok(("localWhisper".into(), c.model))
+        }
+        Some(_) => Ok(("localWhisper".into(), String::new())),
+        None => Ok((
+            "localWhisper".into(),
+            crate::config::DEFAULT_WHISPER_MODEL.into(),
+        )),
+    }
+}
+
+pub fn provider_for_model(model: &str) -> &'static str {
+    if crate::parakeet::is_model(model) {
+        crate::parakeet::PROVIDER
+    } else {
+        "localWhisper"
+    }
+}
+
+// Keep a settings write from straddling the beginning of a recording.
+pub(crate) static MODEL_SELECTION_WRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+pub(crate) async fn selection_locked() -> bool {
+    crate::audio::recording_service::is_busy().await
+        || crate::parakeet::is_busy()
+        || crate::whisper_engine::LIVE_ENGINE_LEASE.is_live_leased()
+        || crate::audio::import::is_import_in_progress()
+        || crate::audio::retranscription::is_retranscription_in_progress()
+}
+
+pub async fn model_catalog() -> Result<Vec<crate::whisper_engine::ModelInfo>, String> {
+    let mut models = crate::whisper_engine::whisper_get_available_models().await?;
+    models.extend(crate::parakeet::catalog());
+    Ok(models)
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+    #[tokio::test]
+    async fn parakeet_default_matches_build_backend() {
+        let (_, model) = resolve_selection(None, None, Some(crate::parakeet::PROVIDER))
+            .await
+            .unwrap();
+        #[cfg(all(target_os = "linux", feature = "cuda"))]
+        assert_eq!(model, crate::parakeet::FP32_MODEL);
+        #[cfg(not(all(target_os = "linux", feature = "cuda")))]
+        assert_eq!(model, crate::parakeet::CPU_MODEL);
+    }
+
+    #[tokio::test]
+    async fn saved_parakeet_selection_survives_reload_and_batch_override() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE transcript_settings (id TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL, whisperApiKey TEXT, deepgramApiKey TEXT, elevenLabsApiKey TEXT, groqApiKey TEXT, openaiApiKey TEXT)")
+            .execute(&pool).await.unwrap();
+        let repo =
+            crate::database::repositories::setting::SettingsRepository::save_transcript_config;
+        repo(
+            &pool,
+            crate::parakeet::PROVIDER,
+            crate::parakeet::DEFAULT_MODEL,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            resolve_selection(Some(&pool), None, None).await.unwrap(),
+            (
+                crate::parakeet::PROVIDER.into(),
+                crate::parakeet::DEFAULT_MODEL.into()
+            )
+        );
+        assert_eq!(
+            resolve_selection(Some(&pool), Some("small"), None)
+                .await
+                .unwrap(),
+            ("localWhisper".into(), "small".into())
+        );
+        assert!(
+            repo(&pool, crate::parakeet::PROVIDER, "unknown")
+                .await
+                .is_err()
+        );
+        sqlx::query("UPDATE transcript_settings SET model = ''")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            resolve_selection(Some(&pool), None, None).await.unwrap().1,
+            crate::parakeet::DEFAULT_MODEL
+        );
+        sqlx::query("UPDATE transcript_settings SET model = 'unknown'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(resolve_selection(Some(&pool), None, None).await.is_err());
+        sqlx::query("UPDATE transcript_settings SET provider = 'legacy-provider'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            resolve_selection(Some(&pool), None, None).await.unwrap().0,
+            "localWhisper"
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_model_selects_provider_and_rejects_mismatch() {
+        assert_eq!(
+            resolve_selection(None, Some(crate::parakeet::DEFAULT_MODEL), None)
+                .await
+                .unwrap(),
+            (
+                crate::parakeet::PROVIDER.into(),
+                crate::parakeet::DEFAULT_MODEL.into()
+            )
+        );
+        assert!(
+            resolve_selection(
+                None,
+                Some(crate::parakeet::DEFAULT_MODEL),
+                Some("localWhisper")
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(
+            resolve_selection(None, Some(crate::parakeet::FP32_MODEL), None)
+                .await
+                .unwrap()
+                .0,
+            crate::parakeet::PROVIDER
+        );
+        assert_eq!(
+            resolve_selection(None, Some("large-v3-turbo"), None)
+                .await
+                .unwrap()
+                .0,
+            "localWhisper"
+        );
+        assert_eq!(
+            resolve_selection(None, None, None).await.unwrap().0,
+            "localWhisper"
+        );
     }
 }
