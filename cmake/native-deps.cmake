@@ -1,4 +1,6 @@
-# Portable ggml CPU baseline for release builds (issue #155).
+# CMake defaults for the native C/C++ dependencies (whisper.cpp, llama.cpp).
+#
+# 1. Portable ggml CPU baseline for release builds (issue #155).
 #
 # build.sh points CMAKE_PROJECT_INCLUDE here, so CMake runs this after every
 # project() call. whisper-rs-sys leaves GGML_NATIVE at its default (ON), which
@@ -14,3 +16,9 @@ set(GGML_NATIVE OFF CACHE BOOL "ggml: optimize the build for the current system"
 foreach(feature SSE42 AVX AVX2 BMI2 FMA F16C)
     set(GGML_${feature} ON CACHE BOOL "ggml: enable ${feature}")
 endforeach()
+
+# 2. No HTTPS in llama.cpp's vendored cpp-httplib. llama-helper never
+# downloads anything (Parley fetches the models itself), and cpp-httplib's
+# OpenSSL code doesn't compile against OpenSSL 4 (Fedora 45). llama-cpp-sys-2
+# doesn't set this option, so the default applies.
+set(LLAMA_OPENSSL OFF CACHE BOOL "llama: use openssl to support HTTPS")
