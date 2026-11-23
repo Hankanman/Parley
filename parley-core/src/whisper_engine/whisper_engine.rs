@@ -234,12 +234,6 @@ pub fn scan_catalog_entry(
 impl WhisperEngine {
     /// Detect available GPU acceleration capabilities
     fn detect_gpu_acceleration() -> bool {
-        // Check for CUDA support
-        if cfg!(feature = "cuda") {
-            log::info!("CUDA feature enabled - attempting GPU acceleration");
-            return true;
-        }
-
         // Check for Vulkan support
         if cfg!(feature = "vulkan") {
             log::info!("Vulkan feature enabled - attempting GPU acceleration");
@@ -318,9 +312,6 @@ impl WhisperEngine {
 
         #[cfg(feature = "openblas")]
         log::info!("OpenBLAS CPU optimization: enabled");
-
-        #[cfg(feature = "cuda")]
-        log::info!("NVIDIA CUDA support: enabled");
 
         #[cfg(feature = "vulkan")]
         log::info!("Vulkan GPU support: enabled");
@@ -418,18 +409,10 @@ impl WhisperEngine {
                 let hardware_profile = crate::audio::HardwareProfile::detect();
                 let adaptive_config = hardware_profile.get_whisper_config();
 
-                // Enable flash attention for high-end GPUs (CUDA on NVIDIA)
-                // Flash attention provides 20-40% speedup but requires stable GPU drivers
-                let flash_attn_enabled = matches!(
-                    (
-                        &hardware_profile.gpu_type,
-                        &hardware_profile.performance_tier,
-                    ),
-                    (
-                        crate::audio::GpuType::Cuda,
-                        crate::audio::PerformanceTier::Ultra | crate::audio::PerformanceTier::High,
-                    )
-                ); // Conservative: disable for other GPU types and lower tiers
+                // Flash attention stays off on Vulkan: it sped up partial
+                // previews but nearly doubled the p90 of final decodes with
+                // large-v3-turbo (docs/benchmarks/2026-11-gpu.md).
+                let flash_attn_enabled = false;
 
                 let context_param = WhisperContextParameters {
                     use_gpu: adaptive_config.use_gpu,
@@ -463,13 +446,9 @@ impl WhisperEngine {
                 *self.current_model.write().await = Some(model_name.to_string());
 
                 // Enhanced acceleration status reporting
-                let acceleration_status = match (&hardware_profile.gpu_type, flash_attn_enabled) {
-                    (crate::audio::GpuType::Cuda, true) => {
-                        "CUDA GPU with Flash Attention (Ultra-Fast)"
-                    }
-                    (crate::audio::GpuType::Cuda, false) => "CUDA GPU acceleration",
-                    (crate::audio::GpuType::Vulkan, _) => "Vulkan GPU acceleration",
-                    (crate::audio::GpuType::None, _) => "CPU processing only",
+                let acceleration_status = match hardware_profile.gpu_type {
+                    crate::audio::GpuType::Vulkan => "Vulkan GPU acceleration",
+                    crate::audio::GpuType::None => "CPU processing only",
                 };
 
                 log::info!("Successfully loaded model: {} with {} (Performance Tier: {:?}, Beam Size: {}, Threads: {:?})",

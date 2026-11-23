@@ -14,8 +14,7 @@ pub struct HardwareProfile {
 #[derive(Debug, Clone, PartialEq)]
 pub enum GpuType {
     None,
-    Cuda,   // NVIDIA
-    Vulkan, // AMD/Intel
+    Vulkan, // NVIDIA, AMD and Intel
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -80,35 +79,17 @@ impl HardwareProfile {
 
     /// Detect GPU acceleration capabilities.
     ///
-    /// The compiled Cargo feature (`cuda` / `vulkan` / `hipblas`, see
+    /// The compiled Cargo feature (`vulkan`, see
     /// `Cargo.toml` `[features]`) is the source of truth: it determines
     /// whether whisper-rs was actually built with GPU support linked in.
     /// Filesystem/env heuristics are unrelated to what got compiled (e.g. a
-    /// CPU-only build can still have `/usr/local/cuda` installed for other
+    /// CPU-only build can still have GPU libraries installed for other
     /// tooling, and a Vulkan build's runtime-only `libvulkan.so.1` doesn't
     /// match the dev-package-only unversioned `libvulkan.so` path we used to
     /// probe for) so they are used only as a secondary sanity check — logged
     /// as a warning, never as the decision itself. A CPU-only build must
     /// never report a GPU.
     fn detect_gpu() -> (bool, GpuType) {
-        #[cfg(feature = "cuda")]
-        {
-            if !Self::has_cuda_support() {
-                log::warn!(
-                    "Built with the 'cuda' feature but no CUDA installation was found \
-                     via CUDA_PATH/CUDA_HOME or /usr/local/cuda; GPU init may fail at runtime."
-                );
-            }
-            return (true, GpuType::Cuda);
-        }
-
-        #[cfg(feature = "hipblas")]
-        {
-            // AMD ROCm HIP - treated as the Vulkan-equivalent GPU tier since
-            // there is no dedicated HIP variant of `GpuType`.
-            return (true, GpuType::Vulkan);
-        }
-
         #[cfg(feature = "vulkan")]
         {
             if !Self::has_vulkan_support() {
@@ -164,13 +145,6 @@ impl HardwareProfile {
         memory_gb: u8,
     ) -> PerformanceTier {
         match gpu_type {
-            GpuType::Cuda => {
-                if memory_gb >= 16 && cpu_cores >= 8 {
-                    PerformanceTier::Ultra
-                } else {
-                    PerformanceTier::High
-                }
-            }
             GpuType::Vulkan => {
                 if memory_gb >= 12 && cpu_cores >= 6 {
                     PerformanceTier::High
@@ -191,16 +165,6 @@ impl HardwareProfile {
                 }
             }
         }
-    }
-
-    /// Secondary sanity check only (see `detect_gpu`), not used to decide
-    /// `GpuType` - only consulted when the `cuda` feature is compiled in.
-    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
-    fn has_cuda_support() -> bool {
-        // Check for CUDA environment or libraries
-        std::env::var("CUDA_PATH").is_ok()
-            || std::env::var("CUDA_HOME").is_ok()
-            || std::path::Path::new("/usr/local/cuda").exists()
     }
 
     /// Secondary sanity check only (see `detect_gpu`), not used to decide
@@ -291,8 +255,8 @@ mod tests {
         let low_tier = HardwareProfile::calculate_performance_tier(2, &GpuType::None, 4);
         assert_eq!(low_tier, PerformanceTier::Low);
 
-        let high_tier = HardwareProfile::calculate_performance_tier(8, &GpuType::Cuda, 16);
-        assert_eq!(high_tier, PerformanceTier::Ultra);
+        let high_tier = HardwareProfile::calculate_performance_tier(8, &GpuType::Vulkan, 16);
+        assert_eq!(high_tier, PerformanceTier::High);
     }
 
     #[test]
@@ -315,14 +279,12 @@ mod tests {
 
     #[test]
     fn test_gpu_tier_never_below_medium() {
-        // A compiled-in GPU feature (Vulkan/hipblas-mapped-to-Vulkan) should
+        // A compiled-in GPU feature (Vulkan) should
         // never be shoved down to the Low tier, even on weak CPU/memory,
         // since Low forces use_gpu: false and beam_size: 1.
         let tier = HardwareProfile::calculate_performance_tier(1, &GpuType::Vulkan, 1);
         assert_ne!(tier, PerformanceTier::Low);
 
-        let tier = HardwareProfile::calculate_performance_tier(1, &GpuType::Cuda, 1);
-        assert_ne!(tier, PerformanceTier::Low);
     }
 
     #[test]

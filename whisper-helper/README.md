@@ -20,17 +20,14 @@ features, built exactly the way `build.sh` builds `llama-helper` today.
 # CPU (default features, no GPU feature flag)
 cargo build --release -p whisper-helper
 
-# NVIDIA CUDA
-cargo build --release -p whisper-helper --features cuda
-
-# AMD/Intel Vulkan
+# GPU via Vulkan (NVIDIA, AMD, Intel)
 cargo build --release -p whisper-helper --features vulkan
 ```
 
 Each feature forwards to the matching `whisper-rs` (and `whisper-core`)
 feature, so the same `whisper-rs-sys` build.rs / cmake logic that builds the
 main app's whisper.cpp runs here — no separate GPU toolchain setup beyond
-what `docs/building_in_linux.md` already documents for CUDA/Vulkan builds of
+what `docs/building_in_linux.md` already documents for Vulkan builds of
 the main app.
 
 Staging a `whisper-helper` binary into `target/gpui-dist/` next to

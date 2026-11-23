@@ -42,8 +42,8 @@ TARGETS=(
 )
 
 if [[ "$MODE" == "all" ]]; then
-    # Forces fresh whisper.cpp + CUDA compile next build (~10 min).
-    # Useful if you've changed CUDA toolkit or want to verify a vendor-free build.
+    # Forces a fresh whisper.cpp compile next build.
+    # Useful after a toolchain change or to verify a vendor-free build.
     TARGETS+=(
         "$HOME/.cargo/registry/cache/index.crates.io-1949cf8c6b5b557f/whisper-rs-sys-0.15.0.crate"
         "$HOME/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/whisper-rs-sys-0.15.0"

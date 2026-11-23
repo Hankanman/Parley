@@ -9,11 +9,11 @@ for background.
 ```bash
 git clone https://github.com/Hankanman/Parley.git
 cd Parley
-./build.sh           # production build → Parley-<version>-x86_64.AppImage (auto: CUDA on NVIDIA, CPU otherwise)
+./build.sh           # production build → Parley-<version>-x86_64.AppImage (auto: Vulkan if a GPU is present, CPU otherwise)
 ./dev.sh              # development mode, cargo run -p parley-gpui
 ./clean.sh             # nuke target/
 ```
 
-For the full guide — dependency installation, GPU setup (CUDA/Vulkan),
+For the full guide — dependency installation, GPU setup (Vulkan),
 environment variable reference, and troubleshooting — see
 **[docs/building_in_linux.md](building_in_linux.md)**.

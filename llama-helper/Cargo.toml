@@ -19,7 +19,6 @@ libc = "0.2"
 
 [features]
 default = []
-cuda = ["llama-cpp-2/cuda"]
 vulkan = ["llama-cpp-2/vulkan"]
 
 

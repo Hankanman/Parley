@@ -21,7 +21,7 @@ Parley records your meetings, transcribes them live and writes the summary, the 
 ## Features
 
 - **Records both sides of any call.** Microphone and system audio are captured straight from PipeWire, so it works with Meet, Zoom, Teams or anything else that makes sound, and no bot joins your meeting. The mic gets echo cancellation, noise suppression and automatic gain; the two sources are kept on separate channels.
-- **Live transcription on your device.** [Whisper](https://github.com/ggml-org/whisper.cpp) runs in-process, GPU-accelerated on NVIDIA (CUDA) or AMD/Intel (Vulkan), with a CPU fallback.
+- **Live transcription on your device.** [Whisper](https://github.com/ggml-org/whisper.cpp) runs in-process, GPU-accelerated through Vulkan on NVIDIA, AMD and Intel, with a CPU fallback.
 - **Knows who said what.** On-device speaker diarization, plus voice profiles: name a voice once and it is recognised in later meetings.
 - **Summaries from templates.** Stand-ups, client calls, retros, project syncs and more, with key decisions, chapters and bookmarks.
 - **Ask across every meeting.** Plain-language questions over all your transcripts, with answers that cite the meeting and timestamp they came from.
@@ -77,16 +77,15 @@ Needs Rust, cmake and clang; see [`docs/building_in_linux.md`](docs/building_in_
 ```bash
 git clone https://github.com/Hankanman/Parley.git
 cd Parley
-./build.sh           # auto: CUDA if an NVIDIA GPU is present, CPU otherwise
-./build.sh cuda      # NVIDIA
-./build.sh vulkan    # AMD / Intel
+./build.sh           # auto: Vulkan if a GPU is present, CPU otherwise
+./build.sh vulkan    # NVIDIA / AMD / Intel GPUs
 ./build.sh cpu       # CPU only
 ./build.sh --help
 ```
 
-This produces `Parley-<version>-x86_64.AppImage`. For development, `./dev.sh` (same `cuda` / `vulkan` / `cpu` options) runs a debug build directly.
+This produces `Parley-<version>-x86_64.AppImage`. For development, `./dev.sh` (same `vulkan` / `cpu` options) runs a debug build directly.
 
-`build.sh` also handles the Fedora / CUDA 13 build environment (a `g++-15` host compiler for nvcc, `CUDAARCHS` for Turing and newer, `NO_STRIP=1` for linuxdeploy); each can be overridden with an environment variable. `./clean.sh` removes `target/` and leaves your data and models alone.
+`build.sh` also handles the build environment (a portable CPU baseline for whisper.cpp, `NO_STRIP=1` for linuxdeploy); each can be overridden with an environment variable. There is no CUDA build: Vulkan runs on NVIDIA GPUs too (see [docs/benchmarks/2026-11-gpu.md](docs/benchmarks/2026-11-gpu.md)). `./clean.sh` removes `target/` and leaves your data and models alone.
 
 More detail: [`docs/BUILDING.md`](docs/BUILDING.md), [`docs/GPU_ACCELERATION.md`](docs/GPU_ACCELERATION.md).
 

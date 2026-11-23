@@ -22,9 +22,9 @@ use llama_protocol::{Request, Response};
 // ============================================================================
 
 /// Free GPU memory in GB, as reported by llama.cpp's own backend devices
-/// (CUDA, Vulkan, ...). Must run after `LlamaBackend::init`.
+/// (Vulkan, CPU). Must run after `LlamaBackend::init`.
 ///
-/// Before this, only CUDA builds measured anything (via `nvidia-smi`); every
+/// Before this, only CUDA builds (since dropped) measured anything; every
 /// Vulkan build, which is what releases ship for NVIDIA, AMD and Intel GPUs,
 /// assumed 4 GB and offloaded only part of the model, e.g. ~10 of 33 layers
 /// for gemma3:4b at a 32k context on a 12 GB card.

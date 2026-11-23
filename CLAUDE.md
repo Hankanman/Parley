@@ -15,27 +15,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Essential Development Commands
 
-Root-level scripts (recommended — handle CUDA/Vulkan env setup and the `llama-helper` sidecar build for you):
+Root-level scripts (recommended — handle Vulkan/CPU mode selection, native build settings and the `llama-helper` sidecar build for you):
 
 ```bash
-./dev.sh                    # auto: CUDA on NVIDIA, CPU otherwise — cargo run -p parley-gpui
-./dev.sh cuda                # NVIDIA CUDA
-./dev.sh vulkan               # AMD/Intel Vulkan
+./dev.sh                    # auto: Vulkan if a GPU + glslc are present, CPU otherwise — cargo run -p parley-gpui
+./dev.sh vulkan               # GPU via Vulkan (NVIDIA, AMD, Intel)
 ./dev.sh cpu                  # CPU-only
 ./build.sh                    # production build → Parley-<version>-x86_64.AppImage
-./build.sh cuda                # NVIDIA CUDA
-./build.sh vulkan               # AMD/Intel Vulkan
+./build.sh vulkan               # GPU via Vulkan (NVIDIA, AMD, Intel)
 ./build.sh cpu                   # CPU-only
 ./clean.sh                    # nuke target/
 ```
 
-`gpui` is also accepted as a no-op leading argument on both scripts (`./dev.sh gpui cuda`) for muscle memory — it's the only shell now, so it doesn't change anything.
+`gpui` is also accepted as a no-op leading argument on both scripts (`./dev.sh gpui vulkan`) for muscle memory — it's the only shell now, so it doesn't change anything.
 
 Manual `cargo` commands, if you don't want the root scripts:
 
 ```bash
 cargo run -p parley-gpui                       # debug run, CPU
-cargo run -p parley-gpui --features cuda        # debug run, CUDA
+cargo run -p parley-gpui --features vulkan      # debug run, Vulkan
 cargo build --release -p parley-gpui --features vulkan   # release build
 ```
 
@@ -49,7 +47,7 @@ The app has no HTTP listener and no IPC boundary — the UI (`parley-gpui`) call
 │  ┌──────────────────┐    ┌──────────────────────────────────┐  │
 │  │ GPUI views       │    │ parley-core                     │  │
 │  │ (Rust)           │←──→│   • Audio capture + mixing + VAD │  │
-│  │ recording,       │    │   • whisper-rs / parakeet        │  │
+│  │ recording,       │    │   • whisper-rs transcription     │  │
 │  │ meeting, settings│    │   • SQLite via sqlx              │  │
 │  │ speakers, tray   │    │   • Summary engine               │  │
 │  │                  │    │   • llama-helper sidecar         │  │
@@ -100,9 +98,11 @@ shared with a since-retired Tauri/React shell) — don't change them casually
 when refactoring, since existing recovery/IndexedDB-shaped logic on the Rust
 side still keys off them.
 
-GPU features (`cuda`, `vulkan`, `hipblas`, `openblas`, `openmp`) live on
+There is no CUDA or ROCm build: Vulkan covers NVIDIA and AMD GPUs (CUDA was
+dropped in Nov 2026; see `docs/benchmarks/2026-11-gpu.md`). Backend features
+(`vulkan`, `openblas`, `openmp`) live on
 `parley-core`; `parley-gpui` and `llama-helper` forward the same feature
-names, so `./dev.sh cuda` etc. are unchanged.
+names, so `./dev.sh vulkan` etc. are unchanged.
 
 ### Audio Processing Pipeline (Critical Understanding)
 
@@ -202,14 +202,14 @@ cx.subscribe(&core_events, |this, _, event: &CoreEvent, cx| {
 **Model Loading** (parley-core/src/whisper_engine/whisper_engine.rs):
 ```rust
 pub async fn load_model(&self, model_name: &str) -> Result<()> {
-    // Automatically detects GPU capabilities (CUDA/Vulkan)
+    // Automatically detects GPU capabilities (Vulkan)
     // Falls back to CPU if GPU unavailable
 }
 ```
 
 **GPU Acceleration**:
-- CUDA (NVIDIA), Vulkan (AMD/Intel), or CPU fallback
-- Configure via Cargo features: `--features cuda`, `--features vulkan` (auto-selected by `build.sh`/`dev.sh`)
+- Vulkan (NVIDIA, AMD, Intel) or CPU fallback
+- Configure via Cargo feature: `--features vulkan` (auto-selected by `build.sh`/`dev.sh`)
 
 ## Critical Development Patterns
 
@@ -359,7 +359,7 @@ name functions.
 Linux is the only supported platform (see [Repository-Specific Conventions](#repository-specific-conventions)).
 
 - **Audio Capture**: Native PipeWire (`audio/pw/`) for both microphone and system audio — no virtual device or loopback trick needed
-- **GPU**: CUDA (NVIDIA) or Vulkan (AMD/Intel) via Cargo features, CPU fallback otherwise
+- **GPU**: Vulkan (NVIDIA, AMD, Intel) via the `vulkan` Cargo feature, CPU fallback otherwise
 - **Dependencies**: Requires cmake, llvm, libomp — see [docs/building_in_linux.md](docs/building_in_linux.md)
 
 ## Performance Optimization Guidelines

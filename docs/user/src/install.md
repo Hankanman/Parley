@@ -73,4 +73,4 @@ This removes Parley, `parley-mcp`, the menu entry and the icon. Your meetings, r
 
 ## Building from source
 
-For CUDA builds, or to hack on Parley, see [Building from source](https://github.com/Hankanman/Parley/blob/main/docs/BUILDING.md) in the repository.
+To build Parley yourself, see [Building from source](https://github.com/Hankanman/Parley/blob/main/docs/BUILDING.md) in the repository.

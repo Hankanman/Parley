@@ -75,13 +75,10 @@ export LD_LIBRARY_PATH="$DIST_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 # own stdout is captured by build.sh as `APPIMAGE=$(...)` and must contain
 # only the final path echoed below, so redirect linuxdeploy's stdout to
 # stderr here.
-# CUDA builds: never bundle the NVIDIA *driver* libraries (libcuda.so.1,
-# libnvidia-*) — they must match the host's kernel driver, so a bundled copy
-# breaks on any machine with a different driver version. The CUDA *runtime*
-# libraries (libcudart, libcublas, libcublasLt) are redistributable and are
-# still bundled so the AppImage runs without the CUDA toolkit installed.
-# Vulkan builds: never bundle the Vulkan loader (libvulkan.so.1) either; the
-# system's loader is the one that knows the installed GPU drivers.
+# Never bundle GPU driver libraries (libcuda.so.1, libnvidia-*, which also
+# hold NVIDIA's Vulkan driver): they must match the host's kernel driver. Nor
+# the Vulkan loader (libvulkan.so.1): the system's loader is the one that
+# knows the installed GPU drivers.
 mkdir -p "$OUT_DIR"
 (
     cd "$OUT_DIR"
