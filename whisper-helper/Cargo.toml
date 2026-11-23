@@ -20,7 +20,6 @@ libc = "0.2"
 [features]
 default = []
 cpu = []
-cuda = ["whisper-rs/cuda", "whisper-core/cuda"]
 vulkan = ["whisper-rs/vulkan", "whisper-core/vulkan"]
 
 # Release profile lives at the workspace root (see top-level Cargo.toml) —

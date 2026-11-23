@@ -1,5 +1,10 @@
 # Runtime whisper backend selection (issue #56 spike)
 
+> **Update, November 2026:** CUDA (and ROCm/hipblas) builds were dropped. Vulkan
+> covers NVIDIA and AMD GPUs, so the candidates below reduce to `vulkan` and
+> `cpu`; see [benchmarks/2026-11-gpu.md](benchmarks/2026-11-gpu.md). The CUDA
+> discussion is kept as a record of the spike.
+
 Engineering spike: can Parley ship one binary that picks a CPU/Vulkan/CUDA
 whisper backend at runtime, instead of building (and shipping) a separate
 binary per backend at compile time as it does today? This document reports

@@ -25,9 +25,7 @@ use whisper_rs::{WhisperContext, WhisperContextParameters};
 /// responses and used by `backend_probe` (the future selection logic) to
 /// label results without having to parse the binary's filename.
 fn compiled_backend() -> &'static str {
-    if cfg!(feature = "cuda") {
-        "cuda"
-    } else if cfg!(feature = "vulkan") {
+    if cfg!(feature = "vulkan") {
         "vulkan"
     } else {
         "cpu"
@@ -49,7 +47,7 @@ impl State {
 
     fn load_model(&mut self, path: &str) -> Result<()> {
         let context_param = WhisperContextParameters {
-            use_gpu: cfg!(any(feature = "cuda", feature = "vulkan")),
+            use_gpu: cfg!(feature = "vulkan"),
             gpu_device: 0,
             ..Default::default()
         };

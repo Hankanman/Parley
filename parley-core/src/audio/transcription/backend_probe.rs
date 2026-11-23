@@ -9,10 +9,10 @@
 //!
 //! # What this does
 //!
-//! Enumerates candidate `whisper-helper-{cuda,vulkan,cpu}` sidecar binaries
+//! Enumerates candidate `whisper-helper-{vulkan,cpu}` sidecar binaries
 //! next to the running executable, launches each with a `probe` request (see
 //! `whisper-protocol::Request::Probe`), and picks the first that succeeds in
-//! priority order cuda → vulkan → cpu. The result is intended to be
+//! priority order vulkan → cpu. The result is intended to be
 //! persisted alongside the rest of the transcription config, with a manual
 //! override — see [`BackendChoice`] and [`get_transcription_backends`].
 //!
@@ -36,7 +36,7 @@ use whisper_protocol::{Request, Response};
 
 /// Priority order for automatic selection: prefer the fastest backend that
 /// actually works on this machine.
-const CANDIDATE_ORDER: [&str; 3] = ["cuda", "vulkan", "cpu"];
+const CANDIDATE_ORDER: [&str; 2] = ["vulkan", "cpu"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BackendCandidate {

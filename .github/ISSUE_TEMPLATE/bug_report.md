@@ -23,7 +23,7 @@ assignees: ''
 ## Environment
 - Distro: [e.g., Fedora 44, Ubuntu 24.04]
 - Parley version: [e.g., 0.4.0]
-- GPU / mode: [e.g., NVIDIA RTX 3080 (cuda), CPU-only]
+- GPU / mode: [e.g., NVIDIA RTX 3080 (vulkan), CPU-only]
 - Install method: [e.g., AppImage from Releases, built from source]
 
 ## Screenshots/Videos

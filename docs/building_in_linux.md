@@ -2,7 +2,7 @@
 
 Parley is Linux-only. This guide covers building from source using the
 root-level `build.sh` / `dev.sh` / `clean.sh` scripts, which handle GPU-mode
-selection, the gnarly Fedora/CUDA build-environment quirks, and the
+selection, the build-environment quirks, and the
 `llama-helper` sidecar build for you.
 
 ---
@@ -63,19 +63,23 @@ You'll also need a Rust toolchain (`rustup`).
 ./build.sh             # production build → AppImage
 ```
 
-**That's it.** Both scripts auto-detect NVIDIA GPUs (via `nvidia-smi`) and
-build with CUDA; everything else falls back to CPU. Pass a mode explicitly to
-override:
+**That's it.** Both scripts build with Vulkan when the machine has a GPU
+(a `/dev/dri/renderD*` node) and `glslc` is installed, and fall back to CPU
+otherwise. Pass a mode explicitly to override:
 
 ```bash
-./dev.sh cuda          # NVIDIA CUDA
-./dev.sh vulkan        # AMD/Intel Vulkan
+./dev.sh vulkan        # GPU via Vulkan (NVIDIA, AMD, Intel)
 ./dev.sh cpu           # CPU-only
 
-./build.sh cuda
 ./build.sh vulkan
 ./build.sh cpu
 ```
+
+There is no CUDA build. Vulkan runs on NVIDIA GPUs through the normal NVIDIA
+driver, and on an RTX 3080 Ti it matches CUDA for the built-in summary models
+and keeps live transcription far ahead of real time. Whole-file Whisper jobs
+are about 2× slower than CUDA was. See
+[benchmarks/2026-11-gpu.md](benchmarks/2026-11-gpu.md).
 
 Run `./build.sh --help` or `./dev.sh --help` for the full usage notes
 (environment variable overrides, etc.) straight from the script.
@@ -87,63 +91,42 @@ Run `./build.sh --help` or `./dev.sh --help` for the full usage notes
 `build.sh` and `dev.sh` are self-contained — no separate GPU-detection script
 is involved:
 
-1. **Mode resolution**: `auto` (default) checks for a working `nvidia-smi` →
-   `cuda`, else `cpu`. Pass `cuda` / `vulkan` / `cpu` to force a mode.
-2. **Platform env setup** (Linux): auto-detects a compatible `g++` for `nvcc`
-   on Fedora (CUDA 13 needs gcc ≤ 15), sets `CUDAARCHS`, enables
-   `CMAKE_POSITION_INDEPENDENT_CODE` (required for `rust-lld` to link the CUDA
-   `.cu.o` objects), and sets `NO_STRIP=1` (linuxdeploy's bundled `strip`
-   chokes on Fedora 43+'s `SHT_RELR` sections).
+1. **Mode resolution**: `auto` (default) picks `vulkan` when there's a GPU
+   render node and `glslc`, else `cpu`. Pass `vulkan` / `cpu` to force a mode.
+2. **Platform env setup** (Linux): points CMake at
+   `cmake/native-deps.cmake` (a portable AVX2 baseline for whisper.cpp, and
+   llama.cpp without OpenSSL) and sets `NO_STRIP=1` (linuxdeploy's bundled
+   `strip` chokes on Fedora 43+'s `SHT_RELR` sections).
 3. **Sidecar build**: builds the `llama-helper` crate (release) with the
    matching GPU feature; `dev.sh` points `PARLEY_LLAMA_HELPER` at it directly,
    `build.sh` stages a copy into `target/gpui-dist/`.
 4. **GPUI build/run**: `dev.sh` runs `cargo run -p parley-gpui --features
-   {cuda,vulkan}` as needed; `build.sh` runs `cargo build --release -p
+   vulkan` as needed; `build.sh` runs `cargo build --release -p
    parley-gpui`, stages the binary + native libs into `target/gpui-dist/`,
    and packages that into an AppImage via
    `parley-gpui/packaging/linux/build-appimage.sh`.
 
-| Mode     | Feature Flag          | Typical Speedup |
-| -------- | ---------------------- | ---------------- |
-| CUDA     | `--features cuda`      | 5-10x            |
-| Vulkan   | `--features vulkan`    | 3-6x             |
-| CPU      | (none)                 | 1x (baseline)    |
+| Mode     | Feature flag          |
+| -------- | ---------------------- |
+| Vulkan   | `--features vulkan`    |
+| CPU      | (none)                 |
 
 ---
 
 ## 🔧 GPU Setup
 
-### 🟢 NVIDIA CUDA
+### Vulkan
 
-**Prerequisites:** NVIDIA GPU + CUDA toolkit installed.
-
-```bash
-# Ubuntu/Debian
-sudo apt install nvidia-driver-550 nvidia-cuda-toolkit
-
-# Verify
-nvidia-smi          # Shows GPU info
-nvcc --version       # Shows CUDA version
-
-# Build (auto-detected if nvidia-smi works, or force it)
-./build.sh cuda
-```
-
-`build.sh` defaults `CUDAARCHS` to `"75;80;86;89;90"` (Turing→Hopper) for a
-portable release binary. `dev.sh` instead detects your specific compute
-capability via `nvidia-smi --query-gpu=compute_cap` for a much faster
-incremental build. Override either with `CUDAARCHS=... ./build.sh cuda`.
-
-### 🔵 Vulkan (Cross-Platform Fallback)
-
-Works on NVIDIA, AMD, and Intel GPUs — good choice if CUDA isn't available.
+Works on NVIDIA, AMD and Intel GPUs. You need the Vulkan headers and `glslc`
+to build, and a Vulkan driver to run (NVIDIA's proprietary driver includes
+one; AMD and Intel use Mesa).
 
 ```bash
 # Ubuntu/Debian
 sudo apt install vulkan-sdk libopenblas-dev
 
 # Fedora
-sudo dnf install vulkan-devel openblas-devel
+sudo dnf install vulkan-devel glslc openblas-devel
 
 # Arch Linux
 sudo pacman -S vulkan-devel openblas
@@ -151,15 +134,14 @@ sudo pacman -S vulkan-devel openblas
 ./build.sh vulkan
 ```
 
-### Other backends (AMD ROCm / OpenBLAS)
+### Other backends (OpenBLAS / OpenMP)
 
-`whisper-rs` also exposes `hipblas` (AMD ROCm) and `openblas` Cargo features,
-but they aren't wired into `build.sh`/`dev.sh` as a `--mode`. If you need
+`parley-gpui` also exposes `openblas` and `openmp` Cargo features for CPU
+builds, but they aren't wired into `build.sh`/`dev.sh` as a mode. If you need
 them, build the workspace directly, e.g.:
 
 ```bash
-cargo build --release -p llama-helper --features hipblas
-cargo build --release -p parley-gpui --features hipblas
+cargo build --release -p parley-gpui --features openblas
 ```
 
 This path is unsupported by the helper scripts — expect to hand-manage the
@@ -175,8 +157,7 @@ directly against a dist dir you assemble by hand).
 
 | Variable            | Purpose                                       | Set by                    |
 | -------------------- | ---------------------------------------------- | -------------------------- |
-| `CUDAHOSTCXX`         | Host C++ compiler for `nvcc`                   | auto (Fedora g++-15/14)    |
-| `CUDAARCHS`           | CUDA arch list                                 | auto (`75;80;86;89;90` for `build.sh`, single-arch for `dev.sh`) |
+| `CMAKE_PROJECT_INCLUDE` | CMake defaults for whisper.cpp/llama.cpp     | `build.sh` (`cmake/native-deps.cmake`) |
 | `NO_STRIP`            | Skip AppImage symbol stripping                 | `build.sh` (`1`)           |
 | `RUST_LOG`            | Log filter                                     | `dev.sh` (`info,whisper_rs=warn`) |
 | `RUST_BACKTRACE`      | Full Rust backtraces on panic                  | `dev.sh` (`full`)          |
@@ -196,13 +177,8 @@ a `.deb`/`.rpm`'s dependency resolution.
 
 ## 🧭 Troubleshooting
 
-### "CUDA toolkit not found"
-- **Fix:** Install `nvidia-cuda-toolkit` or ensure `nvcc --version` works.
-
-### Fedora 44 build fails with a gcc/nvcc mismatch
-- **Fix:** `build.sh`/`dev.sh` auto-detect `g++-15`/`g++-14` and set
-  `CUDAHOSTCXX` for you. If neither is installed: `sudo dnf install gcc-c++15`
-  (or the appropriate compat package for your Fedora release).
+### `./build.sh cuda` says CUDA builds were dropped
+- **Fix:** Use `./build.sh vulkan`; it runs on NVIDIA GPUs too.
 
 ### AppImage build strips symbols / crashes at runtime
 - **Fix:** Already handled — `build.sh` sets `NO_STRIP=1` on Linux
@@ -219,15 +195,16 @@ a `.deb`/`.rpm`'s dependency resolution.
   least 50 MB and contains the library before treating the build as green.
 
 ### Build works but no GPU acceleration
-- **Check:** `nvidia-smi` (NVIDIA) should work before `./build.sh` (or
-  `./dev.sh`) auto-selects CUDA; otherwise pass the mode explicitly.
+- **Check:** `auto` only picks Vulkan if `glslc` is installed and
+  `/dev/dri/renderD*` exists; otherwise pass `vulkan` explicitly. At runtime,
+  `vulkaninfo --summary` should list your GPU.
 
 ---
 
 ## ✅ Compiler Cache (optional, faster rebuilds)
 
 If [`sccache`](https://github.com/mozilla/sccache) is installed, `build.sh`
-and `dev.sh` enable it automatically for Rust + C/C++ + CUDA compiles.
+and `dev.sh` enable it automatically for Rust + C/C++ compiles.
 
 ```bash
 cargo install sccache

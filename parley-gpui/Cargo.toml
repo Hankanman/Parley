@@ -14,10 +14,8 @@ path = "src/main.rs"
 [features]
 default = []
 # GPU backends for whisper.cpp, forwarded to parley-core (same names there
-# and on llama-helper, so build scripts pass one `--features cuda` etc.).
-cuda = ["parley-core/cuda"]
+# and on llama-helper, so build scripts pass one `--features vulkan` etc.).
 vulkan = ["parley-core/vulkan"]
-hipblas = ["parley-core/hipblas"]
 openblas = ["parley-core/openblas"]
 openmp = ["parley-core/openmp"]
 

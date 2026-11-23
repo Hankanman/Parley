@@ -2,17 +2,14 @@
 # Parley (parley-gpui) — all-in-one build script (Linux focus)
 #
 # Usage:
-#   ./build.sh              # default: cuda on Linux with NVIDIA, cpu otherwise
-#   ./build.sh cuda         # NVIDIA CUDA
-#   ./build.sh vulkan       # AMD/Intel Vulkan
+#   ./build.sh              # default: vulkan if a GPU and glslc are present, cpu otherwise
+#   ./build.sh vulkan       # GPU via Vulkan (NVIDIA, AMD, Intel)
 #   ./build.sh cpu          # CPU-only
-#   ./build.sh gpui [cuda|vulkan|cpu]   # same as above — accepted as a
-#                                        # no-op alias for muscle memory
+#   ./build.sh gpui [vulkan|cpu]   # same as above — accepted as a
+#                                   # no-op alias for muscle memory
 #   ./build.sh --help
 #
 # Environment overrides (pre-set if you know better):
-#   CUDAHOSTCXX         host C++ compiler nvcc should use (default: auto-detect g++-15 on Fedora)
-#   CUDAARCHS           CUDA arch list (default: "75;80;86;89;90" — Turing→Hopper)
 #   NO_STRIP            keep set to 1 on Fedora 43+ (linuxdeploy SHT_RELR incompatibility)
 #
 # Produces:
@@ -30,41 +27,16 @@ SELF="$ROOT/$(basename "${BASH_SOURCE[0]}")"
 # ----- shared helpers -----
 
 # Sets platform env needed by any cargo build in this repo on Linux
-# (CUDAHOSTCXX/CUDAARCHS for cuda mode, PIC for the CUDA linker issue,
-# NO_STRIP + LD_LIBRARY_PATH for the AppImage bundling step). No-op for
-# non-Linux or non-cuda modes where not applicable.
+# (CMake defaults for the native deps, NO_STRIP + LD_LIBRARY_PATH for the
+# AppImage bundling step).
 setup_linux_build_env() {
     local mode="$1"
     case "$(uname -s)" in
         Linux)
-            # Fedora 44 ships gcc 16; CUDA 13.2's nvcc only supports gcc ≤ 15.
-            # Auto-detect g++-15 if not overridden.
-            if [[ "$mode" == "cuda" && -z "${CUDAHOSTCXX:-}" ]]; then
-                if [[ -x /usr/bin/g++-15 ]]; then
-                    export CUDAHOSTCXX=/usr/bin/g++-15
-                    echo "==> CUDAHOSTCXX=/usr/bin/g++-15 (Fedora gcc-16 workaround)"
-                elif [[ -x /usr/bin/g++-14 ]]; then
-                    export CUDAHOSTCXX=/usr/bin/g++-14
-                    echo "==> CUDAHOSTCXX=/usr/bin/g++-14"
-                fi
-            fi
-
-            # CUDA 13 dropped sm_52 (Maxwell). Pin to Turing+ unless overridden.
-            if [[ "$mode" == "cuda" && -z "${CUDAARCHS:-}" ]]; then
-                export CUDAARCHS="75;80;86;89;90"
-                echo "==> CUDAARCHS=$CUDAARCHS"
-            fi
-
             # CMake defaults for whisper.cpp/llama.cpp: a fixed AVX2 ggml
             # baseline instead of the CI runner's own CPU (issue #155), and no
             # OpenSSL in llama.cpp (fails on OpenSSL 4). See cmake/native-deps.cmake.
             export CMAKE_PROJECT_INCLUDE="${CMAKE_PROJECT_INCLUDE:-$ROOT/cmake/native-deps.cmake}"
-
-            # rust-lld on modern Rust requires every input to be PIE-relocatable.
-            # llama-cpp-sys-2's CUDA .cu.o files default to non-PIC, which triggers
-            # `R_X86_64_32 cannot be used against local symbol; recompile with -fPIC`
-            # when linking the llama-helper binary.
-            export CMAKE_POSITION_INDEPENDENT_CODE="${CMAKE_POSITION_INDEPENDENT_CODE:-ON}"
 
             # linuxdeploy's bundled `strip` chokes on SHT_RELR sections in modern Fedora libs.
             # NOTE: this only disables linuxdeploy's own strip pass during AppImage bundling —
@@ -92,14 +64,16 @@ setup_sccache() {
         export RUSTC_WRAPPER="${RUSTC_WRAPPER:-sccache}"
         export CMAKE_C_COMPILER_LAUNCHER="${CMAKE_C_COMPILER_LAUNCHER:-sccache}"
         export CMAKE_CXX_COMPILER_LAUNCHER="${CMAKE_CXX_COMPILER_LAUNCHER:-sccache}"
-        export CMAKE_CUDA_COMPILER_LAUNCHER="${CMAKE_CUDA_COMPILER_LAUNCHER:-sccache}"
-        echo "==> sccache enabled (cached compiles for Rust + C/C++ + CUDA)"
+        echo "==> sccache enabled (cached compiles for Rust + C/C++)"
     fi
 }
 
+# Vulkan when there's a GPU render node and glslc (needed to compile ggml's
+# Vulkan shaders); CPU otherwise. Vulkan covers NVIDIA too: CUDA builds were
+# dropped (docs/benchmarks/2026-11-gpu.md).
 resolve_auto_mode() {
-    if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
-        echo cuda
+    if compgen -G '/dev/dri/renderD*' >/dev/null && command -v glslc >/dev/null 2>&1; then
+        echo vulkan
     else
         echo cpu
     fi
@@ -111,7 +85,6 @@ build_llama_helper() {
     local mode="$1"
     local helper_features=()
     case "$mode" in
-        cuda)   helper_features=(--features cuda) ;;
         vulkan) helper_features=(--features vulkan) ;;
         cpu)    ;;
     esac
@@ -125,7 +98,7 @@ build_llama_helper() {
 FIRST="${1:-auto}"
 case "$FIRST" in
     --help|-h)
-        sed -n '2,23p' "$SELF" | sed 's/^# \{0,1\}//'
+        sed -n '2,19p' "$SELF" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
 esac
@@ -143,9 +116,13 @@ if [[ "$MODE" == "auto" ]]; then
 fi
 
 case "$MODE" in
-    cuda|vulkan|cpu) ;;
+    vulkan|cpu) ;;
+    cuda)
+        echo "error: CUDA builds were dropped; use 'vulkan', which runs on NVIDIA GPUs too" >&2
+        exit 2
+        ;;
     *)
-        echo "error: unknown mode '$MODE' (expected: cuda, vulkan, cpu, auto)" >&2
+        echo "error: unknown mode '$MODE' (expected: vulkan, cpu, auto)" >&2
         exit 2
         ;;
 esac
@@ -160,7 +137,6 @@ build_llama_helper "$MODE" >/dev/null
 
 GPUI_FEATURES=()
 case "$MODE" in
-    cuda)   GPUI_FEATURES=(--features cuda) ;;
     vulkan) GPUI_FEATURES=(--features vulkan) ;;
     cpu)    ;;
 esac

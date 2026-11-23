@@ -27,7 +27,7 @@ The `q5` variants are compressed versions that are much smaller and nearly as ac
 
 Every model understands many languages. To fix the language instead of detecting it, set **Settings → Summary → Language & summaries → Transcription language** to a language code such as `en`, `fr` or `de`. Leave it blank to detect the language automatically.
 
-Transcription uses your GPU when you installed the Vulkan build (or built Parley with CUDA), and the CPU otherwise. There is no setting for this.
+Transcription uses your GPU when you installed the Vulkan build, and the CPU otherwise. There is no setting for this.
 
 ### Custom vocabulary
 

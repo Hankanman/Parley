@@ -10,7 +10,6 @@ whisper-rs = { version = "0.16.0", features = ["raw-api", "log_backend"] }
 
 [features]
 default = []
-cuda = ["whisper-rs/cuda"]
 vulkan = ["whisper-rs/vulkan"]
 openblas = ["whisper-rs/openblas"]
 openmp = ["whisper-rs/openmp"]

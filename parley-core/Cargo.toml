@@ -16,14 +16,12 @@ name = "parley_core"
 [features]
 default = ["platform-default"]
 platform-default = []
-cuda = ["whisper-rs/cuda"]
 vulkan = ["whisper-rs/vulkan"]
-hipblas = ["whisper-rs/hipblas"]
 openblas = ["whisper-rs/openblas"]
 openmp = ["whisper-rs/openmp"]
 
 # Issue #56 spike only: compiles audio::transcription::backend_probe, which
-# probes whisper-helper-{cuda,vulkan,cpu} sidecar binaries next to the exe.
+# probes whisper-helper-{vulkan,cpu} sidecar binaries next to the exe.
 # Off by default — not wired into the live recording path or the UI.
 # See docs/transcription-backends.md.
 backend_probe = ["dep:whisper-protocol"]
@@ -142,9 +140,7 @@ chrono-tz = "0.10"
 # Linux-specific dependencies
 # Default: CPU-only build (no BLAS)
 # Users can enable features manually:
-#   --features cuda     (NVIDIA GPUs)
-#   --features vulkan   (AMD/Intel GPUs)
-#   --features hipblas  (AMD ROCm)
+#   --features vulkan   (NVIDIA, AMD and Intel GPUs)
 #   --features openblas (OpenBLAS optimization, requires BLAS_INCLUDE_DIRS)
 [target.'cfg(target_os = "linux")'.dependencies]
 whisper-rs = { version = "0.16.0", features = ["raw-api", "log_backend"] }

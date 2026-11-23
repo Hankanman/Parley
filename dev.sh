@@ -2,17 +2,12 @@
 # Parley (parley-gpui) — dev launcher (Linux focus)
 #
 # Usage:
-#   ./dev.sh              # auto: CUDA on NVIDIA, CPU otherwise
-#   ./dev.sh cuda         # NVIDIA CUDA
-#   ./dev.sh vulkan       # AMD/Intel Vulkan
+#   ./dev.sh              # auto: Vulkan if a GPU and glslc are present, CPU otherwise
+#   ./dev.sh vulkan       # GPU via Vulkan (NVIDIA, AMD, Intel)
 #   ./dev.sh cpu          # CPU-only
-#   ./dev.sh gpui [cuda|vulkan|cpu]   # same as above — accepted as a
-#                                      # no-op alias for muscle memory
+#   ./dev.sh gpui [vulkan|cpu]   # same as above — accepted as a
+#                                 # no-op alias for muscle memory
 #   ./dev.sh --help
-#
-# Environment overrides (pre-set if you know better):
-#   CUDAHOSTCXX          host C++ compiler for nvcc (default: auto-detect g++-15 on Fedora)
-#   CUDAARCHS            CUDA arch list (default: single-arch, detected via nvidia-smi)
 #
 # Builds and runs the `parley-gpui` binary directly via `cargo run` — no
 # webview, no Node/pnpm involved. First run also builds the `llama-helper`
@@ -55,46 +50,15 @@ setup_common_env() {
         export RUSTC_WRAPPER="${RUSTC_WRAPPER:-sccache}"
         export CMAKE_C_COMPILER_LAUNCHER="${CMAKE_C_COMPILER_LAUNCHER:-sccache}"
         export CMAKE_CXX_COMPILER_LAUNCHER="${CMAKE_CXX_COMPILER_LAUNCHER:-sccache}"
-        export CMAKE_CUDA_COMPILER_LAUNCHER="${CMAKE_CUDA_COMPILER_LAUNCHER:-sccache}"
-        echo "==> sccache enabled (cached compiles for Rust + C/C++ + CUDA)"
+        echo "==> sccache enabled (cached compiles for Rust + C/C++)"
     fi
 }
 
-# Sets CUDAHOSTCXX / CUDAARCHS for a dev (single-arch, fast) CUDA build.
-# No-op for non-cuda modes or non-Linux.
-setup_dev_cuda_env() {
-    local mode="$1"
-    case "$(uname -s)" in
-        Linux)
-            # Fedora 44 ships gcc 16; CUDA 13.2's nvcc only supports gcc ≤ 15.
-            if [[ "$mode" == "cuda" && -z "${CUDAHOSTCXX:-}" ]]; then
-                if [[ -x /usr/bin/g++-15 ]]; then
-                    export CUDAHOSTCXX=/usr/bin/g++-15
-                    echo "==> CUDAHOSTCXX=/usr/bin/g++-15 (Fedora gcc-16 workaround)"
-                elif [[ -x /usr/bin/g++-14 ]]; then
-                    export CUDAHOSTCXX=/usr/bin/g++-14
-                    echo "==> CUDAHOSTCXX=/usr/bin/g++-14"
-                fi
-            fi
-            # Dev defaults to a single GPU arch — much faster nvcc compile than
-            # the multi-arch list build.sh uses for portable binaries.
-            # Override with `CUDAARCHS=...` if you have a different GPU than 8.6.
-            # Detect compute capability via nvidia-smi if available, fall back to 86.
-            if [[ "$mode" == "cuda" && -z "${CUDAARCHS:-}" ]]; then
-                local cc
-                cc=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '.')
-                : "${cc:=86}"
-                export CUDAARCHS="${cc}-real"
-                echo "==> CUDAARCHS=$CUDAARCHS (single-arch dev build)"
-            fi
-            ;;
-    esac
-}
-
-# Resolves "auto" to cuda/cpu based on nvidia-smi presence.
+# Vulkan when there's a GPU render node and glslc (needed to compile ggml's
+# Vulkan shaders); CPU otherwise. Same rule as build.sh.
 resolve_auto_mode() {
-    if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
-        echo cuda
+    if compgen -G '/dev/dri/renderD*' >/dev/null && command -v glslc >/dev/null 2>&1; then
+        echo vulkan
     else
         echo cpu
     fi
@@ -112,18 +76,11 @@ run_gpui_dev() {
         export LD_LIBRARY_PATH="$sherpa_lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     fi
 
-    setup_dev_cuda_env "$mode"
-
     # llama-helper sidecar, built in *release* even for dev: a debug
     # llama.cpp is far too slow for real summaries, and this reuses the same
-    # cached build `./build.sh` produces. Its CUDA objects must be
-    # position-independent or rust-lld refuses to link them (same export as
-    # build.sh). Note llama-cpp-sys doesn't rebuild when this env var
-    # changes, so a stale non-PIC build needs `cargo clean -p llama-cpp-sys-2`.
-    export CMAKE_POSITION_INDEPENDENT_CODE="${CMAKE_POSITION_INDEPENDENT_CODE:-ON}"
+    # cached build `./build.sh` produces.
     local helper_features=()
     case "$mode" in
-        cuda)   helper_features=(--features cuda) ;;
         vulkan) helper_features=(--features vulkan) ;;
     esac
     echo "==> Building llama-helper sidecar (${mode}, release)"
@@ -137,7 +94,6 @@ run_gpui_dev() {
 
     local gpui_features=()
     case "$mode" in
-        cuda)   gpui_features=(--features cuda) ;;
         vulkan) gpui_features=(--features vulkan) ;;
     esac
 
@@ -154,7 +110,7 @@ run_gpui_dev() {
 FIRST="${1:-auto}"
 case "$FIRST" in
     --help|-h)
-        sed -n '2,17p' "$SELF" | sed 's/^# \{0,1\}//'
+        sed -n '2,14p' "$SELF" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
 esac
@@ -172,9 +128,13 @@ if [[ "$MODE" == "auto" ]]; then
 fi
 
 case "$MODE" in
-    cuda|vulkan|cpu) ;;
+    vulkan|cpu) ;;
+    cuda)
+        echo "error: CUDA builds were dropped; use 'vulkan', which runs on NVIDIA GPUs too" >&2
+        exit 2
+        ;;
     *)
-        echo "error: unknown mode '$MODE' (expected: cuda, vulkan, cpu, auto)" >&2
+        echo "error: unknown mode '$MODE' (expected: vulkan, cpu, auto)" >&2
         exit 2
         ;;
 esac

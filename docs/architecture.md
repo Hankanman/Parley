@@ -38,7 +38,7 @@ graph TD
 ### Core (`parley-core`)
 
 *   **Audio Engine:** Captures audio from the microphone and system via native PipeWire, processes it (AEC, VAD, loudness normalisation), and prepares it for transcription.
-*   **Transcription Engine:** Uses local speech-to-text models (Whisper or Parakeet) to transcribe the captured audio. It can be accelerated with a GPU (CUDA/Vulkan) or run on CPU.
+*   **Transcription Engine:** Uses local speech-to-text models (Whisper or Parakeet) to transcribe the captured audio. It can be accelerated with a GPU (Vulkan) or run on CPU.
 *   **Database:** A local SQLite database (via sqlx) that stores meeting metadata, transcripts, and summaries.
 *   **Summary Engine:** Generates meeting summaries using various Large Language Models (LLMs), including a built-in llama.cpp sidecar (`llama-helper`) or remote Ollama / Claude / Groq / OpenRouter / OpenAI-compatible endpoints.
 
