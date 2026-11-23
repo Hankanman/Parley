@@ -127,7 +127,12 @@ run_gpui_dev() {
         vulkan) helper_features=(--features vulkan) ;;
     esac
     echo "==> Building llama-helper sidecar (${mode}, release)"
-    ( cd "$ROOT/llama-helper" && cargo build --release "${helper_features[@]}" )
+    # Same CMake defaults as build.sh (llama.cpp without OpenSSL, which fails
+    # to compile against OpenSSL 4). Scoped to the helper so dev builds of
+    # whisper.cpp keep -march=native.
+    ( cd "$ROOT/llama-helper" \
+        && CMAKE_PROJECT_INCLUDE="${CMAKE_PROJECT_INCLUDE:-$ROOT/cmake/native-deps.cmake}" \
+            cargo build --release "${helper_features[@]}" )
     export PARLEY_LLAMA_HELPER="${PARLEY_LLAMA_HELPER:-$ROOT/target/release/llama-helper}"
 
     local gpui_features=()

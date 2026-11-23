@@ -11,6 +11,7 @@ use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel};
+use llama_cpp_2::LlamaBackendDeviceType;
 // Protocol messages (JSON over stdin/stdout) are shared with the app's
 // summary engine (`parley-core`'s `summary_engine::sidecar`) via the
 // llama-protocol crate so the two ends can't drift apart.
@@ -20,37 +21,56 @@ use llama_protocol::{Request, Response};
 // VRAM Detection and GPU Layer Calculation
 // ============================================================================
 
-/// Detect available VRAM in GB
+/// Free GPU memory in GB, as reported by llama.cpp's own backend devices
+/// (CUDA, Vulkan, ...). Must run after `LlamaBackend::init`.
+///
+/// Before this, only CUDA builds measured anything (via `nvidia-smi`); every
+/// Vulkan build, which is what releases ship for NVIDIA, AMD and Intel GPUs,
+/// assumed 4 GB and offloaded only part of the model, e.g. ~10 of 33 layers
+/// for gemma3:4b at a 32k context on a 12 GB card.
 fn detect_vram_gb() -> f32 {
-    #[cfg(feature = "cuda")]
-    {
-        // NVIDIA CUDA: Query device memory
-        if let Some(vram) = detect_cuda_vram() {
-            eprintln!("CUDA VRAM detected: {:.2} GB", vram);
-            return vram;
-        }
+    let devices = llama_cpp_2::list_llama_ggml_backend_devices();
+    for d in &devices {
+        eprintln!(
+            "GPU device: {} ({}, {:?}) {:.2} GB free of {:.2} GB",
+            d.description,
+            d.backend,
+            d.device_type,
+            gb(d.memory_free),
+            gb(d.memory_total)
+        );
     }
-
-    // TODO: Vulkan VRAM detection
-
-    eprintln!("VRAM detection not available, using conservative estimate");
-    4.0 // Conservative fallback
+    let gpus = devices.iter().map(|d| (d.device_type, gb(d.memory_free)));
+    let vram = vram_for_offload(gpus);
+    eprintln!("VRAM available for offload: {vram:.2} GB");
+    vram
 }
 
-#[cfg(feature = "cuda")]
-fn detect_cuda_vram() -> Option<f32> {
-    // Use nvidia-smi to query VRAM
-    if let Ok(output) = std::process::Command::new("nvidia-smi")
-        .args(&["--query-gpu=memory.free", "--format=csv,noheader,nounits"])
-        .output()
-    {
-        if let Ok(stdout) = String::from_utf8(output.stdout) {
-            if let Ok(mb) = stdout.trim().parse::<f32>() {
-                return Some(mb / 1024.0); // Convert MB to GB
+fn gb(bytes: usize) -> f32 {
+    bytes as f32 / 1024.0 / 1024.0 / 1024.0
+}
+
+/// The memory to plan GPU offload against: the discrete GPU with the most
+/// free memory. An integrated GPU shares system RAM and reports it as free,
+/// so it keeps the old 4 GB assumption. No GPU at all means no offload.
+fn vram_for_offload(devices: impl Iterator<Item = (LlamaBackendDeviceType, f32)>) -> f32 {
+    const INTEGRATED_GPU_CAP_GB: f32 = 4.0;
+    let mut discrete: Option<f32> = None;
+    let mut integrated = false;
+    for (kind, free) in devices {
+        match kind {
+            LlamaBackendDeviceType::Gpu | LlamaBackendDeviceType::Accelerator => {
+                discrete = Some(discrete.map_or(free, |best| best.max(free)));
             }
+            LlamaBackendDeviceType::IntegratedGpu => integrated = true,
+            _ => {}
         }
     }
-    None
+    match discrete {
+        Some(free) => free,
+        None if integrated => INTEGRATED_GPU_CAP_GB,
+        None => 0.0,
+    }
 }
 
 /// Calculate safe GPU layer count based on VRAM, model file size, and context size
@@ -116,16 +136,24 @@ fn calculate_gpu_layers(
             model_layers,
             (layers as f32 / model_layers as f32) * 100.0
         );
+        layers
     } else {
-        eprintln!("✅ Full offload possible ({} layers)", layers);
+        // `model_layers` is only a guess from the file size (gemma3:4b is
+        // 2.3 GB but has 34 layers, not the guessed 28), so a full offload
+        // asks llama.cpp for every layer rather than the guessed count.
+        eprintln!("✅ Full offload possible (all layers)");
+        ALL_LAYERS
     }
-
-    layers
 }
 
-/// Get default GPU layer count with smart detection
-fn get_default_gpu_layers(model_path: &PathBuf, context_size: u32) -> u32 {
-    let vram = detect_vram_gb();
+/// `n_gpu_layers` value meaning "every layer"; llama.cpp clamps it to the
+/// model's real layer count.
+const ALL_LAYERS: u32 = 999;
+
+/// Get default GPU layer count with smart detection. `vram` is the free
+/// VRAM measured before this process loaded anything (see
+/// [`ModelState::vram_gb`]).
+fn get_default_gpu_layers(model_path: &PathBuf, context_size: u32, vram: f32) -> u32 {
     // TODO: Use actual model metadata instead of heuristics
     // Heuristic: Estimate total layers based on file size
     // 7B models (Q4) are ~4.1GB and have ~32-35 layers
@@ -147,7 +175,30 @@ struct ModelState {
     backend: LlamaBackend,
     model: Option<LlamaModel>,
     model_path: Option<PathBuf>,
+    /// The current request's context size. Every request gets a fresh
+    /// llama_context of this size; the weights don't depend on it.
     context_size: u32,
+    /// GPU layers the loaded weights were offloaded with, and the largest
+    /// context size that offload is known to leave room for.
+    offload: Option<Offload>,
+    /// Free VRAM, measured once before the first load: measured later, it
+    /// would count our own resident model as used.
+    vram_gb: Option<f32>,
+}
+
+#[derive(Clone, Copy)]
+struct Offload {
+    gpu_layers: u32,
+    max_context: u32,
+}
+
+/// Whether weights already offloaded as `loaded` can serve a request for
+/// `context_size`. `layers_for_context` is how many layers would be
+/// offloaded for that size; it's only computed for a context larger than
+/// any the offload was sized for. Fewer layers than are loaded means the
+/// larger KV cache no longer fits next to them, so the weights must reload.
+fn offload_fits(loaded: Offload, context_size: u32, layers_for_context: impl FnOnce() -> u32) -> bool {
+    context_size <= loaded.max_context || layers_for_context() >= loaded.gpu_layers
 }
 
 impl ModelState {
@@ -158,22 +209,51 @@ impl ModelState {
             model: None,
             model_path: None,
             context_size: 2048,
+            offload: None,
+            vram_gb: None,
         })
     }
 
+    /// Load `model_path` unless it's already loaded with an offload that
+    /// leaves room for `context_size`. Parley sizes the context per request
+    /// (4k, 8k, 16k, ...), and the weights used to reload from disk and
+    /// re-upload to the GPU every time that size changed, often several
+    /// times within one summary. Now the weights only reload for a different
+    /// model, or for a context too large for the current GPU layer split.
     fn load_model_if_needed(&mut self, model_path: PathBuf, context_size: u32) -> Result<()> {
-        // Check if model is already loaded
-        if let Some(ref loaded_path) = self.model_path {
-            if loaded_path == &model_path && self.context_size == context_size {
-                eprintln!("✓ Model already loaded");
-                return Ok(());
+        let vram = *self.vram_gb.get_or_insert_with(detect_vram_gb);
+
+        if let (Some(loaded_path), Some(loaded)) = (&self.model_path, self.offload) {
+            if loaded_path == &model_path {
+                let mut layers = None;
+                if offload_fits(loaded, context_size, || {
+                    *layers.insert(get_default_gpu_layers(&model_path, context_size, vram))
+                }) {
+                    eprintln!("✓ Model already loaded (ctx {context_size})");
+                    self.context_size = context_size;
+                    self.offload = Some(Offload {
+                        max_context: loaded.max_context.max(context_size),
+                        ..loaded
+                    });
+                    return Ok(());
+                }
+                eprintln!(
+                    "↻ ctx {context_size} needs a smaller GPU offload ({} < {} layers); reloading",
+                    layers.unwrap_or(0),
+                    loaded.gpu_layers
+                );
             }
         }
+
+        // Free the old weights (and their VRAM) before loading new ones.
+        self.model = None;
+        self.model_path = None;
+        self.offload = None;
 
         eprintln!("📥 Loading model: {}", model_path.display());
 
         // Detect GPU layers
-        let gpu_layers = get_default_gpu_layers(&model_path, context_size);
+        let gpu_layers = get_default_gpu_layers(&model_path, context_size, vram);
 
         // Configure model parameters with GPU offload
         let model_params = LlamaModelParams::default().with_n_gpu_layers(gpu_layers);
@@ -185,6 +265,10 @@ impl ModelState {
         self.model = Some(model);
         self.model_path = Some(model_path);
         self.context_size = context_size;
+        self.offload = Some(Offload {
+            gpu_layers,
+            max_context: context_size,
+        });
 
         eprintln!("✅ Model loaded successfully");
         Ok(())
@@ -642,4 +726,46 @@ fn main() -> Result<()> {
 
     eprintln!("👋 llama-helper exiting");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LOADED: Offload = Offload {
+        gpu_layers: 28,
+        max_context: 16384,
+    };
+
+    #[test]
+    fn smaller_or_equal_context_reuses_the_weights_without_recomputing() {
+        for ctx in [4096, 8192, 16384] {
+            assert!(offload_fits(LOADED, ctx, || panic!("layers recomputed for ctx {ctx}")));
+        }
+    }
+
+    #[test]
+    fn larger_context_reuses_the_weights_while_the_offload_still_fits() {
+        assert!(offload_fits(LOADED, 32768, || 28));
+        assert!(offload_fits(LOADED, 32768, || 33));
+    }
+
+    #[test]
+    fn larger_context_that_needs_fewer_gpu_layers_reloads() {
+        assert!(!offload_fits(LOADED, 65536, || 20));
+    }
+
+    #[test]
+    fn offload_plans_against_the_roomiest_discrete_gpu() {
+        use LlamaBackendDeviceType::*;
+        let devices = [(Cpu, 60.0), (IntegratedGpu, 30.0), (Gpu, 6.5), (Gpu, 9.5)];
+        assert_eq!(vram_for_offload(devices.into_iter()), 9.5);
+    }
+
+    #[test]
+    fn integrated_gpu_keeps_the_conservative_cap_and_cpu_gets_none() {
+        use LlamaBackendDeviceType::*;
+        assert_eq!(vram_for_offload([(Cpu, 60.0), (IntegratedGpu, 30.0)].into_iter()), 4.0);
+        assert_eq!(vram_for_offload([(Cpu, 60.0)].into_iter()), 0.0);
+    }
 }
