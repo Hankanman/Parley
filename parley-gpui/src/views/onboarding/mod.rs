@@ -1,5 +1,6 @@
 //! First-launch onboarding flow: welcome -> setup overview (creates the
-//! database) -> model download progress -> done, calling `parley-core`
+//! database) -> transcription language (model downloads start here) ->
+//! download progress -> voice-match prompt -> done, calling `parley-core`
 //! directly.
 //!
 //! `RootView` (`parley-gpui/src/root.rs`) decides whether to show this at
@@ -14,6 +15,8 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     label::Label,
     progress::Progress,
+    select::{Select, SelectItem, SelectState},
+    IndexPath,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -35,7 +38,26 @@ pub use logic::Step;
 /// Emitted once onboarding has saved `completed: true` — `RootView`
 /// subscribes to this and swaps in the normal shell.
 pub enum OnboardingEvent {
-    Completed,
+    /// `open_speakers`: the user chose to set up voice match now, so the
+    /// shell should open the Speakers page.
+    Completed { open_speakers: bool },
+}
+
+/// One entry in the language picker.
+#[derive(Clone)]
+struct LangOption {
+    code: SharedString,
+    label: SharedString,
+}
+
+impl SelectItem for LangOption {
+    type Value = SharedString;
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+    fn value(&self) -> &Self::Value {
+        &self.code
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -66,6 +88,7 @@ pub struct OnboardingView {
     completing: bool,
     complete_error: Option<String>,
     model_manager: ModelManagerSlot,
+    language: Entity<SelectState<Vec<LangOption>>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -75,7 +98,7 @@ impl OnboardingView {
     pub fn new(
         needs_db_creation: bool,
         start_step: Step,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let core_events = AppServices::global(cx).core_events.clone();
@@ -85,6 +108,20 @@ impl OnboardingView {
 
         let recommended_model =
             summary_service::get_recommended_model().unwrap_or_else(|_| "gemma3:1b".to_string());
+
+        // Preselect the desktop locale's language (auto-detect if Whisper
+        // doesn't know it).
+        let languages = parley_core::languages::WHISPER_LANGUAGES;
+        let preselect = parley_core::languages::system_default();
+        let lang_items: Vec<LangOption> = languages
+            .iter()
+            .map(|(code, name)| LangOption { code: (*code).into(), label: (*name).into() })
+            .collect();
+        let selected = languages.iter().position(|(c, _)| *c == preselect).unwrap_or(0);
+        let language = cx.new(|cx| {
+            SelectState::new(lang_items, Some(IndexPath::default().row(selected)), window, cx)
+                .searchable(true)
+        });
 
         let mut this = Self {
             step: start_step,
@@ -99,13 +136,14 @@ impl OnboardingView {
             completing: false,
             complete_error: None,
             model_manager: Arc::new(Mutex::new(None)),
+            language,
             _subscriptions: subscriptions,
         };
 
         if needs_db_creation {
             this.start_db_creation(cx);
         }
-        if this.step == Step::DownloadProgress {
+        if this.step.downloads_running() {
             this.start_downloads(cx);
         }
         this
@@ -175,7 +213,7 @@ impl OnboardingView {
 
     fn go_next(&mut self, cx: &mut Context<Self>) {
         self.step = logic::next_step(self.step);
-        if self.step == Step::DownloadProgress {
+        if self.step.downloads_running() {
             self.start_downloads(cx);
         }
         cx.notify();
@@ -304,7 +342,7 @@ impl OnboardingView {
     /// Persist the chosen model config, then mark onboarding status `completed`. Emits
     /// [`OnboardingEvent::Completed`] on success so `RootView` swaps in the
     /// normal shell — no restart.
-    fn complete(&mut self, cx: &mut Context<Self>) {
+    fn complete(&mut self, open_speakers: bool, cx: &mut Context<Self>) {
         if self.completing {
             return;
         }
@@ -323,10 +361,19 @@ impl OnboardingView {
         };
         let io = AppServices::global(cx).io.clone();
         let model = self.recommended_model.clone();
+        let language = self
+            .language
+            .read(cx)
+            .selected_value()
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| parley_core::languages::AUTO.to_string());
 
         cx.spawn(async move |this, cx| {
             let result = io
                 .spawn(async move {
+                    parley_core::utils::save_language_preference(&pool, &language)
+                        .await
+                        .map_err(|e| e.to_string())?;
                     SettingsRepository::save_model_config(&pool, "builtin-ai", &model, "large-v3", None)
                         .await
                         .map_err(|e| e.to_string())?;
@@ -342,7 +389,7 @@ impl OnboardingView {
                         .await
                         .unwrap_or_default();
                     status.completed = true;
-                    status.current_step = Step::DownloadProgress.number();
+                    status.current_step = Step::VoiceMatch.number();
                     status.model_status = OnboardingModelStatus {
                         transcription: "downloaded".to_string(),
                         summary: "downloaded".to_string(),
@@ -357,7 +404,7 @@ impl OnboardingView {
                 this.completing = false;
                 match result {
                     Ok(Ok(())) => {
-                        cx.emit(OnboardingEvent::Completed);
+                        cx.emit(OnboardingEvent::Completed { open_speakers });
                     }
                     Ok(Err(e)) => {
                         this.complete_error = Some(e);
@@ -409,7 +456,9 @@ impl Render for OnboardingView {
         let content: AnyElement = match self.step {
             Step::Welcome => self.render_welcome(cx).into_any_element(),
             Step::SetupOverview => self.render_setup_overview(cx).into_any_element(),
+            Step::Language => self.render_language(cx).into_any_element(),
             Step::DownloadProgress => self.render_download_progress(cx).into_any_element(),
+            Step::VoiceMatch => self.render_voice_match(cx).into_any_element(),
         };
 
         v_flex()
@@ -432,8 +481,8 @@ impl Render for OnboardingView {
 fn step_indicator(step: Step, cx: &App) -> impl IntoElement {
     let active_color = cx.theme().foreground;
     let inactive_color = cx.theme().border;
-    h_flex().gap_2().justify_center().children((1..=3).map(move |n| {
-        let active = n <= step.number();
+    h_flex().gap_2().justify_center().children(Step::ALL.into_iter().map(move |s| {
+        let active = s.number() <= step.number();
         div()
             .h(px(4.))
             .w(px(48.))
@@ -479,9 +528,9 @@ impl OnboardingView {
             .gap_4()
             .child(Label::new("Setting things up").text_lg().font_semibold())
             .child(Label::new(
-                "Parley will create a local database for your meetings and, on the next \
-                 step, download a speech-recognition model and a small on-device \
-                 summarization model. Everything stays on this machine.",
+                "Parley will create a local database for your meetings, then download a \
+                 speech-recognition model and a small on-device summarization model. \
+                 Everything stays on this machine.",
             ))
             .child(Label::new(status_line).text_sm())
             .child(
@@ -539,8 +588,80 @@ impl OnboardingView {
                     .primary()
                     .disabled(!can_continue)
                     .on_click(move |_, _, cx| {
-                        this.update(cx, |this, cx| this.complete(cx));
+                        this.update(cx, |this, cx| this.go_next(cx));
                     }),
+            )
+    }
+
+    fn render_language(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let this = cx.entity();
+        v_flex()
+            .gap_4()
+            .child(Label::new("What language are your meetings in?").text_lg().font_semibold())
+            .child(Label::new(
+                "Choosing the language makes transcription faster and more accurate. Pick \
+                 Auto-detect if your meetings switch between languages. You can change \
+                 this later in Settings → Transcription.",
+            ))
+            .child(Select::new(&self.language))
+            .child(Label::new("The speech-recognition model is already downloading.").text_sm())
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(Button::new("onboarding-language-back").label("Back").on_click({
+                        let this = this.clone();
+                        move |_, _, cx| {
+                            this.update(cx, |this, cx| this.go_previous(cx));
+                        }
+                    }))
+                    .child(
+                        Button::new("onboarding-language-next")
+                            .label("Continue")
+                            .primary()
+                            .on_click(move |_, _, cx| {
+                                this.update(cx, |this, cx| this.go_next(cx));
+                            }),
+                    ),
+            )
+    }
+
+    fn render_voice_match(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let this = cx.entity();
+        v_flex()
+            .gap_4()
+            .child(Label::new("Let Parley recognise your voice").text_lg().font_semibold())
+            .child(Label::new(
+                "Read a short passage aloud for about 30 seconds and Parley will label your \
+                 lines as you in every transcript, so summaries and action items know who \
+                 said what. The recording is turned into a voice profile and stays on this \
+                 machine.",
+            ))
+            .when_some(self.complete_error.clone(), |el, err| {
+                el.child(Label::new(format!("Failed to finish setup: {}", err)).text_sm())
+            })
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("onboarding-voice-skip")
+                            .label("Maybe later")
+                            .disabled(self.completing)
+                            .on_click({
+                                let this = this.clone();
+                                move |_, _, cx| {
+                                    this.update(cx, |this, cx| this.complete(false, cx));
+                                }
+                            }),
+                    )
+                    .child(
+                        Button::new("onboarding-voice-setup")
+                            .label(if self.completing { "Finishing…" } else { "Set up voice match" })
+                            .primary()
+                            .disabled(self.completing)
+                            .on_click(move |_, _, cx| {
+                                this.update(cx, |this, cx| this.complete(true, cx));
+                            }),
+                    ),
             )
     }
 }
@@ -578,8 +699,8 @@ fn download_card(
                 .child(Label::new(status)),
         )
         .child(
-            Progress::new(SharedString::from(title))
-                .value((state.progress as f32 / 100.0).clamp(0.0, 1.0)),
+            // `Progress::value` takes a percentage (0–100), not a fraction.
+            Progress::new(SharedString::from(title)).value(state.progress.min(100) as f32),
         )
         .when_some(state.error.clone(), |el, err| {
             el.child(Label::new(err).text_sm())
