@@ -14,6 +14,7 @@ use gpui_kit::component::{
     setting::{SettingField, SettingGroup, SettingItem, SettingPage},
     ActiveTheme, Disableable, Icon,
 };
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use parley_core::whisper_engine::ModelStatus;
@@ -65,10 +66,21 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
                     ),
                 )
                 .description("Used for local, on-device transcription. Only downloaded models can be selected."),
-            ),
+            )
+            .item(language_item(&view)),
         )
         .group(super::glossary::group(&view, cx))
-        .group(SettingGroup::new().title("Model catalog").items(catalog_items))
+        .group(
+            SettingGroup::new()
+                .title("Transcription models (Whisper)")
+                .description(
+                    "Speech-to-text models that turn meeting audio into the transcript. Larger models are \
+                     more accurate but slower and use more memory. \"Compressed\" versions are much smaller \
+                     downloads with nearly the same accuracy. The AI models that write summaries are under \
+                     Settings → Summary.",
+                )
+                .items(catalog_items),
+        )
 }
 
 fn model_row(view: &Entity<SettingsView>, model: parley_core::whisper_engine::ModelInfo) -> SettingItem {
@@ -97,6 +109,9 @@ fn model_row(view: &Entity<SettingsView>, model: parley_core::whisper_engine::Mo
         let is_corrupted = matches!(status, ModelStatus::Corrupted { .. });
         let is_available = matches!(status, ModelStatus::Available);
         let can_download = !is_available && !is_downloading;
+        let in_use = SettingsCache::global(cx).transcript.model == name;
+        let recommended = name == parley_core::config::DEFAULT_WHISPER_MODEL;
+        let (display, compressed) = display_name(&name);
 
         let download_name = name.clone();
         let download_view = view.clone();
@@ -114,7 +129,7 @@ fn model_row(view: &Entity<SettingsView>, model: parley_core::whisper_engine::Mo
                         cancel_download(cx, &cancel_view, cancel_name.clone());
                     }),
             );
-        } else {
+        } else if can_download || is_corrupted {
             actions = actions.child(
                 Button::new(SharedString::from(format!("download-{}", name)))
                     .outline()
@@ -147,16 +162,97 @@ fn model_row(view: &Entity<SettingsView>, model: parley_core::whisper_engine::Mo
             .child(
                 v_flex()
                     .gap_1()
-                    .child(Label::new(name.clone()).text_sm())
                     .child(
-                        Label::new(format!("{} · {} MB · {}", model.accuracy, model.size_mb, status_text))
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(Label::new(display).text_sm())
+                            .when(compressed, |row| row.child(tag("Compressed", cx.theme().muted_foreground, cx)))
+                            .when(recommended, |row| row.child(tag("Recommended", cx.theme().primary, cx)))
+                            .when(in_use, |row| row.child(tag("In use", cx.theme().success, cx))),
+                    )
+                    .child(
+                        Label::new(model.description.clone())
                             .text_xs()
                             .text_color(cx.theme().muted_foreground),
+                    )
+                    .child(
+                        Label::new(format!(
+                            "{} accuracy · {} · {} MB · {} · {}",
+                            model.accuracy, model.speed, model.size_mb, name, status_text
+                        ))
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground),
                     ),
             )
             .child(actions)
             .into_any_element()
     })
+}
+
+/// The live transcription language: every Whisper language, or auto-detect.
+/// A blank value saved by the old free-text field shows as auto-detect.
+fn language_item(view: &Entity<SettingsView>) -> SettingItem {
+    let options: Vec<(SharedString, SharedString)> = parley_core::languages::WHISPER_LANGUAGES
+        .iter()
+        .map(|(code, name)| (SharedString::from(*code), SharedString::from(*name)))
+        .collect();
+    let view = view.clone();
+    SettingItem::new(
+        "Language",
+        SettingField::scrollable_dropdown(
+            options,
+            |cx: &App| {
+                SharedString::from(parley_core::languages::normalize(
+                    &SettingsCache::global(cx).ui_str("primaryLanguage"),
+                ))
+            },
+            move |val: SharedString, cx: &mut App| {
+                parley_core::utils::apply_language_preference(Some(val.as_ref()));
+                super::state::save_ui_field(
+                    cx,
+                    &view,
+                    "primaryLanguage",
+                    serde_json::Value::String(val.to_string()),
+                );
+            },
+        ),
+    )
+    .description(
+        "The language spoken in your meetings. Choosing it is faster and more accurate than \
+         auto-detect, which works out the language from each stretch of speech.",
+    )
+}
+
+/// A readable name for a catalog id, and whether it's a quantised
+/// ("compressed") variant: `large-v3-turbo-q5_0` → ("Large v3 Turbo", true).
+fn display_name(id: &str) -> (String, bool) {
+    let (base, compressed) = match id.rsplit_once("-q") {
+        Some((base, quant)) if quant.chars().next().is_some_and(|c| c.is_ascii_digit()) => (base, true),
+        _ => (id, false),
+    };
+    let words: Vec<String> = base
+        .split('-')
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(first) if !w.starts_with('v') || w.len() > 3 => first.to_uppercase().chain(c).collect(),
+                _ => w.to_string(),
+            }
+        })
+        .collect();
+    (words.join(" "), compressed)
+}
+
+fn tag(text: &'static str, color: Hsla, cx: &App) -> impl IntoElement {
+    div()
+        .px_1p5()
+        .rounded(cx.theme().radius)
+        .border_1()
+        .border_color(color.opacity(0.5))
+        .text_xs()
+        .text_color(color)
+        .child(text)
 }
 
 fn start_download(cx: &mut App, view: &Entity<SettingsView>, model_name: String) {
@@ -219,4 +315,17 @@ fn delete_model(cx: &mut App, view: &Entity<SettingsView>, model_name: String) {
         });
     })
     .detach();
+}
+
+#[cfg(test)]
+mod display_name_tests {
+    use super::display_name;
+
+    #[test]
+    fn catalog_ids_get_readable_names() {
+        assert_eq!(display_name("large-v3-turbo-q5_0"), ("Large v3 Turbo".to_string(), true));
+        assert_eq!(display_name("large-v3"), ("Large v3".to_string(), false));
+        assert_eq!(display_name("tiny-q5_1"), ("Tiny".to_string(), true));
+        assert_eq!(display_name("medium"), ("Medium".to_string(), false));
+    }
 }

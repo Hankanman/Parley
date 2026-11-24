@@ -6,25 +6,9 @@ use std::path::{Path, PathBuf};
 
 use parley_core::audio::constants::AUDIO_EXTENSIONS;
 
-/// Whitelisted languages offered in the dialog (a trimmed list — full
-/// ISO 639-1 coverage isn't needed for a first pass; `"auto"` is the
-/// default).
-pub const LANGUAGES: &[(&str, &str)] = &[
-    ("auto", "Auto Detect"),
-    ("en", "English"),
-    ("zh", "Chinese"),
-    ("de", "German"),
-    ("es", "Spanish"),
-    ("ru", "Russian"),
-    ("ko", "Korean"),
-    ("fr", "French"),
-    ("ja", "Japanese"),
-    ("pt", "Portuguese"),
-    ("it", "Italian"),
-    ("nl", "Dutch"),
-    ("ar", "Arabic"),
-    ("hi", "Hindi"),
-];
+/// Languages offered in the dialog: every Whisper language, auto-detect
+/// first (the default).
+pub use parley_core::languages::WHISPER_LANGUAGES as LANGUAGES;
 
 /// True if `path`'s extension is one of the supported audio formats
 /// (case-insensitive), mirroring `isAudioExtension` /
@@ -82,11 +66,7 @@ pub fn progress_percent(progress_percentage: u32) -> f32 {
 /// Display name for a language code, falling back to the code itself for one
 /// not in [`LANGUAGES`] (still forwarded to the backend as-is).
 pub fn language_label(code: &str) -> String {
-    LANGUAGES
-        .iter()
-        .find(|(c, _)| *c == code)
-        .map(|(_, name)| name.to_string())
-        .unwrap_or_else(|| code.to_string())
+    parley_core::languages::label(code)
 }
 
 /// Speaker-count dropdown label — 0 means "auto-estimate".

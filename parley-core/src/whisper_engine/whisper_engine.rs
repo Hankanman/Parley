@@ -93,6 +93,55 @@ fn effective_threads(default: i32, requested: Option<i32>) -> i32 {
     capped.max(1)
 }
 
+const MIB: u64 = 1024 * 1024;
+
+/// GPU memory to keep free beyond the model's weights, for the KV caches
+/// and compute buffers each transcription state allocates (a few hundred MB
+/// for the large models with beam search).
+const VRAM_HEADROOM: u64 = 1024 * MIB;
+
+#[derive(Debug, Clone, Copy)]
+struct GpuMemory {
+    free: u64,
+    total: u64,
+}
+
+/// Free and total memory of the GPU whisper.cpp loads onto with
+/// `gpu_device: 0` (its first GPU or integrated-GPU device), or `None` when
+/// there is no GPU backend or it doesn't report memory.
+fn gpu_memory() -> Option<GpuMemory> {
+    use whisper_rs::whisper_rs_sys as sys;
+    // SAFETY: ggml's device registry is initialised on first use and lives
+    // for the whole process; we only read from it.
+    unsafe {
+        for i in 0..sys::ggml_backend_dev_count() {
+            let dev = sys::ggml_backend_dev_get(i);
+            if dev.is_null() {
+                continue;
+            }
+            let kind = sys::ggml_backend_dev_type(dev);
+            if kind != sys::ggml_backend_dev_type_GGML_BACKEND_DEVICE_TYPE_GPU
+                && kind != sys::ggml_backend_dev_type_GGML_BACKEND_DEVICE_TYPE_IGPU
+            {
+                continue;
+            }
+            let (mut free, mut total) = (0usize, 0usize);
+            sys::ggml_backend_dev_memory(dev, &mut free, &mut total);
+            if total == 0 {
+                return None;
+            }
+            return Some(GpuMemory { free: free as u64, total: total as u64 });
+        }
+    }
+    None
+}
+
+/// Whether a model file of `model_bytes` fits in `free_vram` with room for
+/// its transcription state.
+fn fits_in_vram(model_bytes: u64, free_vram: u64) -> bool {
+    model_bytes.saturating_add(VRAM_HEADROOM) <= free_vram
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
     pub name: String,
@@ -414,8 +463,30 @@ impl WhisperEngine {
                 // large-v3-turbo (docs/benchmarks/2026-11-gpu.md).
                 let flash_attn_enabled = false;
 
+                // whisper.cpp aborts the whole process when it can't
+                // allocate the model's GPU buffer, so check the free VRAM
+                // first and load on the CPU if the model won't fit (another
+                // app may be holding most of the GPU's memory).
+                let model_bytes = std::fs::metadata(&model_info.path)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                let use_gpu = adaptive_config.use_gpu
+                    && match gpu_memory() {
+                        Some(mem) if !fits_in_vram(model_bytes, mem.free) => {
+                            log::warn!(
+                                "Not enough free GPU memory for {} ({} MB free of {} MB, needs about {} MB); loading it on the CPU",
+                                model_name,
+                                mem.free / MIB,
+                                mem.total / MIB,
+                                (model_bytes + VRAM_HEADROOM) / MIB
+                            );
+                            false
+                        }
+                        _ => true,
+                    };
+
                 let context_param = WhisperContextParameters {
-                    use_gpu: adaptive_config.use_gpu,
+                    use_gpu,
                     gpu_device: 0,
                     flash_attn: flash_attn_enabled,
                     ..Default::default()
@@ -447,8 +518,8 @@ impl WhisperEngine {
 
                 // Enhanced acceleration status reporting
                 let acceleration_status = match hardware_profile.gpu_type {
-                    crate::audio::GpuType::Vulkan => "Vulkan GPU acceleration",
-                    crate::audio::GpuType::None => "CPU processing only",
+                    crate::audio::GpuType::Vulkan if use_gpu => "Vulkan GPU acceleration",
+                    _ => "CPU processing only",
                 };
 
                 log::info!("Successfully loaded model: {} with {} (Performance Tier: {:?}, Beam Size: {}, Threads: {:?})",
@@ -1334,6 +1405,29 @@ mod state_pool_tests {
     #[test]
     fn default_purpose_is_final() {
         assert_eq!(DecodePurpose::default(), DecodePurpose::Final);
+    }
+}
+
+#[cfg(test)]
+mod vram_tests {
+    use super::{MIB, fits_in_vram};
+
+    #[test]
+    fn model_needs_headroom_beyond_its_weights() {
+        // large-v3-turbo-q5_0 is 547 MB.
+        assert!(fits_in_vram(547 * MIB, 5_000 * MIB));
+        assert!(!fits_in_vram(547 * MIB, 600 * MIB));
+        assert!(!fits_in_vram(547 * MIB, 0));
+    }
+
+    /// Prints what the GPU backend reports: `cargo test -p parley-core
+    /// --features vulkan --lib reports_gpu_memory -- --ignored --nocapture`
+    #[test]
+    #[ignore = "needs a GPU build"]
+    fn reports_gpu_memory() {
+        let mem = super::gpu_memory().expect("no GPU device with memory info");
+        println!("GPU memory: {} MB free of {} MB", mem.free / MIB, mem.total / MIB);
+        assert!(mem.free <= mem.total);
     }
 }
 

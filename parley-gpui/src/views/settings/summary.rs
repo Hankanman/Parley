@@ -228,27 +228,7 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
     page = page.group(super::ask_search::group(&view, cx));
 
     page = page.group(
-        SettingGroup::new().title("Language & summaries").items(vec![
-            SettingItem::new(
-                "Transcription language",
-                SettingField::input(
-                    |cx: &App| SharedString::from(SettingsCache::global(cx).ui_str("primaryLanguage")),
-                    {
-                        let view = view.clone();
-                        move |val: SharedString, cx: &mut App| {
-                            parley_core::utils::apply_language_preference(Some(val.as_ref()));
-                            super::state::save_ui_field(
-                                cx,
-                                &view,
-                                "primaryLanguage",
-                                serde_json::Value::String(val.to_string()),
-                            );
-                        }
-                    },
-                )
-                .default_value(SharedString::from("en")),
-            )
-            .description("Language for live transcription: an ISO code such as en or fr, or blank to auto-detect."),
+        SettingGroup::new().title("Transcript & summaries").items(vec![
             SettingItem::new(
                 "Show transcription confidence",
                 SettingField::switch(

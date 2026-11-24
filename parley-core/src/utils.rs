@@ -73,6 +73,21 @@ pub async fn load_language_preference(pool: &sqlx::SqlitePool) {
     apply_language_preference(primary);
 }
 
+/// Save `code` as `ui_config.primaryLanguage` and apply it to live
+/// transcription (onboarding's language step; Settings writes the same
+/// field through its own cache).
+pub async fn save_language_preference(pool: &sqlx::SqlitePool, code: &str) -> anyhow::Result<()> {
+    use crate::database::repositories::setting::{SettingsRepository, KEY_UI_CONFIG};
+    let mut ui_config = SettingsRepository::get_setting::<serde_json::Value>(pool, KEY_UI_CONFIG)
+        .await?
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    ui_config["primaryLanguage"] = serde_json::Value::String(code.to_string());
+    SettingsRepository::set_setting(pool, KEY_UI_CONFIG, &ui_config).await?;
+    apply_language_preference(Some(code));
+    Ok(())
+}
+
 /// Plain HTTP-streaming download to a destination path. Used for built-in
 /// models that don't have their own dedicated downloader command (also
 /// reused by `speaker_diarization::service::ensure_pyannote_segmentation_model`-style

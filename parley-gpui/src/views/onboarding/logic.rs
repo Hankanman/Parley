@@ -1,56 +1,71 @@
-//! Pure, unit-tested logic for the onboarding flow: the 3-step state
-//! machine (next / previous / go-to-step) and small formatting/gating
-//! helpers the GPUI view builds on.
+//! Pure, unit-tested logic for the onboarding flow: the step state machine
+//! (next / previous / go-to-step) and small formatting/gating helpers the
+//! GPUI view builds on.
 
-/// The 3-step onboarding flow (system-recommended models, no separate
-/// permissions step on Linux).
+/// The onboarding steps, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
     Welcome,
     SetupOverview,
+    /// Transcription language. Model downloads start when this step opens.
+    Language,
     DownloadProgress,
+    /// Optional prompt to record a voice-match profile.
+    VoiceMatch,
 }
 
 impl Step {
-    /// 1-based step number, matching `OnboardingStatus.current_step` as
-    /// persisted (the numbering predates the GPUI shell, so a status saved
-    /// by the retired Tauri flow still resumes at the right step).
+    pub const ALL: [Step; 5] = [
+        Step::Welcome,
+        Step::SetupOverview,
+        Step::Language,
+        Step::DownloadProgress,
+        Step::VoiceMatch,
+    ];
+
+    /// 1-based step number, as persisted in `OnboardingStatus.current_step`.
+    /// A status saved before the language step existed has 3 for the
+    /// download step, which now resumes one step earlier, at the language
+    /// choice; the downloads start from there anyway.
     pub fn number(self) -> u8 {
         match self {
             Step::Welcome => 1,
             Step::SetupOverview => 2,
-            Step::DownloadProgress => 3,
+            Step::Language => 3,
+            Step::DownloadProgress => 4,
+            Step::VoiceMatch => 5,
         }
     }
 
     /// Clamp a persisted (or otherwise untrusted) step number into a valid
-    /// `Step`, the same clamping `OnboardingContext.tsx`'s `verifyModelStatus`
-    /// does (`currentStep > 3` -> download-progress).
+    /// `Step`.
     pub fn clamp(n: u8) -> Step {
         match n {
             0 | 1 => Step::Welcome,
             2 => Step::SetupOverview,
-            _ => Step::DownloadProgress,
+            3 => Step::Language,
+            4 => Step::DownloadProgress,
+            _ => Step::VoiceMatch,
         }
     }
+
+    /// Whether model downloads should be running on this step: from the
+    /// language step on (the database exists by then).
+    pub fn downloads_running(self) -> bool {
+        self.number() >= Step::Language.number()
+    }
 }
 
-/// `goNext` — never advances past the last step.
+/// Never advances past the last step.
 pub fn next_step(step: Step) -> Step {
-    match step {
-        Step::Welcome => Step::SetupOverview,
-        Step::SetupOverview => Step::DownloadProgress,
-        Step::DownloadProgress => Step::DownloadProgress,
-    }
+    let i = Step::ALL.iter().position(|s| *s == step).unwrap_or(0);
+    Step::ALL[(i + 1).min(Step::ALL.len() - 1)]
 }
 
-/// `goPrevious` — never retreats past the first step.
+/// Never retreats past the first step.
 pub fn previous_step(step: Step) -> Step {
-    match step {
-        Step::Welcome => Step::Welcome,
-        Step::SetupOverview => Step::Welcome,
-        Step::DownloadProgress => Step::SetupOverview,
-    }
+    let i = Step::ALL.iter().position(|s| *s == step).unwrap_or(0);
+    Step::ALL[i.saturating_sub(1)]
 }
 
 /// Default local Whisper model downloaded during onboarding — same
@@ -79,33 +94,37 @@ mod tests {
     #[test]
     fn next_step_advances_and_stops_at_the_end() {
         assert_eq!(next_step(Step::Welcome), Step::SetupOverview);
-        assert_eq!(next_step(Step::SetupOverview), Step::DownloadProgress);
-        assert_eq!(next_step(Step::DownloadProgress), Step::DownloadProgress);
+        assert_eq!(next_step(Step::SetupOverview), Step::Language);
+        assert_eq!(next_step(Step::Language), Step::DownloadProgress);
+        assert_eq!(next_step(Step::DownloadProgress), Step::VoiceMatch);
+        assert_eq!(next_step(Step::VoiceMatch), Step::VoiceMatch);
     }
 
     #[test]
     fn previous_step_retreats_and_stops_at_the_start() {
-        assert_eq!(previous_step(Step::DownloadProgress), Step::SetupOverview);
-        assert_eq!(previous_step(Step::SetupOverview), Step::Welcome);
+        assert_eq!(previous_step(Step::VoiceMatch), Step::DownloadProgress);
+        assert_eq!(previous_step(Step::Language), Step::SetupOverview);
         assert_eq!(previous_step(Step::Welcome), Step::Welcome);
     }
 
     #[test]
     fn step_number_round_trips_through_clamp() {
-        for step in [Step::Welcome, Step::SetupOverview, Step::DownloadProgress] {
+        for step in Step::ALL {
             assert_eq!(Step::clamp(step.number()), step);
         }
     }
 
     #[test]
-    fn clamp_treats_zero_as_the_first_step() {
+    fn clamp_treats_zero_as_the_first_step_and_overflow_as_the_last() {
         assert_eq!(Step::clamp(0), Step::Welcome);
+        assert_eq!(Step::clamp(255), Step::VoiceMatch);
     }
 
     #[test]
-    fn clamp_treats_anything_past_three_as_the_last_step() {
-        assert_eq!(Step::clamp(4), Step::DownloadProgress);
-        assert_eq!(Step::clamp(255), Step::DownloadProgress);
+    fn downloads_run_from_the_language_step_on() {
+        assert!(!Step::SetupOverview.downloads_running());
+        assert!(Step::Language.downloads_running());
+        assert!(Step::VoiceMatch.downloads_running());
     }
 
     #[test]

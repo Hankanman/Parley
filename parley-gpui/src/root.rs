@@ -94,8 +94,12 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> Subscription {
         cx.subscribe_in(onboarding, window, |this, _, event, window, cx| {
-            let OnboardingEvent::Completed = event;
+            let OnboardingEvent::Completed { open_speakers } = *event;
             let shell = cx.new(|cx| AppShell::new(window, cx));
+            if open_speakers {
+                // The voice-match recorder lives on the Speakers page.
+                shell.update(cx, |shell, cx| shell.navigate(crate::shell::Route::Speakers, cx));
+            }
             this.state = State::Shell(shell);
             this._subscription = None;
             recovery::check_on_startup(window, cx);
