@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 /// Represents a single section in a meeting template
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +20,9 @@ pub struct TemplateSection {
     /// Alternative formatting hint
     #[serde(skip_serializing_if = "Option::is_none")]
     pub example_item_format: Option<String>,
+
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// Represents a complete meeting template
@@ -32,16 +36,19 @@ pub struct Template {
 
     /// List of sections in the template
     pub sections: Vec<TemplateSection>,
+
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 impl Template {
     /// Validates the template structure
     pub fn validate(&self) -> Result<(), String> {
-        if self.name.is_empty() {
+        if self.name.trim().is_empty() {
             return Err("Template name cannot be empty".to_string());
         }
 
-        if self.description.is_empty() {
+        if self.description.trim().is_empty() {
             return Err("Template description cannot be empty".to_string());
         }
 
@@ -50,20 +57,22 @@ impl Template {
         }
 
         for (i, section) in self.sections.iter().enumerate() {
-            if section.title.is_empty() {
+            if section.title.trim().is_empty() {
                 return Err(format!("Section {} has empty title", i));
             }
 
-            if section.instruction.is_empty() {
+            if section.instruction.trim().is_empty() {
                 return Err(format!("Section '{}' has empty instruction", section.title));
             }
 
             match section.format.as_str() {
-                "paragraph" | "list" | "string" => {},
-                other => return Err(format!(
-                    "Section '{}' has invalid format '{}'. Must be 'paragraph', 'list', or 'string'",
-                    section.title, other
-                )),
+                "paragraph" | "list" | "string" => {}
+                other => {
+                    return Err(format!(
+                        "Section '{}' has invalid format '{}'. Must be 'paragraph', 'list', or 'string'",
+                        section.title, other
+                    ));
+                }
             }
         }
 
@@ -89,7 +98,7 @@ impl Template {
         // "AI-Generated Title: <real title>". Phrasing the instruction
         // without an embedded literal stops the leak.
         let mut instructions = String::from(
-            "- **For the main title:** the first line of the markdown must be a single `# ` heading. Analyze the entire transcript and write a concise, descriptive title there. Do not include any placeholder, prefix, or label words like 'Title' / 'AI-Generated' / 'Meeting Summary' — just the title itself.\n"
+            "- **For the main title:** the first line of the markdown must be a single `# ` heading. Analyze the entire transcript and write a concise, descriptive title there. Do not include any placeholder, prefix, or label words like 'Title' / 'AI-Generated' / 'Meeting Summary' — just the title itself.\n",
         );
 
         for section in &self.sections {
@@ -131,7 +140,9 @@ mod tests {
                 format: "paragraph".to_string(),
                 item_format: None,
                 example_item_format: None,
+                extra: Map::new(),
             }],
+            extra: Map::new(),
         };
 
         assert!(template.validate().is_ok());
@@ -143,6 +154,7 @@ mod tests {
             name: "".to_string(),
             description: "A test template".to_string(),
             sections: vec![],
+            extra: Map::new(),
         };
 
         assert!(template.validate().is_err());
@@ -159,7 +171,9 @@ mod tests {
                 format: "invalid".to_string(),
                 item_format: None,
                 example_item_format: None,
+                extra: Map::new(),
             }],
+            extra: Map::new(),
         };
 
         assert!(template.validate().is_err());
