@@ -76,6 +76,15 @@ Paste your key under **API keys**, then choose a model from the list Parley fetc
 > [!WARNING]
 > With a cloud provider, the meeting transcript is sent to that provider whenever you generate a summary, ask a question or use any other AI feature. Their privacy policy then applies. The built-in model and a local Ollama keep everything on your computer.
 
+### Summary and email output language
+
+In **Settings → Summary → Transcript & summaries**, choose **Summary output
+language** to use the same language for meeting summaries and follow-up drafts.
+For example, choose **Español** to generate Spanish prose and headings from an
+English template. **Auto** keeps Parley's default prompts and the template's own
+headings. The setting is independent of transcription language. Regenerate an
+existing summary or draft to apply a change.
+
 ### Other summary settings
 
 - **Templates → Default summary template**: the template pre-selected when you generate a summary. See [Meeting notes](meetings.md).
