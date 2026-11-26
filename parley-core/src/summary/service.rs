@@ -6,8 +6,8 @@ use crate::events::{EventSinkExt, SharedEventSink};
 use crate::summary::llm_client::LlmConfig;
 use crate::summary::meeting_context::MeetingContext;
 use crate::summary::processor::{
-    extract_meeting_name_from_markdown, generate_meeting_summary, strip_first_heading_line,
-    SummaryStream,
+    extract_meeting_name_from_markdown, generate_meeting_summary_with_language,
+    strip_first_heading_line, SummaryStream,
 };
 use once_cell::sync::Lazy;
 use sqlx::SqlitePool;
@@ -189,11 +189,10 @@ impl SummaryService {
         let custom_prompt =
             crate::bookmarks::with_bookmark_context(&pool, &meeting_id, custom_prompt).await;
 
-        // Meeting date and participants: anchor relative dates and bound who
-        // can own an action item, then check the model's output against them.
+        // Meeting date and participants also constrain the localized report.
         let context = MeetingContext::load(&pool, &meeting_id).await;
-
-        let result = generate_meeting_summary(
+        let language = super::language::load(&pool).await;
+        let result = generate_meeting_summary_with_language(
             &config,
             &text,
             &custom_prompt,
@@ -203,6 +202,7 @@ impl SummaryService {
             token_threshold,
             Some(&cancellation_token),
             Some(&stream),
+            language,
         )
         .await;
 

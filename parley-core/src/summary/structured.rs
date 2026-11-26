@@ -53,6 +53,7 @@ use crate::summary::processor::{clean_llm_markdown_output, sanitize_meeting_titl
 use crate::summary::templates::{Template, TemplateSection};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
+use std::collections::BTreeMap;
 
 /// Schema identifier sent to providers (OpenAI `json_schema.name`, Claude
 /// tool name).
@@ -184,14 +185,27 @@ struct Field {
 pub struct SummaryPlan {
     fields: Vec<Field>,
     notes: Vec<String>,
+    localized_labels: bool,
 }
 
 impl SummaryPlan {
     pub fn new(template: &Template, notes: &[String]) -> Self {
+        Self::with_localized_labels(template, notes, false)
+    }
+
+    pub(crate) fn with_localized_labels(
+        template: &Template, notes: &[String], localized_labels: bool,
+    ) -> Self {
         let notes = prepare_notes(notes);
         let mut fields: Vec<Field> = Vec::new();
         let mut bound: Vec<CoreField> = Vec::new();
-        let mut used_keys: Vec<String> = vec![KEY_TITLE.to_string(), KEY_NOTES.to_string()];
+        let mut used_keys: Vec<String> = vec![
+            KEY_TITLE.to_string(),
+            KEY_NOTES.to_string(),
+        ];
+        if localized_labels {
+            used_keys.extend(["display_labels", "none_noted", "due_label"].map(str::to_owned));
+        }
         used_keys.extend(CoreField::ALL.iter().map(|c| c.key().to_string()));
 
         // Which template sections stand in for a core field.
@@ -269,7 +283,37 @@ impl SummaryPlan {
             }
         }
 
-        Self { fields, notes }
+        Self {
+            fields,
+            notes,
+            localized_labels,
+        }
+    }
+
+    fn label_keys(&self) -> Vec<&str> {
+        self.fields
+            .iter()
+            .filter(|f| f.heading.is_some())
+            .map(|f| f.key.as_str())
+            .chain(["none_noted", "due_label"])
+            .collect()
+    }
+
+    fn labels(&self, value: &Value) -> BTreeMap<String, String> {
+        let Some(map) = value.get("display_labels").and_then(Value::as_object) else {
+            return BTreeMap::new();
+        };
+        if !self.localized_labels {
+            return BTreeMap::new();
+        }
+        self.label_keys()
+            .into_iter()
+            .filter_map(|key| {
+                let text = map.get(key).and_then(Value::as_str).map(collapse_ws)?;
+                (!text.is_empty() && text.chars().count() <= 160)
+                    .then(|| (key.to_string(), text))
+            })
+            .collect()
     }
 
     /// The (trimmed) notes this plan was built with, in order.
@@ -284,6 +328,21 @@ impl SummaryPlan {
     pub fn json_schema(&self) -> Value {
         let mut properties = Map::new();
         properties.insert(KEY_TITLE.to_string(), json!({ "type": "string" }));
+        if self.localized_labels {
+            let labels: Map<String, Value> = self
+                .label_keys()
+                .into_iter()
+                .map(|key| (key.to_string(), json!({"type": "string"})))
+                .collect();
+            let required: Vec<_> = labels.keys().cloned().collect();
+            properties.insert(
+                "display_labels".into(),
+                json!({
+                    "type": "object", "properties": labels, "required": required,
+                    "additionalProperties": false
+                }),
+            );
+        }
         for field in &self.fields {
             properties.insert(field.key.clone(), self.field_schema(field));
         }
@@ -337,6 +396,9 @@ impl SummaryPlan {
             "- \"title\" (string): a concise, descriptive title for the meeting (3-8 words). \
              Just the title itself: no labels such as \"Title:\", \"AI-Generated\" or \"Meeting Summary\".\n",
         );
+        if self.localized_labels {
+            out.push_str("- \"display_labels\": translate each section heading into the output language, keyed by its unchanged JSON field name. Translate \"None noted in this section.\" under \"none_noted\" and the deadline label \"due\" under \"due_label\". These are display text only; do not translate JSON keys.\n");
+        }
         for field in &self.fields {
             let label = match (&field.heading, field.core) {
                 (Some(h), _) => format!(" (the \"{h}\" section)"),
@@ -389,6 +451,7 @@ impl SummaryPlan {
 
         let mut summary = StructuredSummary {
             title,
+            display_labels: self.labels(&value),
             ..Default::default()
         };
 
@@ -447,6 +510,11 @@ impl SummaryPlan {
         if summary.is_empty() {
             return Err("every field is empty".to_string());
         }
+        for section in &mut summary.sections {
+            if let Some(heading) = summary.display_labels.get(&section.key) {
+                section.heading = heading.clone();
+            }
+        }
         Ok(summary)
     }
 
@@ -489,6 +557,11 @@ impl SummaryPlan {
                         .action_items
                         .iter()
                         .map(|a| (a.text.as_str(), a.owner.as_deref(), a.due.as_deref())),
+                    summary
+                        .display_labels
+                        .get("due_label")
+                        .map(String::as_str)
+                        .unwrap_or("due"),
                 ),
                 FieldKind::Notes => render_notes(
                     summary
@@ -497,7 +570,16 @@ impl SummaryPlan {
                         .map(|n| (n.note.as_str(), n.details.as_str())),
                 ),
             };
-            push_section(&mut out, field, &body, true);
+            let mut field = field.clone();
+            if let Some(heading) = summary.display_labels.get(&field.key) {
+                field.heading = Some(heading.clone());
+            }
+            let empty = summary
+                .display_labels
+                .get("none_noted")
+                .map(String::as_str)
+                .unwrap_or(NONE_NOTED);
+            push_section(&mut out, &field, &body, true, &inline(empty));
         }
         out.trim_end().to_string()
     }
@@ -510,6 +592,10 @@ impl SummaryPlan {
         let Some(obj) = value.as_object() else {
             return String::new();
         };
+        let labels = self.labels(value);
+        if self.localized_labels && self.label_keys().iter().any(|key| !labels.contains_key(*key)) {
+            return String::new();
+        }
         let mut out = String::new();
         match obj.get(KEY_TITLE).and_then(Value::as_str) {
             Some(title) => {
@@ -553,6 +639,7 @@ impl SummaryPlan {
                         items
                             .iter()
                             .map(|(t, o, d)| (t.as_str(), o.as_deref(), d.as_deref())),
+                        labels.get("due_label").map(String::as_str).unwrap_or("due"),
                     )
                 }
                 FieldKind::Notes => {
@@ -569,7 +656,11 @@ impl SummaryPlan {
                     render_notes(present.iter().map(|(n, d)| (*n, d.as_str())))
                 }
             };
-            push_section(&mut out, field, &body, false);
+            let mut field = field.clone();
+            if let Some(heading) = labels.get(&field.key) {
+                field.heading = Some(heading.clone());
+            }
+            push_section(&mut out, &field, &body, false, NONE_NOTED);
         }
         out.trim_end().to_string()
     }
@@ -589,7 +680,7 @@ fn core_field(core: CoreField, from_template: bool) -> Field {
 
 /// Append one section. `final_render` controls the empty case: template
 /// sections get [`NONE_NOTED`] in the final render; extras are skipped.
-fn push_section(out: &mut String, field: &Field, body: &str, final_render: bool) {
+fn push_section(out: &mut String, field: &Field, body: &str, final_render: bool, empty_text: &str) {
     let body = body.trim();
     if body.is_empty() && !(field.from_template && final_render) {
         // Partial render: still show a template heading so the preview has
@@ -601,7 +692,7 @@ fn push_section(out: &mut String, field: &Field, body: &str, final_render: bool)
         }
         return;
     }
-    let body = if body.is_empty() { NONE_NOTED } else { body };
+    let body = if body.is_empty() { empty_text } else { body };
     match &field.heading {
         Some(heading) => out.push_str(&format!("**{}**\n\n{}\n\n", inline(heading), body)),
         None => out.push_str(&format!("{body}\n\n")),
@@ -619,6 +710,7 @@ fn render_list<'a>(items: impl Iterator<Item = &'a str>) -> String {
 
 fn render_action_items<'a>(
     items: impl Iterator<Item = (&'a str, Option<&'a str>, Option<&'a str>)>,
+    due_label: &str,
 ) -> String {
     items
         .filter_map(|(text, owner, due)| {
@@ -631,7 +723,7 @@ fn render_action_items<'a>(
                 line.push_str(&format!(" — {owner}"));
             }
             if let Some(due) = due.map(inline).filter(|d| !d.is_empty()) {
-                line.push_str(&format!(" (due: {due})"));
+                line.push_str(&format!(" ({}: {due})", inline(due_label)));
             }
             Some(line)
         })
@@ -673,6 +765,9 @@ pub struct StructuredSummary {
     pub sections: Vec<StructuredSection>,
     /// The user's notes with what the transcript says about each.
     pub notes: Vec<StructuredNote>,
+    /// Model-translated labels; stable field keys remain available to consumers.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub display_labels: BTreeMap<String, String>,
 }
 
 impl StructuredSummary {
@@ -1240,6 +1335,41 @@ mod tests {
             "open_questions": ["Do we renew the office lease?"]
         })
         .to_string()
+    }
+
+    #[test]
+    fn localized_labels_render_without_translating_machine_keys() {
+        let plan = SummaryPlan::with_localized_labels(&standard(), &[], true);
+        let mut value: Value = serde_json::from_str(&standard_json()).unwrap();
+        value["title"] = json!("Planificación del proyecto");
+        value["overview"] = json!("Se acordó publicar la nueva versión.");
+        value["discussion_highlights"] = json!("");
+        value["display_labels"] = json!({
+            "overview": "Resumen", "decisions": "Decisiones clave",
+            "discussion_highlights": "Puntos destacados", "action_items": "Tareas",
+            "open_questions": "Preguntas abiertas", "none_noted": "No se mencionó nada en esta sección.",
+            "due_label": "vence"
+        });
+        let summary = plan.parse(&value.to_string()).unwrap();
+        let markdown = plan.render_markdown(&summary);
+        assert!(markdown.contains("**Resumen**"));
+        assert!(markdown.contains("**Puntos destacados**"));
+        assert!(markdown.contains("No se mencionó nada en esta sección."));
+        assert!(!markdown.contains("**Summary**"));
+        assert!(!markdown.contains(NONE_NOTED));
+        assert_eq!(summary.sections[0].heading, "Puntos destacados");
+        assert!(plan.json_schema()["properties"]
+            .get("display_labels")
+            .is_some());
+        assert!(plan.json_schema()["properties"].get("overview").is_some());
+        assert!(plan.render_partial(&value).contains("**Resumen**"));
+        assert!(!plan.render_partial(&value).contains("**Summary**"));
+        value["display_labels"]["overview"] = json!("");
+        let summary = plan.parse(&value.to_string()).unwrap();
+        let markdown = plan.render_markdown(&summary);
+        assert!(markdown.contains("**Summary**"));
+        assert!(markdown.contains("**Puntos destacados**"));
+        assert!(plan.render_partial(&value).is_empty());
     }
 
     #[test]
