@@ -283,6 +283,17 @@ impl MeetingView {
         let core_events = AppServices::global(cx).core_events.clone();
         let mut subscriptions = vec![cx.subscribe(&core_events, |this, _, event, cx| {
             match event.name.as_str() {
+                "summary-templates-changed" => {
+                    this.templates = parley_core::summary::templates::list_templates();
+                    if !this.templates.iter().any(|(id, _, _)| *id == this.selected_template) {
+                        this.selected_template = "standard_meeting".into();
+                        this.template_user_selected = false;
+                    }
+                    if !this.template_user_selected && !matches!(this.summary_phase, SummaryPhase::Generating) {
+                        this.load_default_template(cx);
+                    }
+                    cx.notify();
+                }
                 "summary-stream" => this.on_summary_stream(event, cx),
                 "retranscription-progress" => this.on_retranscription_progress(event, cx),
                 "retranscription-complete" => this.on_retranscription_complete(event, cx),

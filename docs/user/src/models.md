@@ -82,3 +82,16 @@ Paste your key under **API keys**, then choose a model from the list Parley fetc
 - **Auto-summarize after recording**: write the summary automatically when a recording stops. Off by default.
 - **Auto-generate chapters after recording**: split each new meeting into chapters automatically. Until you change it, it follows *Auto-summarize after recording*.
 - **Show transcription confidence**: show a coloured dot by each transcript line for how sure Whisper was of it. On by default.
+
+## Editing summary templates
+
+Open **Settings → Templates** to create a template or duplicate an existing one.
+Edit its name, description, and sections. Each section has a title, instructions,
+a paragraph, list, or short-text format, and an optional item-format hint. Use
+the arrows to reorder sections, then choose **Save template**. Use **Discard
+changes** to return to the saved version. **Use as default** selects the template
+for future summaries. You can also choose a template in the meeting's summary toolbar.
+
+Editing a built-in template saves a local override. **Restore built-in** removes
+the override. Custom templates can be deleted after confirmation. Changes apply
+the next time you generate a summary.
